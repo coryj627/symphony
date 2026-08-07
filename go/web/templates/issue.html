@@ -1,0 +1,10 @@
+{{define "content"}}
+<p class="status-summary" role="status" aria-live="polite">Issue details are not available yet.</p>
+<section aria-labelledby="requests-heading"><h2 id="requests-heading">Operator requests</h2><p>No operator requests are waiting.</p></section>
+<section aria-labelledby="stream-heading"><h2 id="stream-heading">Event and log stream</h2><p>No events or logs are available.</p></section>
+<section aria-labelledby="metadata-heading"><h2 id="metadata-heading">Issue metadata</h2><dl><div><dt>Identifier</dt><dd>{{.Content.Identifier}}</dd></div><div><dt>State</dt><dd>Unavailable</dd></div></dl></section>
+<section aria-labelledby="run-heading"><h2 id="run-heading">Current run</h2><p>No run is active.</p></section>
+<section aria-labelledby="retry-heading"><h2 id="retry-heading">Retry history</h2><ol><li>No retries have been recorded.</li></ol></section>
+<section aria-labelledby="issue-activity-heading"><h2 id="issue-activity-heading">Activity</h2><ol><li>No activity has been recorded.</li></ol></section>
+<section aria-labelledby="issue-logs-heading"><h2 id="issue-logs-heading">Logs</h2><section class="log-scroll" aria-label="Issue log entries" tabindex="0"><pre>No log entries are available.</pre></section></section>
+{{end}}

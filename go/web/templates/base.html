@@ -1,0 +1,28 @@
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content" tabindex="0">Skip to main content</a>
+  <header class="site-header">
+    <div class="brand">Symphony</div>
+    {{template "navigation" .}}
+  </header>
+  <main id="main-content" tabindex="-1">
+    <div class="page-heading">
+      <p class="eyebrow">Local orchestration</p>
+      <h1>{{.Heading}}</h1>
+    </div>
+    {{template "flash" .}}
+    {{template "content" .}}
+  </main>
+  <footer>
+    <p>Symphony runs on this workstation.</p>
+  </footer>
+</body>
+</html>{{end}}

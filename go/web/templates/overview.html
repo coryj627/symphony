@@ -1,0 +1,32 @@
+{{define "content"}}
+<section class="status-panel" aria-labelledby="service-status-heading">
+  <h2 id="service-status-heading">Service status</h2>
+  <p class="status-summary" role="status" aria-live="polite"><span aria-hidden="true">●</span> Scheduler configuration is ready.</p>
+  <dl class="identity-list">
+    <div><dt>Service</dt><dd>Symphony</dd></div>
+    <div><dt>Repository</dt><dd>{{.Content.Repository}}</dd></div>
+    <div><dt>Mode</dt><dd>Configure</dd></div>
+  </dl>
+</section>
+<section aria-labelledby="work-heading">
+  <h2 id="work-heading">Work summary</h2>
+  <ul class="metric-list">
+    <li><strong>0</strong> Active</li>
+    <li><strong>0</strong> Queued</li>
+    <li><strong>0</strong> Retrying</li>
+    <li><strong>0</strong> Needs attention</li>
+  </ul>
+</section>
+<section aria-labelledby="sessions-heading">
+  <h2 id="sessions-heading">Running sessions</h2>
+  <p id="no-running-sessions">No sessions are running.</p>
+  <form method="post" action="/actions/stop">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <button type="submit" disabled aria-describedby="no-running-sessions">Stop selected session</button>
+  </form>
+</section>
+<aside aria-labelledby="errors-heading">
+  <h2 id="errors-heading">Configuration and tracker errors</h2>
+  <p>No persistent errors.</p>
+</aside>
+{{end}}

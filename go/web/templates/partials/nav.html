@@ -1,0 +1,9 @@
+{{define "navigation"}}<nav aria-label="Primary">
+  <ul>
+    <li><a href="/"{{if eq .Route "/"}} aria-current="page"{{end}}>Overview</a></li>
+    <li><a href="/issues"{{if eq .Route "/issues"}} aria-current="page"{{end}}>Issues</a></li>
+    <li><a href="/activity"{{if eq .Route "/activity"}} aria-current="page"{{end}}>Activity</a></li>
+    <li><a href="/configuration"{{if eq .Route "/configuration"}} aria-current="page"{{end}}>Configuration</a></li>
+    <li><a href="/logs"{{if eq .Route "/logs"}} aria-current="page"{{end}}>Logs</a></li>
+  </ul>
+</nav>{{end}}

@@ -1,0 +1,15 @@
+{{define "content"}}
+<p class="status-summary" role="status" aria-live="polite">Configuration has not been loaded.</p>
+<form method="post" action="/configuration">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <fieldset><legend>Tracker</legend><label for="tracker-provider">Provider</label><select id="tracker-provider" name="tracker_provider"><option value="">Not configured</option></select></fieldset>
+  <fieldset><legend>Credential</legend><p>Credentials are stored by the operating system and never displayed here.</p><button type="button" disabled>Delete credential</button></fieldset>
+  <fieldset><legend>Workspace</legend><label for="workspace-root">Workspace root</label><input id="workspace-root" name="workspace_root" type="text"></fieldset>
+  <fieldset><legend>Orchestration</legend><label for="concurrency">Maximum concurrent runs</label><input id="concurrency" name="concurrency" type="number" min="1" value="1"></fieldset>
+  <fieldset><legend>Codex policy</legend><label for="approval-policy">Approval policy</label><select id="approval-policy" name="approval_policy"><option value="">Not configured</option></select></fieldset>
+  <fieldset><legend>Hooks</legend><p>No hooks are configured.</p></fieldset>
+  <fieldset><legend>Raw workflow</legend><label for="raw-workflow">WORKFLOW.md</label><textarea id="raw-workflow" name="raw_workflow" rows="10"></textarea></fieldset>
+  <button type="submit">Save configuration</button>
+</form>
+<p><a href="/configuration#documentation">Configuration documentation</a></p>
+{{end}}

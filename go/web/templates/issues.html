@@ -1,0 +1,19 @@
+{{define "content"}}
+<p class="status-summary" role="status" aria-live="polite">No issues are available.</p>
+<form class="filter-form" method="get" action="/issues">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <div><label for="issue-query">Search issues</label><input id="issue-query" name="query" type="search"></div>
+  <div><label for="issue-sort">Sort issues</label><select id="issue-sort" name="sort"><option value="priority">Priority</option><option value="identifier">Identifier</option></select></div>
+  <button type="submit">Apply filters</button>
+</form>
+<div class="issue-table">
+  <table>
+    <caption>Issues available to Symphony</caption>
+    <thead><tr><th scope="col">Identifier</th><th scope="col">Title</th><th scope="col">State</th></tr></thead>
+    <tbody><tr><td colspan="3">No issues are available.</td></tr></tbody>
+  </table>
+</div>
+<ul class="issue-list" aria-label="Issues available to Symphony">
+  <li>No issues are available.</li>
+</ul>
+{{end}}

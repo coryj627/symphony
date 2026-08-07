@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "engines": {
+    "node": "24.18.0"
+  },
+  "scripts": {
+    "test:a11y": "playwright test",
+    "html:validate": "playwright test tests/accessibility/html-validity.spec.mjs"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.62.1",
+    "html-validate": "11.6.2"
+  }
+}
