@@ -254,7 +254,7 @@ textarea {
   min-width: 44px;
   min-height: 44px;
   max-inline-size: 100%;
-  border: 1px solid var(--color-border-strong);
+  border: 1px solid var(--color-muted);
   border-radius: 0.4rem;
   background: var(--color-surface-3);
   color: var(--color-text);
@@ -289,10 +289,15 @@ textarea {
 button {
   inline-size: fit-content;
   padding: 0.6rem 1rem;
-  background: var(--color-accent-strong);
-  color: var(--color-bg);
+  background: var(--color-surface-3);
+  color: var(--color-text);
   font-weight: 750;
   cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--color-muted);
+  background: var(--color-surface-2);
 }
 
 button:disabled {

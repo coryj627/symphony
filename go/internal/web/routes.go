@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 type csrfContextKey struct{}
@@ -25,12 +26,12 @@ func (s *Server) protectedHandler() http.Handler {
 
 		if token, present := bootstrapCandidate(r); present {
 			if r.Method != http.MethodGet || r.URL.Path != "/" || !s.bootstrap.exchange(token, s.now) {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				s.respondError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
 			rawSession, err := s.sessions.issue()
 			if err != nil {
-				http.Error(w, "internal server error", http.StatusInternalServerError)
+				s.respondError(w, http.StatusInternalServerError, "internal server error")
 				return
 			}
 			setSessionCookie(w, rawSession)
@@ -38,14 +39,23 @@ func (s *Server) protectedHandler() http.Handler {
 			return
 		}
 
+		// Error documents use the same local stylesheet as authenticated pages.
+		// Static GET/HEAD requests carry no application state and remain bound by
+		// the loopback Host check and the standard response security headers.
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && strings.HasPrefix(r.URL.Path, "/static/") {
+			setSecurityHeaders(w.Header())
+			s.handler.ServeHTTP(w, r)
+			return
+		}
+
 		cookie, err := r.Cookie(sessionCookieName)
 		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			s.respondError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		session, ok := s.sessions.authenticate(cookie.Value)
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			s.respondError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
@@ -54,12 +64,21 @@ func (s *Server) protectedHandler() http.Handler {
 			if status == http.StatusMethodNotAllowed {
 				w.Header().Set("Allow", "GET, HEAD, POST")
 			}
-			http.Error(w, message, status)
+			s.respondError(w, status, message)
 			return
 		}
 		ctx := context.WithValue(r.Context(), csrfContextKey{}, session.csrf)
 		s.handler.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (s *Server) respondError(w http.ResponseWriter, status int, fallback string) {
+	setSecurityHeaders(w.Header())
+	if s.errorResponder != nil {
+		s.errorResponder.RespondError(w, status)
+		return
+	}
+	http.Error(w, fallback, status)
 }
 
 func bootstrapCandidate(r *http.Request) (string, bool) {

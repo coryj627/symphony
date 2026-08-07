@@ -29,10 +29,12 @@ func startE2E(ctx context.Context, options Options, _, _ io.Writer) error {
 	if err != nil {
 		return err
 	}
+	handler.EnableE2ERoutes()
 	server, err := web.NewServer(web.Options{
-		Port:      options.Port,
-		Bootstrap: bootstrap,
-		Handler:   handler,
+		Port:           options.Port,
+		Bootstrap:      bootstrap,
+		Handler:        handler,
+		ErrorResponder: handler,
 	})
 	if err != nil {
 		return err

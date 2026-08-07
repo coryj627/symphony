@@ -18,10 +18,17 @@ import (
 
 // Options configures the protected loopback HTTP server.
 type Options struct {
-	Port      int
-	Bootstrap Bootstrap
-	Handler   http.Handler
-	Logger    *slog.Logger
+	Port           int
+	Bootstrap      Bootstrap
+	Handler        http.Handler
+	ErrorResponder ErrorResponder
+	Logger         *slog.Logger
+}
+
+// ErrorResponder renders safe HTTP error documents without receiving request
+// URLs, headers, cookies, or other sensitive request state.
+type ErrorResponder interface {
+	RespondError(http.ResponseWriter, int)
 }
 
 // Bound describes the selected IPv4 loopback URL and shared listener port.
@@ -32,13 +39,14 @@ type Bound struct {
 
 // Server owns every loopback listener and serving goroutine.
 type Server struct {
-	port        int
-	bootstrap   Bootstrap
-	handler     http.Handler
-	logger      *slog.Logger
-	sessions    *sessionStore
-	now         func() time.Time
-	launchValue string
+	port           int
+	bootstrap      Bootstrap
+	handler        http.Handler
+	errorResponder ErrorResponder
+	logger         *slog.Logger
+	sessions       *sessionStore
+	now            func() time.Time
+	launchValue    string
 
 	boundPort atomic.Int64
 
@@ -78,15 +86,16 @@ func NewServer(options Options) (*Server, error) {
 		return nil, err
 	}
 	return &Server{
-		port:         options.Port,
-		bootstrap:    options.Bootstrap,
-		handler:      options.Handler,
-		logger:       options.Logger,
-		sessions:     sessions,
-		now:          time.Now,
-		launchValue:  launchValue,
-		shutdownDone: make(chan struct{}),
-		stopCh:       make(chan struct{}),
+		port:           options.Port,
+		bootstrap:      options.Bootstrap,
+		handler:        options.Handler,
+		errorResponder: options.ErrorResponder,
+		logger:         options.Logger,
+		sessions:       sessions,
+		now:            time.Now,
+		launchValue:    launchValue,
+		shutdownDone:   make(chan struct{}),
+		stopCh:         make(chan struct{}),
 	}, nil
 }
 

@@ -1,6 +1,19 @@
 import AxeBuilder from '@axe-core/playwright';
 import {test, expect, authorize, navigationLabels, routes} from './fixtures.mjs';
 
+async function expectNoAxeViolations(page) {
+  const results = await new AxeBuilder({page})
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
+    .analyze();
+  const safeViolations = results.violations.map(({id, impact, help, nodes}) => ({
+    id,
+    impact,
+    help,
+    targets: nodes.map(node => node.target),
+  }));
+  expect(safeViolations).toEqual([]);
+}
+
 for (const route of routes) {
   test(`${route.heading} has a valid accessible shell`, async ({page}) => {
     await authorize(page, route.path);
@@ -9,18 +22,46 @@ for (const route of routes) {
     await expect(page.getByRole('heading', {level: 1, name: route.heading, exact: true})).toHaveCount(1);
     await expect(page.getByRole('status')).toHaveCount(1);
 
-    const results = await new AxeBuilder({page})
-      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-      .analyze();
-    const safeViolations = results.violations.map(({id, impact, help, nodes}) => ({
-      id,
-      impact,
-      help,
-      targets: nodes.map(node => node.target),
-    }));
-    expect(safeViolations).toEqual([]);
+    await expectNoAxeViolations(page);
   });
 }
+
+test('missing session renders one accessible authorization document', async ({authenticatedContext}) => {
+  const context = await authenticatedContext.browser().newContext();
+  const page = await context.newPage();
+  try {
+    const response = await page.goto('/');
+    expect(response?.status()).toBe(401);
+    await expect(page).toHaveTitle('Authorization required — Symphony');
+    await expect(page.getByRole('main')).toHaveCount(1);
+    await expect(page.getByRole('heading', {level: 1, name: 'Authorization required'})).toHaveCount(1);
+    await expect(page.getByRole('status')).toHaveText('This browser session is missing or no longer valid.');
+    await expect(page.getByText('Return to the terminal and open the newest Symphony launch URL.')).toBeVisible();
+    await expectNoAxeViolations(page);
+  } finally {
+    await context.close();
+  }
+});
+
+test('authenticated missing page renders one accessible not-found document', async ({page}) => {
+  const response = await page.goto('/not-a-page');
+  expect(response?.status()).toBe(404);
+  await expect(page).toHaveTitle('Page not found — Symphony');
+  await expect(page.getByRole('main')).toHaveCount(1);
+  await expect(page.getByRole('heading', {level: 1, name: 'Page not found'})).toHaveCount(1);
+  await expect(page.getByRole('status')).toHaveText('The requested page is not available.');
+  await expect(page.getByText('Use the primary navigation to choose an available page.')).toBeVisible();
+  await expectNoAxeViolations(page);
+});
+
+test('nonempty flash replaces the fallback in the single persistent status', async ({page}) => {
+  await authorize(page, '/__e2e/flash');
+  const status = page.getByRole('status');
+  await expect(status).toHaveCount(1);
+  await expect(status).toHaveText('Configuration saved.');
+  await expect(page.getByText('Scheduler configuration is ready.')).toHaveCount(0);
+  await expectNoAxeViolations(page);
+});
 
 test('skip link is first in focus order and moves focus to main', async ({page}) => {
   await authorize(page, '/configuration');
@@ -52,6 +93,17 @@ test('core navigation works when JavaScript is unavailable', async ({page}) => {
   await page.getByRole('link', {name: 'Configuration'}).click();
   await expect(page).toHaveURL('/configuration');
   await expect(page.getByRole('heading', {level: 1, name: 'Configuration'})).toBeVisible();
+});
+
+test('configuration help fragment is visible and focused without JavaScript', async ({page}) => {
+  await page.route('**/static/app.js', route => route.abort());
+  await authorize(page, '/configuration');
+  await page.getByRole('link', {name: 'Configuration documentation'}).click();
+  await expect(page).toHaveURL('/configuration#documentation');
+  const help = page.locator('#documentation');
+  await expect(help).toBeVisible();
+  await expect(help).toBeFocused();
+  await expect(help.getByRole('heading', {level: 2, name: 'Configuration help'})).toBeVisible();
 });
 
 test('pages reflow at 320 CSS pixels and product controls meet 44 pixel targets', async ({page}) => {
@@ -125,6 +177,48 @@ test('approved dark tokens and local system fonts are used exactly', async ({pag
   expect(theme.colorScheme).toBe('dark');
   expect(theme.fontFamily).toContain('system-ui');
   expect([...requestOrigins]).toEqual(['http://127.0.0.1:43127']);
+});
+
+test('enabled control boundaries have three-to-one contrast against fill and adjacent surface', async ({page}) => {
+  for (const path of ['/issues', '/configuration']) {
+    await authorize(page, path);
+    const controls = page.locator('button:not(:disabled), input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled)');
+    for (let index = 0; index < await controls.count(); index += 1) {
+      const control = controls.nth(index);
+      if (!(await control.isVisible())) continue;
+      for (const state of ['default', 'hover']) {
+        if (state === 'hover') await control.hover();
+        const sample = await control.evaluate(element => {
+          const parseColor = value => value.match(/[\d.]+/g).slice(0, 3).map(Number);
+          const luminance = value => {
+            const channels = parseColor(value).map(channel => {
+              const normalized = channel / 255;
+              return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+            });
+            return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+          };
+          const ratio = (first, second) => {
+            const lighter = Math.max(luminance(first), luminance(second));
+            const darker = Math.min(luminance(first), luminance(second));
+            return (lighter + 0.05) / (darker + 0.05);
+          };
+          let adjacent = element.parentElement;
+          while (adjacent && getComputedStyle(adjacent).backgroundColor === 'rgba(0, 0, 0, 0)') {
+            adjacent = adjacent.parentElement;
+          }
+          const styles = getComputedStyle(element);
+          const adjacentColor = adjacent ? getComputedStyle(adjacent).backgroundColor : getComputedStyle(document.body).backgroundColor;
+          return {
+            name: `${element.tagName.toLowerCase()}#${element.id || 'unnamed'}`,
+            fillRatio: ratio(styles.borderTopColor, styles.backgroundColor),
+            adjacentRatio: ratio(styles.borderTopColor, adjacentColor),
+          };
+        });
+        expect(sample.fillRatio, `${path} ${sample.name} ${state} boundary versus fill`).toBeGreaterThanOrEqual(3);
+        expect(sample.adjacentRatio, `${path} ${sample.name} ${state} boundary versus adjacent surface`).toBeGreaterThanOrEqual(3);
+      }
+    }
+  }
 });
 
 test('forced colors retains current state and visible control boundaries', async ({page, browserName}) => {

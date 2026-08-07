@@ -55,13 +55,18 @@ func assertSensitiveValuesAbsent(t sensitiveReporter, logged string, cases []sen
 }
 
 func startTestServer(t *testing.T, bootstrap Bootstrap, handler http.Handler) *runningTestServer {
+	return startTestServerWithErrorResponder(t, bootstrap, handler, nil)
+}
+
+func startTestServerWithErrorResponder(t *testing.T, bootstrap Bootstrap, handler http.Handler, errorResponder ErrorResponder) *runningTestServer {
 	t.Helper()
 	logs := new(bytes.Buffer)
 	server, err := NewServer(Options{
-		Port:      0,
-		Bootstrap: bootstrap,
-		Handler:   handler,
-		Logger:    slog.New(slog.NewTextHandler(logs, nil)),
+		Port:           0,
+		Bootstrap:      bootstrap,
+		Handler:        handler,
+		ErrorResponder: errorResponder,
+		Logger:         slog.New(slog.NewTextHandler(logs, nil)),
 	})
 	if err != nil {
 		t.Fatal("construct test server")

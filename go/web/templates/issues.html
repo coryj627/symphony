@@ -1,5 +1,4 @@
 {{define "content"}}
-<p class="status-summary" role="status" aria-live="polite">No issues are available.</p>
 <form class="filter-form" method="get" action="/issues">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <div><label for="issue-query">Search issues</label><input id="issue-query" name="query" type="search"></div>

@@ -7,6 +7,7 @@ type Page struct {
 	Heading   string
 	Mode      string
 	Flash     string
+	Status    string
 	CSRFToken string
 	Content   any
 }
@@ -26,3 +27,7 @@ type activityContent struct{}
 type configurationContent struct{}
 
 type logsContent struct{}
+
+type errorContent struct {
+	Instruction string
+}

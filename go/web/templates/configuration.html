@@ -1,5 +1,4 @@
 {{define "content"}}
-<p class="status-summary" role="status" aria-live="polite">Configuration has not been loaded.</p>
 <form method="post" action="/configuration">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <fieldset><legend>Tracker</legend><label for="tracker-provider">Provider</label><select id="tracker-provider" name="tracker_provider"><option value="">Not configured</option></select></fieldset>
@@ -12,4 +11,13 @@
   <button type="submit">Save configuration</button>
 </form>
 <p><a href="/configuration#documentation">Configuration documentation</a></p>
+<section id="documentation" tabindex="-1" aria-labelledby="configuration-help-heading">
+  <h2 id="configuration-help-heading">Configuration help</h2>
+  <p>Review each setting before saving. Empty values leave the related integration unconfigured.</p>
+  <ul>
+    <li>The workspace root identifies where Symphony may run work.</li>
+    <li>Maximum concurrent runs limits how many issues Symphony processes at once.</li>
+    <li>The approval policy controls when Codex pauses for confirmation.</li>
+  </ul>
+</section>
 {{end}}
