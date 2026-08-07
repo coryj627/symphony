@@ -3,9 +3,8 @@ package secrets
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
-
-	nativekeyring "github.com/zalando/go-keyring"
 )
 
 const nativeKeyringBackend = "native-keyring"
@@ -17,43 +16,41 @@ var (
 )
 
 type keyringClient interface {
-	Set(service, account, password string) error
-	Get(service, account string) (string, error)
-	Delete(service, account string) error
-}
-
-type systemKeyringClient struct{}
-
-func (systemKeyringClient) Set(service, account, password string) error {
-	return nativekeyring.Set(service, account, password)
-}
-
-func (systemKeyringClient) Get(service, account string) (string, error) {
-	return nativekeyring.Get(service, account)
-}
-
-func (systemKeyringClient) Delete(service, account string) error {
-	return nativekeyring.Delete(service, account)
+	Set(context.Context, string, string, string) error
+	Get(context.Context, string, string) (string, error)
+	Delete(context.Context, string, string) error
 }
 
 type keyringStore struct {
 	servicePrefix string
 	client        keyringClient
+	supported     bool
 }
 
 func NewKeyring(servicePrefix string) Store {
-	return newKeyring(servicePrefix, systemKeyringClient{})
+	return newKeyring(servicePrefix, newSystemKeyringClient())
 }
 
 func newKeyring(servicePrefix string, client keyringClient) Store {
+	return newKeyringForPlatform(servicePrefix, runtime.GOOS, client)
+}
+
+func newKeyringForPlatform(servicePrefix, goos string, client keyringClient) Store {
 	servicePrefix = strings.TrimRight(servicePrefix, "/")
 	if servicePrefix == "" {
 		servicePrefix = defaultServicePrefix
 	}
-	return &keyringStore{servicePrefix: servicePrefix, client: client}
+	return &keyringStore{
+		servicePrefix: servicePrefix,
+		client:        client,
+		supported:     goos == "darwin" || goos == "windows",
+	}
 }
 
 func (s *keyringStore) Put(ctx context.Context, ref Ref, value []byte) error {
+	if !s.supported {
+		return ErrUnsupportedPlatform
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -61,20 +58,29 @@ func (s *keyringStore) Put(ctx context.Context, ref Ref, value []byte) error {
 	valueCopy := append([]byte(nil), value...)
 	password := string(valueCopy)
 	clear(valueCopy)
-	if err := s.client.Set(s.service(ref), ref.Account(), password); err != nil {
+	if err := s.client.Set(ctx, s.service(ref), ref.Account(), password); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		return errKeyringPut
 	}
 	return nil
 }
 
 func (s *keyringStore) Get(ctx context.Context, ref Ref) ([]byte, error) {
+	if !s.supported {
+		return nil, ErrUnsupportedPlatform
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	value, err := s.client.Get(s.service(ref), ref.Account())
-	if errors.Is(err, nativekeyring.ErrNotFound) {
+	value, err := s.client.Get(ctx, s.service(ref), ref.Account())
+	if errors.Is(err, ErrNotFound) {
 		return nil, ErrNotFound
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
 	}
 	if err != nil {
 		return nil, errKeyringGet
@@ -83,13 +89,19 @@ func (s *keyringStore) Get(ctx context.Context, ref Ref) ([]byte, error) {
 }
 
 func (s *keyringStore) Delete(ctx context.Context, ref Ref) error {
+	if !s.supported {
+		return ErrUnsupportedPlatform
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	err := s.client.Delete(s.service(ref), ref.Account())
-	if errors.Is(err, nativekeyring.ErrNotFound) {
+	err := s.client.Delete(ctx, s.service(ref), ref.Account())
+	if errors.Is(err, ErrNotFound) {
 		return ErrNotFound
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
 	}
 	if err != nil {
 		return errKeyringDelete
@@ -99,14 +111,26 @@ func (s *keyringStore) Delete(ctx context.Context, ref Ref) error {
 
 func (s *keyringStore) Status(ctx context.Context, ref Ref) Status {
 	status := Status{Backend: nativeKeyringBackend}
+	if !s.supported {
+		status.ErrorCode = "unsupported_platform"
+		return status
+	}
 	if err := ctx.Err(); err != nil {
 		status.ErrorCode = "canceled"
 		return status
 	}
 
-	_, err := s.client.Get(s.service(ref), ref.Account())
-	if errors.Is(err, nativekeyring.ErrNotFound) {
+	_, err := s.client.Get(ctx, s.service(ref), ref.Account())
+	if errors.Is(err, ErrNotFound) {
 		status.ErrorCode = "not_found"
+		return status
+	}
+	if errors.Is(err, context.Canceled) {
+		status.ErrorCode = "canceled"
+		return status
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		status.ErrorCode = "deadline_exceeded"
 		return status
 	}
 	if err != nil {

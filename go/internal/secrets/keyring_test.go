@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	nativekeyring "github.com/zalando/go-keyring"
+	"time"
 )
 
 func TestKeyringStoreRoundTripAndCopiesReturnedValues(t *testing.T) {
 	client := newFakeKeyringClient("symphony/workflow/workflow-id", "tracker/github")
-	store := newKeyring("symphony", client)
+	store := newKeyringForPlatform("symphony", "darwin", client)
 	ref := Ref{WorkflowID: "workflow-id", TrackerKind: "github"}
 	input := []byte("credential")
 
@@ -43,7 +42,7 @@ func TestKeyringStoreRoundTripAndCopiesReturnedValues(t *testing.T) {
 
 func TestKeyringStoreUsesIsolatedServicePrefix(t *testing.T) {
 	client := newFakeKeyringClient("symphony-test/0123/workflow/w", "tracker/linear")
-	store := newKeyring("symphony-test/0123/", client)
+	store := newKeyringForPlatform("symphony-test/0123/", "darwin", client)
 	ref := Ref{WorkflowID: "w", TrackerKind: "linear"}
 
 	if err := store.Put(context.Background(), ref, []byte("credential")); err != nil {
@@ -53,7 +52,7 @@ func TestKeyringStoreUsesIsolatedServicePrefix(t *testing.T) {
 
 func TestKeyringStoreMapsNotFoundSeparately(t *testing.T) {
 	client := newFakeKeyringClient("symphony/workflow/w", "tracker/linear")
-	store := newKeyring("symphony", client)
+	store := newKeyringForPlatform("symphony", "darwin", client)
 	ref := Ref{WorkflowID: "w", TrackerKind: "linear"}
 
 	if _, err := store.Get(context.Background(), ref); !errors.Is(err, ErrNotFound) {
@@ -69,7 +68,7 @@ func TestKeyringStoreMapsNotFoundSeparately(t *testing.T) {
 
 func TestKeyringStoreDeleteRemovesCredential(t *testing.T) {
 	client := newFakeKeyringClient("symphony/workflow/w", "tracker/github")
-	store := newKeyring("symphony", client)
+	store := newKeyringForPlatform("symphony", "darwin", client)
 	ref := Ref{WorkflowID: "w", TrackerKind: "github"}
 
 	if err := store.Put(context.Background(), ref, []byte("credential")); err != nil {
@@ -86,7 +85,7 @@ func TestKeyringStoreDeleteRemovesCredential(t *testing.T) {
 func TestKeyringStoreErrorsAndStatusNeverDiscloseCredential(t *testing.T) {
 	const canary = "secret-canary"
 	client := newFakeKeyringClient("symphony/workflow/w", "tracker/github")
-	store := newKeyring("symphony", client)
+	store := newKeyringForPlatform("symphony", "darwin", client)
 	ref := Ref{WorkflowID: "w", TrackerKind: "github"}
 
 	for _, operation := range []struct {
@@ -142,7 +141,7 @@ func TestKeyringStoreErrorsAndStatusNeverDiscloseCredential(t *testing.T) {
 
 func TestKeyringStoreHonorsCanceledContextBeforeVaultAccess(t *testing.T) {
 	client := newFakeKeyringClient("symphony/workflow/w", "tracker/github")
-	store := newKeyring("symphony", client)
+	store := newKeyringForPlatform("symphony", "darwin", client)
 	ref := Ref{WorkflowID: "w", TrackerKind: "github"}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -164,6 +163,159 @@ func TestKeyringStoreHonorsCanceledContextBeforeVaultAccess(t *testing.T) {
 	}
 }
 
+func TestKeyringStoreRejectsUnsupportedPlatformWithoutBackendAccess(t *testing.T) {
+	client := newFakeKeyringClient("symphony/workflow/w", "tracker/github")
+	store := newKeyringForPlatform("symphony", "linux", client)
+	ref := Ref{WorkflowID: "w", TrackerKind: "github"}
+	credential := []byte("credential")
+	defer clear(credential)
+
+	if err := store.Put(context.Background(), ref, credential); !errors.Is(err, ErrUnsupportedPlatform) {
+		t.Fatalf("Put() error = %v, want ErrUnsupportedPlatform", err)
+	}
+	if _, err := store.Get(context.Background(), ref); !errors.Is(err, ErrUnsupportedPlatform) {
+		t.Fatalf("Get() error = %v, want ErrUnsupportedPlatform", err)
+	}
+	if err := store.Delete(context.Background(), ref); !errors.Is(err, ErrUnsupportedPlatform) {
+		t.Fatalf("Delete() error = %v, want ErrUnsupportedPlatform", err)
+	}
+	if got := store.Status(context.Background(), ref); got != (Status{Backend: "native-keyring", ErrorCode: "unsupported_platform"}) {
+		t.Fatalf("Status() = %#v", got)
+	}
+	if client.accesses != 0 {
+		t.Fatalf("native backend access count = %d, want 0", client.accesses)
+	}
+}
+
+func TestKeyringStorePropagatesCancellationAfterBackendEntryAndWaitsForCompletion(t *testing.T) {
+	ref := Ref{WorkflowID: "w", TrackerKind: "github"}
+
+	for _, operation := range []struct {
+		name       string
+		call       func(context.Context, Store) keyringCallResult
+		wantStatus Status
+	}{
+		{
+			name: "put",
+			call: func(ctx context.Context, store Store) keyringCallResult {
+				credential := []byte("credential")
+				defer clear(credential)
+				return keyringCallResult{err: store.Put(ctx, ref, credential)}
+			},
+		},
+		{
+			name: "get",
+			call: func(ctx context.Context, store Store) keyringCallResult {
+				value, err := store.Get(ctx, ref)
+				clear(value)
+				return keyringCallResult{err: err}
+			},
+		},
+		{
+			name: "delete",
+			call: func(ctx context.Context, store Store) keyringCallResult {
+				return keyringCallResult{err: store.Delete(ctx, ref)}
+			},
+		},
+		{
+			name: "status",
+			call: func(ctx context.Context, store Store) keyringCallResult {
+				return keyringCallResult{status: store.Status(ctx, ref)}
+			},
+			wantStatus: Status{Backend: "native-keyring", ErrorCode: "canceled"},
+		},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			client := newBlockingKeyringClient()
+			store := newKeyringForPlatform("symphony", "darwin", client)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			result := make(chan keyringCallResult, 1)
+			go func() { result <- operation.call(ctx, store) }()
+
+			waitForKeyringSignal(t, client.entered, "native backend entry")
+			cancel()
+			waitForKeyringSignal(t, client.cancellationObserved, "backend cancellation observation")
+			select {
+			case <-result:
+				t.Fatal("store returned before the native call completed")
+			default:
+			}
+
+			close(client.release)
+			var got keyringCallResult
+			select {
+			case got = <-result:
+			case <-time.After(2 * time.Second):
+				t.Fatal("store did not return after native completion")
+			}
+			select {
+			case <-client.completed:
+			default:
+				t.Fatal("store returned before native completion was recorded")
+			}
+			if operation.wantStatus != (Status{}) {
+				if got.status != operation.wantStatus {
+					t.Fatalf("Status() = %#v", got.status)
+				}
+			} else if !errors.Is(got.err, context.Canceled) {
+				t.Fatalf("operation error = %v, want context.Canceled", got.err)
+			}
+		})
+	}
+}
+
+func waitForKeyringSignal(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+type keyringCallResult struct {
+	err    error
+	status Status
+}
+
+type blockingKeyringClient struct {
+	entered              chan struct{}
+	cancellationObserved chan struct{}
+	release              chan struct{}
+	completed            chan struct{}
+}
+
+func newBlockingKeyringClient() *blockingKeyringClient {
+	return &blockingKeyringClient{
+		entered:              make(chan struct{}),
+		cancellationObserved: make(chan struct{}),
+		release:              make(chan struct{}),
+		completed:            make(chan struct{}),
+	}
+}
+
+func (c *blockingKeyringClient) Set(ctx context.Context, _, _, _ string) error {
+	return c.block(ctx)
+}
+
+func (c *blockingKeyringClient) Get(ctx context.Context, _, _ string) (string, error) {
+	return "", c.block(ctx)
+}
+
+func (c *blockingKeyringClient) Delete(ctx context.Context, _, _ string) error {
+	return c.block(ctx)
+}
+
+func (c *blockingKeyringClient) block(ctx context.Context) error {
+	close(c.entered)
+	<-ctx.Done()
+	close(c.cancellationObserved)
+	<-c.release
+	close(c.completed)
+	return ctx.Err()
+}
+
 type fakeKeyringClient struct {
 	wantService string
 	wantAccount string
@@ -179,7 +331,7 @@ func newFakeKeyringClient(service, account string) *fakeKeyringClient {
 	return &fakeKeyringClient{wantService: service, wantAccount: account}
 }
 
-func (c *fakeKeyringClient) Set(service, account, password string) error {
+func (c *fakeKeyringClient) Set(_ context.Context, service, account, password string) error {
 	c.accesses++
 	if err := c.checkNames(service, account); err != nil {
 		return err
@@ -192,7 +344,7 @@ func (c *fakeKeyringClient) Set(service, account, password string) error {
 	return nil
 }
 
-func (c *fakeKeyringClient) Get(service, account string) (string, error) {
+func (c *fakeKeyringClient) Get(_ context.Context, service, account string) (string, error) {
 	c.accesses++
 	if err := c.checkNames(service, account); err != nil {
 		return "", err
@@ -201,12 +353,12 @@ func (c *fakeKeyringClient) Get(service, account string) (string, error) {
 		return "", c.getErr
 	}
 	if !c.present {
-		return "", nativekeyring.ErrNotFound
+		return "", ErrNotFound
 	}
 	return c.password, nil
 }
 
-func (c *fakeKeyringClient) Delete(service, account string) error {
+func (c *fakeKeyringClient) Delete(_ context.Context, service, account string) error {
 	c.accesses++
 	if err := c.checkNames(service, account); err != nil {
 		return err
@@ -215,7 +367,7 @@ func (c *fakeKeyringClient) Delete(service, account string) error {
 		return c.deleteErr
 	}
 	if !c.present {
-		return nativekeyring.ErrNotFound
+		return ErrNotFound
 	}
 	c.password = ""
 	c.present = false

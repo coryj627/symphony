@@ -7,6 +7,8 @@ import (
 
 var ErrNotFound = errors.New("credential not found")
 
+var ErrUnsupportedPlatform = errors.New("native credential vault unsupported on this platform")
+
 type Store interface {
 	Put(context.Context, Ref, []byte) error
 	Get(context.Context, Ref) ([]byte, error)
