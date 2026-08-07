@@ -12,6 +12,12 @@
 /playwright-report/
 /test-results/
 *.out
+go/bin/
+go/node_modules/
+go/playwright-report/
+go/test-results/
+go/coverage/
+go/testdata/manual/WORKFLOW.md
 
 # Local runtime state
 /.symphony/

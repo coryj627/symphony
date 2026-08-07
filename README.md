@@ -34,6 +34,11 @@ help with the setup:
 > Set up Symphony for my repository based on
 > https://github.com/openai/symphony/blob/main/elixir/README.md
 
+### Option 3. Use the Accessible Go implementation
+
+The accessible Go implementation for macOS and Windows lives in
+[go/README.md](go/README.md).
+
 ---
 
 ## License
