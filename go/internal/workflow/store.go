@@ -33,7 +33,7 @@ type Change struct {
 
 type FileStore struct {
 	path             string
-	pathMu           *sync.Mutex
+	pathMu           *pathGate
 	lookup           LookupEnv
 	providerValidate ProviderValidator
 	atomic           atomicOperations
@@ -48,27 +48,76 @@ type FileStore struct {
 	lifecycleMu sync.Mutex
 	closing     bool
 	active      sync.WaitGroup
+	activeCount int
+	gateRelease sync.Once
 	closeOnce   sync.Once
 	closeErr    error
 	closed      chan struct{}
+	stopping    chan struct{}
 
 	watcher *fsnotify.Watcher
 	cancel  context.CancelFunc
 	watchWG sync.WaitGroup
 }
 
+type pathGate struct {
+	token chan struct{}
+	refs  int
+}
+
+func newPathGate() *pathGate {
+	gate := &pathGate{token: make(chan struct{}, 1)}
+	gate.token <- struct{}{}
+	return gate
+}
+func (gate *pathGate) acquire(ctx context.Context, stopping <-chan struct{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-stopping:
+		return ErrStoreClosed
+	case <-gate.token:
+	}
+	select {
+	case <-ctx.Done():
+		gate.release()
+		return ctx.Err()
+	case <-stopping:
+		gate.release()
+		return ErrStoreClosed
+	default:
+		return nil
+	}
+}
+func (gate *pathGate) release() { gate.token <- struct{}{} }
+
 var workflowPathTransactions = struct {
 	sync.Mutex
-	locks map[string]*sync.Mutex
-}{locks: make(map[string]*sync.Mutex)}
+	locks map[string]*pathGate
+}{locks: make(map[string]*pathGate)}
 
-func pathTransaction(path string) *sync.Mutex {
+func retainPathTransaction(path string) *pathGate {
 	workflowPathTransactions.Lock()
 	defer workflowPathTransactions.Unlock()
 	if workflowPathTransactions.locks[path] == nil {
-		workflowPathTransactions.locks[path] = &sync.Mutex{}
+		workflowPathTransactions.locks[path] = newPathGate()
 	}
-	return workflowPathTransactions.locks[path]
+	gate := workflowPathTransactions.locks[path]
+	gate.refs++
+	return gate
+}
+func releasePathTransaction(path string, gate *pathGate) {
+	workflowPathTransactions.Lock()
+	defer workflowPathTransactions.Unlock()
+	gate.refs--
+	if gate.refs == 0 && workflowPathTransactions.locks[path] == gate {
+		delete(workflowPathTransactions.locks, path)
+	}
+}
+func pathTransactionRegistrySize() int {
+	workflowPathTransactions.Lock()
+	defer workflowPathTransactions.Unlock()
+	return len(workflowPathTransactions.locks)
 }
 
 func NewStore(ctx context.Context, path string, lookup LookupEnv, providerValidate ProviderValidator) (*FileStore, error) {
@@ -76,10 +125,10 @@ func NewStore(ctx context.Context, path string, lookup LookupEnv, providerValida
 	if err != nil {
 		return nil, fmt.Errorf("resolve workflow path: %w", err)
 	}
-	if resolved, resolveErr := filepath.EvalSymlinks(absolute); resolveErr == nil {
-		absolute = resolved
+	absolute, err = canonicalStorePath(absolute)
+	if err != nil {
+		return nil, err
 	}
-	absolute = filepath.Clean(absolute)
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("create workflow watcher: %w", err)
@@ -97,12 +146,13 @@ func NewStore(ctx context.Context, path string, lookup LookupEnv, providerValida
 	watchContext, cancel := context.WithCancel(context.Background())
 	store := &FileStore{
 		path:             filepath.Clean(absolute),
-		pathMu:           pathTransaction(absolute),
+		pathMu:           retainPathTransaction(absolute),
 		lookup:           lookup,
 		providerValidate: providerValidate,
 		atomic:           defaultAtomicOperations(),
 		changes:          make(chan Change, 1),
 		closed:           make(chan struct{}),
+		stopping:         make(chan struct{}),
 		watcher:          watcher,
 		cancel:           cancel,
 	}
@@ -132,8 +182,10 @@ func (store *FileStore) Load(ctx context.Context) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
-	store.pathMu.Lock()
-	defer store.pathMu.Unlock()
+	if err := store.pathMu.acquire(ctx, store.stopping); err != nil {
+		return Snapshot{}, err
+	}
+	defer store.pathMu.release()
 	return store.loadStableLocked(ctx)
 }
 
@@ -163,6 +215,14 @@ func (store *FileStore) loadStableLocked(ctx context.Context) (Snapshot, error) 
 				return Snapshot{}, candidateErr
 			}
 			return Snapshot{}, &InvalidWorkflowError{Validation: validation}
+		}
+		if err := ctx.Err(); err != nil {
+			return Snapshot{}, err
+		}
+		select {
+		case <-store.stopping:
+			return Snapshot{}, ErrStoreClosed
+		default:
 		}
 		store.installSnapshot(snapshot, false)
 		return snapshot, nil
@@ -315,17 +375,31 @@ func (store *FileStore) beginOperation() bool {
 		return false
 	}
 	store.active.Add(1)
+	store.activeCount++
 	return true
 }
 
-func (store *FileStore) endOperation() { store.active.Done() }
+func (store *FileStore) endOperation() {
+	store.active.Done()
+	store.lifecycleMu.Lock()
+	store.activeCount--
+	release := store.closing && store.activeCount == 0
+	store.lifecycleMu.Unlock()
+	if release {
+		store.releaseGateRef()
+	}
+}
+
+func (store *FileStore) releaseGateRef() {
+	store.gateRelease.Do(func() { releasePathTransaction(store.path, store.pathMu) })
+}
 
 func (store *FileStore) Close() error {
 	store.closeOnce.Do(func() {
 		store.lifecycleMu.Lock()
 		store.closing = true
+		close(store.stopping)
 		store.lifecycleMu.Unlock()
-		store.active.Wait()
 		store.cancel()
 		store.closeErr = store.watcher.Close()
 		store.watchWG.Wait()
@@ -333,8 +407,45 @@ func (store *FileStore) Close() error {
 		close(store.changes)
 		store.publishMu.Unlock()
 		close(store.closed)
+		store.lifecycleMu.Lock()
+		idle := store.activeCount == 0
+		store.lifecycleMu.Unlock()
+		if idle {
+			store.releaseGateRef()
+		}
 	})
 	return store.closeErr
+}
+
+func canonicalStorePath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve workflow path: %w", err)
+	}
+	absolute = filepath.Clean(absolute)
+	probe := absolute
+	var suffix []string
+	for {
+		if _, e := os.Lstat(probe); e == nil {
+			break
+		} else if !errors.Is(e, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect workflow path: %w", e)
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return "", fmt.Errorf("resolve workflow path: no existing ancestor")
+		}
+		suffix = append(suffix, filepath.Base(probe))
+		probe = parent
+	}
+	resolved, err := filepath.EvalSymlinks(probe)
+	if err != nil {
+		return "", fmt.Errorf("resolve workflow symlinks: %w", err)
+	}
+	for i := len(suffix) - 1; i >= 0; i-- {
+		resolved = filepath.Join(resolved, suffix[i])
+	}
+	return filepath.Clean(resolved), nil
 }
 
 var _ Store = (*FileStore)(nil)

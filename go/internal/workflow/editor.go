@@ -101,8 +101,10 @@ func (store *FileStore) Save(ctx context.Context, command SaveCommand) (Snapshot
 	if (command.RawSource == nil) == (command.Patch == nil) {
 		return Snapshot{}, ErrInvalidSave
 	}
-	store.pathMu.Lock()
-	defer store.pathMu.Unlock()
+	if err := store.pathMu.acquire(ctx, store.stopping); err != nil {
+		return Snapshot{}, err
+	}
+	defer store.pathMu.release()
 
 	currentSource, err := os.ReadFile(store.path)
 	missing := errors.Is(err, os.ErrNotExist)
@@ -128,13 +130,24 @@ func (store *FileStore) Save(ctx context.Context, command SaveCommand) (Snapshot
 	snapshot, validation, candidateErr := store.snapshotFromSource(candidate)
 	if candidateErr != nil || !validation.Valid {
 		latest, readErr := os.ReadFile(store.path)
-		if readErr == nil && digestSource(latest) != command.BaseDigest {
+		latestDigest := ""
+		if readErr == nil {
+			latestDigest = digestSource(latest)
+		} else if !errors.Is(readErr, os.ErrNotExist) {
+			return Snapshot{}, fmt.Errorf("recheck workflow after validation: %w", readErr)
+		}
+		if latestDigest != command.BaseDigest {
 			return Snapshot{}, ErrSaveConflict
 		}
 		return Snapshot{}, &InvalidWorkflowError{Validation: validation}
 	}
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
+	}
+	select {
+	case <-store.stopping:
+		return Snapshot{}, ErrStoreClosed
+	default:
 	}
 
 	replaceErr := atomicReplaceChecked(store.path, candidate, command.BaseDigest, store.atomic)
@@ -145,6 +158,11 @@ func (store *FileStore) Save(ctx context.Context, command SaveCommand) (Snapshot
 	if readErr != nil || digestSource(visible) != snapshot.Digest {
 		_, _ = store.loadStableLocked(ctx)
 		return Snapshot{}, errors.Join(ErrSaveConflict, replaceErr)
+	}
+	select {
+	case <-store.stopping:
+		return Snapshot{}, ErrStoreClosed
+	default:
 	}
 	store.installSnapshot(snapshot, true)
 	if replaceErr != nil {
@@ -322,18 +340,42 @@ func setStringSlicePointer(root *yaml.Node, path []string, value *[]string) {
 	node := mappingPath(root, path)
 	prepareEditableNode(root, node)
 	old := append([]*yaml.Node(nil), node.Content...)
+	originalTag := node.Tag
 	node.Kind = yaml.SequenceNode
-	node.Tag = "!!seq"
+	if originalTag == "" || strings.HasPrefix(originalTag, "!!") {
+		node.Tag = "!!seq"
+	} else {
+		node.Tag = originalTag
+	}
 	node.Value = ""
 	node.Content = make([]*yaml.Node, 0, len(*value))
+	assigned := make([]*yaml.Node, len(*value))
+	used := make([]bool, len(old))
 	for index, item := range *value {
-		var child *yaml.Node
-		if index < len(old) {
-			child = old[index]
-			if editableScalarValue(child) == item {
-				node.Content = append(node.Content, child)
-				continue
+		for oldIndex, child := range old {
+			if !used[oldIndex] && editableScalarValue(child) == item {
+				assigned[index] = child
+				used[oldIndex] = true
+				break
 			}
+		}
+	}
+	for index := range *value {
+		item := (*value)[index]
+		var child *yaml.Node
+		if assigned[index] != nil {
+			child = assigned[index]
+			node.Content = append(node.Content, child)
+			continue
+		}
+		for oldIndex, candidate := range old {
+			if !used[oldIndex] {
+				child = candidate
+				used[oldIndex] = true
+				break
+			}
+		}
+		if child != nil {
 			prepareEditableNode(root, child)
 		} else {
 			child = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str"}
@@ -395,6 +437,7 @@ func deAliasConsumers(current, target, old *yaml.Node) {
 func mappingPath(root *yaml.Node, path []string) *yaml.Node {
 	current := root
 	for index, key := range path {
+		prepareEditableNode(root, current)
 		var found *yaml.Node
 		for child := 0; child+1 < len(current.Content); child += 2 {
 			if current.Content[child].Value == key {
@@ -403,11 +446,20 @@ func mappingPath(root *yaml.Node, path []string) *yaml.Node {
 			}
 		}
 		if found == nil {
+			if inherited := mergedMappingValue(current, key, map[*yaml.Node]bool{}); inherited != nil {
+				found = cloneYAMLNode(inherited)
+				current.Content = append(current.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, found)
+			}
+		}
+		if found == nil {
 			keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}
 			found = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str"}
 			current.Content = append(current.Content, keyNode, found)
 		}
 		current = found
+		if index < len(path)-1 {
+			prepareEditableNode(root, current)
+		}
 		if index < len(path)-1 && current.Kind != yaml.MappingNode {
 			current.Kind = yaml.MappingNode
 			current.Tag = "!!map"
@@ -416,6 +468,40 @@ func mappingPath(root *yaml.Node, path []string) *yaml.Node {
 		}
 	}
 	return current
+}
+
+func mergedMappingValue(mapping *yaml.Node, key string, seen map[*yaml.Node]bool) *yaml.Node {
+	if mapping == nil || seen[mapping] {
+		return nil
+	}
+	seen[mapping] = true
+	if mapping.Kind == yaml.AliasNode {
+		return mergedMappingValue(mapping.Alias, key, seen)
+	}
+	if mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key && key != "<<" {
+			return mapping.Content[i+1]
+		}
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value != "<<" {
+			continue
+		}
+		merge := mapping.Content[i+1]
+		candidates := []*yaml.Node{merge}
+		if merge.Kind == yaml.SequenceNode {
+			candidates = merge.Content
+		}
+		for _, candidate := range candidates {
+			if value := mergedMappingValue(candidate, key, seen); value != nil {
+				return value
+			}
+		}
+	}
+	return nil
 }
 
 func safeValidation(err error) ValidationResult {

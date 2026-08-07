@@ -48,7 +48,7 @@ func (store *FileStore) watchLoop(ctx context.Context) {
 			timerChannel = timer.C
 		case <-timerChannel:
 			timerChannel = nil
-			store.reloadFromWatcher()
+			store.reloadFromWatcher(ctx)
 		case _, ok := <-store.watcher.Errors:
 			if !ok {
 				return
@@ -58,9 +58,11 @@ func (store *FileStore) watchLoop(ctx context.Context) {
 	}
 }
 
-func (store *FileStore) reloadFromWatcher() {
-	store.pathMu.Lock()
-	defer store.pathMu.Unlock()
+func (store *FileStore) reloadFromWatcher(ctx context.Context) {
+	if err := store.pathMu.acquire(ctx, store.stopping); err != nil {
+		return
+	}
+	defer store.pathMu.release()
 	for attempts := 0; attempts < 8; attempts++ {
 		source, err := os.ReadFile(store.path)
 		if err != nil {
@@ -78,6 +80,9 @@ func (store *FileStore) reloadFromWatcher() {
 			continue
 		}
 		if candidateErr != nil || !validation.Valid {
+			if ctx.Err() != nil {
+				return
+			}
 			store.publish(Change{Digest: digest, Validation: validation})
 			return
 		}
