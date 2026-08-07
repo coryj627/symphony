@@ -59,20 +59,29 @@ func (store *FileStore) watchLoop(ctx context.Context) {
 }
 
 func (store *FileStore) reloadFromWatcher() {
-	source, err := os.ReadFile(store.path)
-	if err != nil {
-		validation := safeValidation(err)
-		if errors.Is(err, os.ErrNotExist) {
-			validation = safeValidation(ErrMissingWorkflow)
+	store.pathMu.Lock()
+	defer store.pathMu.Unlock()
+	for attempts := 0; attempts < 8; attempts++ {
+		source, err := os.ReadFile(store.path)
+		if err != nil {
+			validation := safeValidation(err)
+			if errors.Is(err, os.ErrNotExist) {
+				validation = safeValidation(ErrMissingWorkflow)
+			}
+			store.publish(Change{Validation: validation})
+			return
 		}
-		store.publish(Change{Validation: validation})
+		digest := digestSource(source)
+		snapshot, validation, candidateErr := store.snapshotFromSource(source)
+		latest, err := os.ReadFile(store.path)
+		if err != nil || digestSource(latest) != digest {
+			continue
+		}
+		if candidateErr != nil || !validation.Valid {
+			store.publish(Change{Digest: digest, Validation: validation})
+			return
+		}
+		store.installSnapshot(snapshot, true)
 		return
 	}
-	digest := digestSource(source)
-	snapshot, validation, candidateErr := store.snapshotFromSource(source)
-	if candidateErr != nil || !validation.Valid {
-		store.publish(Change{Digest: digest, Validation: validation})
-		return
-	}
-	store.installSnapshot(snapshot, true)
 }

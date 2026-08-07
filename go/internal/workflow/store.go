@@ -33,6 +33,7 @@ type Change struct {
 
 type FileStore struct {
 	path             string
+	pathMu           *sync.Mutex
 	lookup           LookupEnv
 	providerValidate ProviderValidator
 	atomic           atomicOperations
@@ -56,11 +57,29 @@ type FileStore struct {
 	watchWG sync.WaitGroup
 }
 
+var workflowPathTransactions = struct {
+	sync.Mutex
+	locks map[string]*sync.Mutex
+}{locks: make(map[string]*sync.Mutex)}
+
+func pathTransaction(path string) *sync.Mutex {
+	workflowPathTransactions.Lock()
+	defer workflowPathTransactions.Unlock()
+	if workflowPathTransactions.locks[path] == nil {
+		workflowPathTransactions.locks[path] = &sync.Mutex{}
+	}
+	return workflowPathTransactions.locks[path]
+}
+
 func NewStore(ctx context.Context, path string, lookup LookupEnv, providerValidate ProviderValidator) (*FileStore, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workflow path: %w", err)
 	}
+	if resolved, resolveErr := filepath.EvalSymlinks(absolute); resolveErr == nil {
+		absolute = resolved
+	}
+	absolute = filepath.Clean(absolute)
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("create workflow watcher: %w", err)
@@ -78,6 +97,7 @@ func NewStore(ctx context.Context, path string, lookup LookupEnv, providerValida
 	watchContext, cancel := context.WithCancel(context.Background())
 	store := &FileStore{
 		path:             filepath.Clean(absolute),
+		pathMu:           pathTransaction(absolute),
 		lookup:           lookup,
 		providerValidate: providerValidate,
 		atomic:           defaultAtomicOperations(),
@@ -112,22 +132,42 @@ func (store *FileStore) Load(ctx context.Context) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
-	source, err := os.ReadFile(store.path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Snapshot{}, fmt.Errorf("%w: workflow file is not present", ErrMissingWorkflow)
+	store.pathMu.Lock()
+	defer store.pathMu.Unlock()
+	return store.loadStableLocked(ctx)
+}
+
+func (store *FileStore) loadStableLocked(ctx context.Context) (Snapshot, error) {
+	for attempts := 0; attempts < 8; attempts++ {
+		source, err := os.ReadFile(store.path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return Snapshot{}, fmt.Errorf("%w: workflow file is not present", ErrMissingWorkflow)
+			}
+			return Snapshot{}, fmt.Errorf("read workflow: %w", err)
 		}
-		return Snapshot{}, fmt.Errorf("read workflow: %w", err)
-	}
-	snapshot, validation, candidateErr := store.snapshotFromSource(source)
-	if candidateErr != nil || !validation.Valid {
-		if candidateErr != nil {
-			return Snapshot{}, candidateErr
+		sourceDigest := digestSource(source)
+		snapshot, validation, candidateErr := store.snapshotFromSource(source)
+		latest, err := os.ReadFile(store.path)
+		if err != nil {
+			continue
 		}
-		return Snapshot{}, &InvalidWorkflowError{Validation: validation}
+		if digestSource(latest) != sourceDigest {
+			if ctx.Err() != nil {
+				return Snapshot{}, ctx.Err()
+			}
+			continue
+		}
+		if candidateErr != nil || !validation.Valid {
+			if candidateErr != nil {
+				return Snapshot{}, candidateErr
+			}
+			return Snapshot{}, &InvalidWorkflowError{Validation: validation}
+		}
+		store.installSnapshot(snapshot, false)
+		return snapshot, nil
 	}
-	store.installSnapshot(snapshot, false)
-	return snapshot, nil
+	return Snapshot{}, ErrSaveConflict
 }
 
 func (store *FileStore) Validate(ctx context.Context, source []byte) ValidationResult {

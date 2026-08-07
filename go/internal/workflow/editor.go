@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -100,6 +101,8 @@ func (store *FileStore) Save(ctx context.Context, command SaveCommand) (Snapshot
 	if (command.RawSource == nil) == (command.Patch == nil) {
 		return Snapshot{}, ErrInvalidSave
 	}
+	store.pathMu.Lock()
+	defer store.pathMu.Unlock()
 
 	currentSource, err := os.ReadFile(store.path)
 	missing := errors.Is(err, os.ErrNotExist)
@@ -124,15 +127,24 @@ func (store *FileStore) Save(ctx context.Context, command SaveCommand) (Snapshot
 	}
 	snapshot, validation, candidateErr := store.snapshotFromSource(candidate)
 	if candidateErr != nil || !validation.Valid {
+		latest, readErr := os.ReadFile(store.path)
+		if readErr == nil && digestSource(latest) != command.BaseDigest {
+			return Snapshot{}, ErrSaveConflict
+		}
 		return Snapshot{}, &InvalidWorkflowError{Validation: validation}
 	}
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
 
-	replaceErr := atomicReplace(store.path, candidate, store.atomic)
+	replaceErr := atomicReplaceChecked(store.path, candidate, command.BaseDigest, store.atomic)
 	if replaceErr != nil && !errors.Is(replaceErr, ErrDurabilityUncertain) {
 		return Snapshot{}, replaceErr
+	}
+	visible, readErr := os.ReadFile(store.path)
+	if readErr != nil || digestSource(visible) != snapshot.Digest {
+		_, _ = store.loadStableLocked(ctx)
+		return Snapshot{}, errors.Join(ErrSaveConflict, replaceErr)
 	}
 	store.installSnapshot(snapshot, true)
 	if replaceErr != nil {
@@ -198,8 +210,13 @@ func patchStructuredSource(path string, source []byte, patch *StructuredPatch) (
 		delimiterEnding = []byte("\n")
 		prompt = source
 	}
+	openingEnding := []byte("\n")
+	if firstEnd, ending := lineEnd(source, 0); hadFrontMatter && firstEnd >= len(ending) && len(ending) > 0 {
+		openingEnding = ending
+	}
 	result := make([]byte, 0, len(frontMatter)+len(prompt)+16)
-	result = append(result, "---\n"...)
+	result = append(result, "---"...)
+	result = append(result, openingEnding...)
 	result = append(result, frontMatter...)
 	if len(result) == 0 || result[len(result)-1] != '\n' {
 		result = append(result, '\n')
@@ -271,7 +288,14 @@ func setStringPointer(root *yaml.Node, path []string, value *string) {
 		return
 	}
 	node := mappingPath(root, path)
-	node.Tag = "!!str"
+	if editableScalarValue(node) == *value {
+		return
+	}
+	prepareEditableNode(root, node)
+	node.Kind = yaml.ScalarNode
+	if node.Tag == "" || strings.HasPrefix(node.Tag, "!!") {
+		node.Tag = "!!str"
+	}
 	node.Value = *value
 }
 
@@ -280,7 +304,14 @@ func setIntPointer(root *yaml.Node, path []string, value *int) {
 		return
 	}
 	node := mappingPath(root, path)
-	node.Tag = "!!int"
+	if editableScalarValue(node) == strconv.Itoa(*value) {
+		return
+	}
+	prepareEditableNode(root, node)
+	node.Kind = yaml.ScalarNode
+	if node.Tag == "" || strings.HasPrefix(node.Tag, "!!") {
+		node.Tag = "!!int"
+	}
 	node.Value = strconv.Itoa(*value)
 }
 
@@ -289,12 +320,75 @@ func setStringSlicePointer(root *yaml.Node, path []string, value *[]string) {
 		return
 	}
 	node := mappingPath(root, path)
+	prepareEditableNode(root, node)
+	old := append([]*yaml.Node(nil), node.Content...)
 	node.Kind = yaml.SequenceNode
 	node.Tag = "!!seq"
 	node.Value = ""
-	node.Content = node.Content[:0]
-	for _, item := range *value {
-		node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: item})
+	node.Content = make([]*yaml.Node, 0, len(*value))
+	for index, item := range *value {
+		var child *yaml.Node
+		if index < len(old) {
+			child = old[index]
+			if editableScalarValue(child) == item {
+				node.Content = append(node.Content, child)
+				continue
+			}
+			prepareEditableNode(root, child)
+		} else {
+			child = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str"}
+		}
+		child.Kind = yaml.ScalarNode
+		if child.Tag == "" || strings.HasPrefix(child.Tag, "!!") {
+			child.Tag = "!!str"
+		}
+		child.Value = item
+		node.Content = append(node.Content, child)
+	}
+}
+
+func editableScalarValue(node *yaml.Node) string {
+	if node.Kind == yaml.AliasNode && node.Alias != nil {
+		return node.Alias.Value
+	}
+	return node.Value
+}
+
+func prepareEditableNode(root, node *yaml.Node) {
+	if node.Kind != yaml.AliasNode || node.Alias == nil {
+		if node.Anchor != "" {
+			old := cloneYAMLNode(node)
+			deAliasConsumers(root, node, old)
+			node.Anchor = ""
+		}
+		return
+	}
+	head, line, foot := node.HeadComment, node.LineComment, node.FootComment
+	copy := cloneYAMLNode(node.Alias)
+	copy.Anchor = ""
+	copy.Alias = nil
+	*node = *copy
+	if head != "" {
+		node.HeadComment = head
+	}
+	if line != "" {
+		node.LineComment = line
+	}
+	if foot != "" {
+		node.FootComment = foot
+	}
+}
+
+func deAliasConsumers(current, target, old *yaml.Node) {
+	for _, child := range current.Content {
+		if child.Kind == yaml.AliasNode && child.Alias == target {
+			replacement := cloneYAMLNode(old)
+			replacement.Anchor = ""
+			replacement.Alias = nil
+			*child = *replacement
+			continue
+		}
+		deAliasConsumers(child, target, old)
 	}
 }
 

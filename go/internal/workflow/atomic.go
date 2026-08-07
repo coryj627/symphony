@@ -27,6 +27,7 @@ type atomicOperations struct {
 	syncDir    func(directory string) error
 	remove     func(path string) error
 	stat       func(path string) (os.FileInfo, error)
+	readFile   func(path string) ([]byte, error)
 }
 
 func defaultAtomicOperations() atomicOperations {
@@ -34,14 +35,23 @@ func defaultAtomicOperations() atomicOperations {
 		createTemp: func(directory, pattern string) (atomicFile, error) {
 			return os.CreateTemp(directory, pattern)
 		},
-		replace: replaceFile,
-		syncDir: syncParentDirectory,
-		remove:  os.Remove,
-		stat:    os.Stat,
+		replace:  replaceFile,
+		syncDir:  syncParentDirectory,
+		remove:   os.Remove,
+		stat:     os.Stat,
+		readFile: os.ReadFile,
 	}
 }
 
 func atomicReplace(destination string, source []byte, operations atomicOperations) error {
+	return atomicReplaceConditional(destination, source, nil, operations)
+}
+
+func atomicReplaceChecked(destination string, source []byte, expectedDigest string, operations atomicOperations) error {
+	return atomicReplaceConditional(destination, source, &expectedDigest, operations)
+}
+
+func atomicReplaceConditional(destination string, source []byte, expectedDigest *string, operations atomicOperations) (resultErr error) {
 	directory := filepath.Dir(destination)
 	permissions := os.FileMode(0o600)
 	if info, err := operations.stat(destination); err == nil {
@@ -60,10 +70,12 @@ func atomicReplace(destination string, source []byte, operations atomicOperation
 	closed := false
 	defer func() {
 		if !closed {
-			_ = temporary.Close()
+			resultErr = errors.Join(resultErr, temporary.Close())
 		}
 		if !replaced {
-			_ = operations.remove(temporaryPath)
+			if removeErr := operations.remove(temporaryPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				resultErr = errors.Join(resultErr, removeErr)
+			}
 		}
 	}()
 
@@ -88,10 +100,22 @@ func atomicReplace(destination string, source []byte, operations atomicOperation
 		return fmt.Errorf("sync workflow temporary file: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
-		closed = true
 		return fmt.Errorf("close workflow temporary file: %w", err)
 	}
 	closed = true
+	if expectedDigest != nil {
+		current, readErr := operations.readFile(destination)
+		currentDigest := ""
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return fmt.Errorf("recheck workflow destination: %w", readErr)
+		}
+		if readErr == nil {
+			currentDigest = digestSource(current)
+		}
+		if currentDigest != *expectedDigest {
+			return ErrSaveConflict
+		}
+	}
 	if err := operations.replace(temporaryPath, destination); err != nil {
 		return fmt.Errorf("replace workflow destination: %w", err)
 	}
