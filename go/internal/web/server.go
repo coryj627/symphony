@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,12 +32,13 @@ type Bound struct {
 
 // Server owns every loopback listener and serving goroutine.
 type Server struct {
-	port      int
-	bootstrap Bootstrap
-	handler   http.Handler
-	logger    *slog.Logger
-	sessions  *sessionStore
-	now       func() time.Time
+	port        int
+	bootstrap   Bootstrap
+	handler     http.Handler
+	logger      *slog.Logger
+	sessions    *sessionStore
+	now         func() time.Time
+	launchValue string
 
 	boundPort atomic.Int64
 
@@ -73,6 +73,10 @@ func NewServer(options Options) (*Server, error) {
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	launchValue, err := options.Bootstrap.takeLaunch()
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
 		port:         options.Port,
 		bootstrap:    options.Bootstrap,
@@ -80,6 +84,7 @@ func NewServer(options Options) (*Server, error) {
 		logger:       options.Logger,
 		sessions:     sessions,
 		now:          time.Now,
+		launchValue:  launchValue,
 		shutdownDone: make(chan struct{}),
 		stopCh:       make(chan struct{}),
 	}, nil
@@ -99,9 +104,8 @@ func (s *Server) Start(ctx context.Context) (Bound, error) {
 	if err := ctx.Err(); err != nil {
 		return Bound{}, err
 	}
-	token, err := s.bootstrap.value()
-	if err != nil {
-		return Bound{}, err
+	if s.launchValue == "" {
+		return Bound{}, errors.New("bootstrap capability is unavailable")
 	}
 
 	ipv4, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(s.port)))
@@ -118,6 +122,14 @@ func (s *Server) Start(ctx context.Context) (Bound, error) {
 		return Bound{}, fmt.Errorf("bind IPv6 loopback: %w", ipv6Err)
 	}
 
+	query := url.Values{"access_token": {s.launchValue}}
+	bound := Bound{
+		URL:  "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(selectedPort)) + "/?" + query.Encode(),
+		Port: selectedPort,
+	}
+	s.launchValue = ""
+	query = nil
+
 	s.boundPort.Store(int64(selectedPort))
 	s.listeners = listeners
 	s.started = true
@@ -133,11 +145,7 @@ func (s *Server) Start(ctx context.Context) (Bound, error) {
 	}
 	go s.stopOnContext(ctx)
 
-	query := url.Values{"access_token": {token}}
-	return Bound{
-		URL:  "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(selectedPort)) + "/?" + query.Encode(),
-		Port: selectedPort,
-	}, nil
+	return bound, nil
 }
 
 func (s *Server) serve(httpServer *http.Server, listener net.Listener) {
@@ -225,20 +233,4 @@ type fixedLogWriter struct {
 func (w fixedLogWriter) Write(value []byte) (int, error) {
 	w.logger.Error("loopback HTTP server rejected a request")
 	return len(value), nil
-}
-
-func isIPv6Unavailable(err error) bool {
-	message := strings.ToLower(err.Error())
-	for _, fragment := range []string{
-		"address family not supported",
-		"protocol not supported",
-		"cannot assign requested address",
-		"no suitable address",
-		"address incompatible with the requested protocol",
-	} {
-		if strings.Contains(message, fragment) {
-			return true
-		}
-	}
-	return false
 }

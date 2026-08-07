@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -24,6 +25,35 @@ type runningTestServer struct {
 	logs   *bytes.Buffer
 }
 
+type sensitiveCase struct {
+	category string
+	value    string
+}
+
+type diagnosticRecorder struct {
+	messages []string
+}
+
+func (*diagnosticRecorder) Helper() {}
+
+func (r *diagnosticRecorder) Errorf(format string, args ...any) {
+	r.messages = append(r.messages, fmt.Sprintf(format, args...))
+}
+
+type sensitiveReporter interface {
+	Helper()
+	Errorf(string, ...any)
+}
+
+func assertSensitiveValuesAbsent(t sensitiveReporter, logged string, cases []sensitiveCase) {
+	t.Helper()
+	for _, sensitive := range cases {
+		if sensitive.value != "" && strings.Contains(logged, sensitive.value) {
+			t.Errorf("captured logs retained %s", sensitive.category)
+		}
+	}
+}
+
 func startTestServer(t *testing.T, bootstrap Bootstrap, handler http.Handler) *runningTestServer {
 	t.Helper()
 	logs := new(bytes.Buffer)
@@ -34,11 +64,11 @@ func startTestServer(t *testing.T, bootstrap Bootstrap, handler http.Handler) *r
 		Logger:    slog.New(slog.NewTextHandler(logs, nil)),
 	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("construct test server")
 	}
 	bound, err := server.Start(context.Background())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("start test server")
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -63,7 +93,7 @@ func request(t *testing.T, client *http.Client, method, rawURL string, body io.R
 	t.Helper()
 	req, err := http.NewRequest(method, rawURL, body)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("create test request")
 	}
 	for key, values := range headers {
 		for _, value := range values {
@@ -72,7 +102,7 @@ func request(t *testing.T, client *http.Client, method, rawURL string, body io.R
 	}
 	res, err := client.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("perform test request")
 	}
 	t.Cleanup(func() { res.Body.Close() })
 	return res
@@ -82,7 +112,7 @@ func exchange(t *testing.T, server *runningTestServer) *http.Cookie {
 	t.Helper()
 	res := request(t, server.client, http.MethodGet, server.bound.URL, nil, nil)
 	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/" {
-		t.Fatalf("bootstrap response: %d %q", res.StatusCode, res.Header.Get("Location"))
+		t.Fatalf("bootstrap response status = %d or redirect was not clean", res.StatusCode)
 	}
 	for _, cookie := range res.Cookies() {
 		if cookie.Name == sessionCookieName {
@@ -97,13 +127,13 @@ func authenticatedRequest(t *testing.T, server *runningTestServer, cookie *http.
 	t.Helper()
 	parsed, err := url.Parse(server.bound.URL)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("parse bound URL")
 	}
 	parsed.Path = path
 	parsed.RawQuery = ""
 	req, err := http.NewRequest(method, parsed.String(), body)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("create authenticated request")
 	}
 	req.AddCookie(cookie)
 	for key, values := range headers {
@@ -113,7 +143,7 @@ func authenticatedRequest(t *testing.T, server *runningTestServer, cookie *http.
 	}
 	res, err := server.client.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("perform authenticated request")
 	}
 	t.Cleanup(func() { res.Body.Close() })
 	return res
@@ -125,7 +155,7 @@ func TestBootstrapExchangesCapabilityAndRedirectsCleanURL(t *testing.T) {
 	}))
 	res := request(t, server.client, http.MethodGet, server.bound.URL, nil, nil)
 	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/" {
-		t.Fatalf("unexpected response: %d %q", res.StatusCode, res.Header.Get("Location"))
+		t.Fatalf("bootstrap response status = %d or redirect was not clean", res.StatusCode)
 	}
 	var cookie *http.Cookie
 	for _, candidate := range res.Cookies() {
@@ -134,10 +164,66 @@ func TestBootstrapExchangesCapabilityAndRedirectsCleanURL(t *testing.T) {
 		}
 	}
 	if cookie == nil || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Domain != "" || cookie.Path != "/" || cookie.Secure {
-		t.Fatalf("unsafe cookie: %#v", cookie)
+		t.Fatal("session cookie flags are unsafe")
 	}
 	if strings.Contains(res.Header.Get("Location"), "access_token") {
-		t.Fatalf("redirect retained capability: %q", res.Header.Get("Location"))
+		t.Fatal("redirect retained bootstrap capability")
+	}
+}
+
+func TestBootstrapLaunchValueTransfersOutOfVerifierAndClearsBeforeServing(t *testing.T) {
+	bootstrap := bootstrapFromValue("launch-only-canary")
+	server, err := NewServer(Options{Bootstrap: bootstrap})
+	if err != nil {
+		t.Fatal("construct server")
+	}
+	bootstrap.launch.mu.Lock()
+	bootstrapStillOwnsLaunch := bootstrap.launch.value != ""
+	bootstrap.launch.mu.Unlock()
+	if bootstrapStillOwnsLaunch {
+		t.Fatal("bootstrap still owns launch capability after server construction")
+	}
+	if server.launchValue == "" {
+		t.Fatal("server did not take launch capability")
+	}
+	_, err = server.Start(context.Background())
+	if err != nil {
+		t.Fatal("start server")
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+	})
+	if server.launchValue != "" {
+		t.Fatal("server retained launch capability after listeners bound")
+	}
+}
+
+func TestBootstrapExpiryClockRunsInsideExchangeLock(t *testing.T) {
+	expires := time.Now().Add(time.Hour)
+	bootstrap := bootstrapFromValueUntil("expiry-interleaving-canary", expires)
+	bootstrap.state.mu.Lock()
+	clockCalled := make(chan struct{})
+	result := make(chan bool, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		result <- bootstrap.exchange("expiry-interleaving-canary", func() time.Time {
+			close(clockCalled)
+			return expires.Add(time.Nanosecond)
+		})
+	}()
+	<-started
+	select {
+	case <-clockCalled:
+		bootstrap.state.mu.Unlock()
+		t.Fatal("exchange read expiry clock before acquiring lock")
+	case <-time.After(50 * time.Millisecond):
+	}
+	bootstrap.state.mu.Unlock()
+	if <-result {
+		t.Fatal("exchange accepted capability after expiry")
 	}
 }
 
@@ -169,7 +255,7 @@ func TestBootstrapRejectsInvalidExpiredAndReusedCapabilities(t *testing.T) {
 			}
 			parsed, err := url.Parse(server.bound.URL)
 			if err != nil {
-				t.Fatal(err)
+				t.Fatal("parse bound URL")
 			}
 			query := parsed.Query()
 			query.Set("access_token", tt.requested)
@@ -229,38 +315,38 @@ func TestNewBootstrapUsesOnlyRandomOrExplicitE2EMode(t *testing.T) {
 	first, err := NewBootstrap()
 	if err != nil {
 		if err.Error() != "e2e bootstrap token must be at least 32 characters" {
-			t.Fatalf("unexpected bootstrap error: %v", err)
+			t.Fatal("unexpected bootstrap error category")
 		}
 		t.Setenv("SYMPHONY_E2E_BOOTSTRAP_TOKEN", explicitValue)
 		second, err := NewBootstrap()
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal("create e2e bootstrap")
 		}
-		got, err := second.value()
+		got, err := second.takeLaunch()
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal("take e2e launch capability")
 		}
 		if got != explicitValue {
-			t.Fatalf("e2e bootstrap = %q, want explicit value", got)
+			t.Fatal("e2e bootstrap did not use explicit gate")
 		}
 		return
 	}
 
-	firstValue, err := first.value()
+	firstValue, err := first.takeLaunch()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("take first production launch capability")
 	}
 	t.Setenv("SYMPHONY_E2E_BOOTSTRAP_TOKEN", explicitValue)
 	second, err := NewBootstrap()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("create second production bootstrap")
 	}
-	secondValue, err := second.value()
+	secondValue, err := second.takeLaunch()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("take second production launch capability")
 	}
 	if firstValue == shortValue || secondValue == explicitValue || firstValue == secondValue {
-		t.Fatalf("production bootstrap used deterministic input: first=%q second=%q", firstValue, secondValue)
+		t.Fatal("production bootstrap used deterministic input")
 	}
 }
 
@@ -370,7 +456,6 @@ func TestIPv6BindFailureRollsBackIPv4Listener(t *testing.T) {
 	if err != nil {
 		t.Skipf("IPv6 loopback unavailable: %v", err)
 	}
-	defer ipv6.Close()
 	port := ipv6.Addr().(*net.TCPAddr).Port
 	server, err := NewServer(Options{Port: port, Bootstrap: bootstrapFromValue("rollback-capability")})
 	if err != nil {
@@ -384,6 +469,17 @@ func TestIPv6BindFailureRollsBackIPv4Listener(t *testing.T) {
 		t.Fatalf("IPv4 listener leaked after IPv6 bind failure: %v", err)
 	}
 	ipv4.Close()
+	if err := ipv6.Close(); err != nil {
+		t.Fatal("close occupied IPv6 listener")
+	}
+	if _, err := server.Start(context.Background()); err != nil {
+		t.Fatal("retry Start after bind rollback")
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+	})
 }
 
 func TestSensitiveValuesAreAbsentFromCapturedLogs(t *testing.T) {
@@ -400,13 +496,27 @@ func TestSensitiveValuesAreAbsentFromCapturedLogs(t *testing.T) {
 	req.AddCookie(cookie)
 	res, err := server.client.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("perform authenticated log-capture request")
 	}
 	res.Body.Close()
 	logged := server.logs.String()
-	for _, sensitive := range []string{capability, "wrong-canary-capability", cookie.Value, "access_token", "symphony_session"} {
-		if strings.Contains(logged, sensitive) {
-			t.Fatalf("logs retained %q: %s", sensitive, logged)
-		}
+	assertSensitiveValuesAbsent(t, logged, []sensitiveCase{
+		{category: "bootstrap capability", value: capability},
+		{category: "invalid bootstrap capability", value: "wrong-canary-capability"},
+		{category: "session cookie", value: cookie.Value},
+		{category: "bootstrap query key", value: "access_token"},
+		{category: "cookie name", value: "symphony_session"},
+	})
+}
+
+func TestSensitiveLogAssertionDoesNotRepeatSecret(t *testing.T) {
+	const secret = "diagnostic-canary-secret"
+	recorder := new(diagnosticRecorder)
+	assertSensitiveValuesAbsent(recorder, "captured "+secret, []sensitiveCase{{category: "session cookie", value: secret}})
+	if len(recorder.messages) != 1 {
+		t.Fatalf("diagnostic count = %d, want 1", len(recorder.messages))
+	}
+	if strings.Contains(recorder.messages[0], secret) {
+		t.Fatal("diagnostic repeated sensitive value")
 	}
 }

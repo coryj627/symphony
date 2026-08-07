@@ -32,6 +32,6 @@ func TestAuthenticatedHandlerReceivesSessionCSRFValue(t *testing.T) {
 		t.Fatalf("got %d", res.StatusCode)
 	}
 	if csrf == "" || csrf == cookie.Value {
-		t.Fatalf("unsafe CSRF value: %q", csrf)
+		t.Fatal("handler received an unsafe CSRF value")
 	}
 }

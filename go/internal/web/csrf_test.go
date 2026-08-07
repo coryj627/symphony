@@ -13,10 +13,10 @@ func csrfFromHandler(t *testing.T, server *runningTestServer, cookie *http.Cooki
 	res := authenticatedRequest(t, server, cookie, http.MethodGet, "/csrf", nil, nil)
 	value, err := io.ReadAll(res.Body)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("read CSRF response")
 	}
 	if res.StatusCode != http.StatusOK || len(value) == 0 {
-		t.Fatalf("CSRF endpoint: %d %q", res.StatusCode, value)
+		t.Fatalf("CSRF endpoint status = %d or value was empty", res.StatusCode)
 	}
 	return string(value)
 }
@@ -63,7 +63,7 @@ func TestMutationAcceptsExactLoopbackOrigin(t *testing.T) {
 	server, cookie, csrf := csrfTestServer(t)
 	parsed, err := url.Parse(server.bound.URL)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("parse bound URL")
 	}
 	headers := http.Header{
 		"Content-Type": {"application/json"},
@@ -104,15 +104,23 @@ func TestMutationRejectsCrossSiteFetchMetadata(t *testing.T) {
 
 func TestMutationRejectsMissingAndWrongCSRF(t *testing.T) {
 	server, cookie, _ := csrfTestServer(t)
-	for _, token := range []string{"", "wrong-csrf-token"} {
-		headers := http.Header{"Content-Type": {"application/json"}}
-		if token != "" {
-			headers.Set("X-CSRF-Token", token)
-		}
-		res := authenticatedRequest(t, server, cookie, http.MethodPost, "/api/v1/config/validate", strings.NewReader("{}"), headers)
-		if res.StatusCode != http.StatusForbidden {
-			t.Fatalf("token %q: got %d", token, res.StatusCode)
-		}
+	for _, tc := range []struct {
+		name  string
+		token string
+	}{
+		{name: "missing"},
+		{name: "wrong", token: "wrong-csrf-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			headers := http.Header{"Content-Type": {"application/json"}}
+			if tc.token != "" {
+				headers.Set("X-CSRF-Token", tc.token)
+			}
+			res := authenticatedRequest(t, server, cookie, http.MethodPost, "/api/v1/config/validate", strings.NewReader("{}"), headers)
+			if res.StatusCode != http.StatusForbidden {
+				t.Fatalf("got %d", res.StatusCode)
+			}
+		})
 	}
 }
 

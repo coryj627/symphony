@@ -24,7 +24,7 @@ func (s *Server) protectedHandler() http.Handler {
 		}
 
 		if token, present := bootstrapCandidate(r); present {
-			if r.Method != http.MethodGet || r.URL.Path != "/" || !s.bootstrap.exchange(token, s.now()) {
+			if r.Method != http.MethodGet || r.URL.Path != "/" || !s.bootstrap.exchange(token, s.now) {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
