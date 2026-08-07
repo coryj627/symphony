@@ -59,6 +59,10 @@ func canonicalWorkflowPath(path string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("resolve workflow symlinks: %w", err)
 		}
+		canonicalPath, err = canonicalExistingPath(canonicalPath)
+		if err != nil {
+			return "", fmt.Errorf("resolve canonical workflow spelling: %w", err)
+		}
 		return filepath.Clean(canonicalPath), nil
 	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("inspect workflow path: %w", err)
@@ -75,6 +79,10 @@ func canonicalWorkflowPath(path string) (string, error) {
 	canonicalParent, err := filepath.EvalSymlinks(parent)
 	if err != nil {
 		return "", fmt.Errorf("resolve workflow parent symlinks: %w", err)
+	}
+	canonicalParent, err = canonicalExistingPath(canonicalParent)
+	if err != nil {
+		return "", fmt.Errorf("resolve canonical workflow parent spelling: %w", err)
 	}
 	return filepath.Join(canonicalParent, filepath.Base(absolutePath)), nil
 }

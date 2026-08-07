@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,7 +29,37 @@ type ownerMetadata struct {
 	WorkflowPath string    `json:"workflow_path"`
 }
 
+type metadataOperations struct {
+	encode  func(ownerMetadata) ([]byte, error)
+	create  func(string) (*os.File, string, error)
+	write   func(*os.File, []byte) (int, error)
+	sync    func(*os.File) error
+	close   func(*os.File) error
+	replace func(string, string) error
+}
+
+func defaultMetadataOperations() metadataOperations {
+	return metadataOperations{
+		encode: func(metadata ownerMetadata) ([]byte, error) {
+			contents, err := json.Marshal(metadata)
+			if err != nil {
+				return nil, err
+			}
+			return append(contents, '\n'), nil
+		},
+		create:  createMetadataTemp,
+		write:   (*os.File).Write,
+		sync:    (*os.File).Sync,
+		close:   (*os.File).Close,
+		replace: replaceMetadata,
+	}
+}
+
 func Acquire(info Info) (*Lock, error) {
+	return acquire(info, defaultMetadataOperations())
+}
+
+func acquire(info Info, operations metadataOperations) (*Lock, error) {
 	if err := os.MkdirAll(filepath.Dir(info.LockPath), 0o700); err != nil {
 		return nil, fmt.Errorf("create workflow lock directory: %w", err)
 	}
@@ -42,7 +73,7 @@ func Acquire(info Info) (*Lock, error) {
 		return nil, fmt.Errorf("%w: %s", ErrAlreadyRunning, info.WorkflowPath)
 	}
 
-	metadata, err := writeOwnerMetadata(info)
+	metadata, err := publishOwnerMetadata(info, operations)
 	if err != nil {
 		unlockErr := workflowLock.Unlock()
 		return nil, errors.Join(err, unlockErr)
@@ -50,36 +81,9 @@ func Acquire(info Info) (*Lock, error) {
 	return &Lock{fileLock: workflowLock, metadata: metadata}, nil
 }
 
-func writeOwnerMetadata(info Info) (*os.File, error) {
+func publishOwnerMetadata(info Info, operations metadataOperations) (*os.File, error) {
 	if err := os.MkdirAll(info.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create instance data directory: %w", err)
-	}
-	metadataPath := filepath.Join(info.DataDir, "instance.json")
-	metadata, err := os.OpenFile(metadataPath, os.O_WRONLY|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open instance metadata: %w", err)
-	}
-	openedInfo, err := metadata.Stat()
-	if err != nil {
-		_ = metadata.Close()
-		return nil, fmt.Errorf("inspect opened instance metadata: %w", err)
-	}
-	pathInfo, err := os.Lstat(metadataPath)
-	if err != nil {
-		_ = metadata.Close()
-		return nil, fmt.Errorf("inspect instance metadata path: %w", err)
-	}
-	if !openedInfo.Mode().IsRegular() || !pathInfo.Mode().IsRegular() || !os.SameFile(openedInfo, pathInfo) {
-		_ = metadata.Close()
-		return nil, fmt.Errorf("instance metadata path %q is not a regular file", metadataPath)
-	}
-	if err := metadata.Chmod(0o600); err != nil {
-		_ = metadata.Close()
-		return nil, fmt.Errorf("secure instance metadata: %w", err)
-	}
-	if err := metadata.Truncate(0); err != nil {
-		_ = metadata.Close()
-		return nil, fmt.Errorf("truncate instance metadata: %w", err)
 	}
 	owner := ownerMetadata{
 		PID:          os.Getpid(),
@@ -87,13 +91,34 @@ func writeOwnerMetadata(info Info) (*os.File, error) {
 		WorkflowID:   info.WorkflowID,
 		WorkflowPath: info.WorkflowPath,
 	}
-	if err := json.NewEncoder(metadata).Encode(owner); err != nil {
-		_ = metadata.Close()
-		return nil, fmt.Errorf("write instance metadata: %w", err)
+	contents, err := operations.encode(owner)
+	if err != nil {
+		return nil, fmt.Errorf("encode instance metadata: %w", err)
 	}
-	if err := metadata.Sync(); err != nil {
-		_ = metadata.Close()
-		return nil, fmt.Errorf("sync instance metadata: %w", err)
+
+	metadata, temporaryPath, err := operations.create(info.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("create temporary instance metadata: %w", err)
+	}
+	cleanup := func(cause error) error {
+		closeErr := operations.close(metadata)
+		removeErr := os.Remove(temporaryPath)
+		return errors.Join(cause, closeErr, removeErr)
+	}
+
+	written, err := operations.write(metadata, contents)
+	if err != nil {
+		return nil, cleanup(fmt.Errorf("write instance metadata: %w", err))
+	}
+	if written != len(contents) {
+		return nil, cleanup(fmt.Errorf("write instance metadata: %w", io.ErrShortWrite))
+	}
+	if err := operations.sync(metadata); err != nil {
+		return nil, cleanup(fmt.Errorf("sync instance metadata: %w", err))
+	}
+	metadataPath := filepath.Join(info.DataDir, "instance.json")
+	if err := operations.replace(temporaryPath, metadataPath); err != nil {
+		return nil, cleanup(fmt.Errorf("publish instance metadata: %w", err))
 	}
 	return metadata, nil
 }

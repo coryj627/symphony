@@ -3,6 +3,7 @@ package instance
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -148,7 +149,7 @@ func TestAcquireReleasesWorkflowLockWhenMetadataSetupFails(t *testing.T) {
 	}
 }
 
-func TestAcquireRejectsMetadataSymlinkWithoutTruncatingTarget(t *testing.T) {
+func TestAcquireReplacesMetadataSymlinkWithoutTruncatingTarget(t *testing.T) {
 	root := t.TempDir()
 	info := testInfo(root, "data")
 	if err := os.MkdirAll(info.DataDir, 0o700); err != nil {
@@ -161,21 +162,164 @@ func TestAcquireRejectsMetadataSymlinkWithoutTruncatingTarget(t *testing.T) {
 	metadataPath := filepath.Join(info.DataDir, "instance.json")
 	mustSymlinkOrSkip(t, target, metadataPath)
 
-	if _, err := Acquire(info); err == nil {
-		t.Fatal("Acquire succeeded with symlinked metadata")
+	lock, err := Acquire(info)
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = lock.Release() })
 	if contents, err := os.ReadFile(target); err != nil || string(contents) != "preserve me" {
 		t.Fatalf("metadata target changed: contents %q error %v", contents, err)
 	}
-	if err := os.Remove(metadataPath); err != nil {
+	metadataInfo, err := os.Lstat(metadataPath)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if !metadataInfo.Mode().IsRegular() {
+		t.Fatalf("published metadata mode = %v, want regular file", metadataInfo.Mode())
+	}
+}
+
+func TestAcquireReplacesMetadataHardLinkWithoutTruncatingReferent(t *testing.T) {
+	root := t.TempDir()
+	info := testInfo(root, "data")
+	if err := os.MkdirAll(info.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "do-not-truncate")
+	if err := os.WriteFile(target, []byte("preserve me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := filepath.Join(info.DataDir, "instance.json")
+	if err := os.Link(target, metadataPath); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+
 	lock, err := Acquire(info)
 	if err != nil {
-		t.Fatalf("metadata validation failure leaked workflow lock: %v", err)
-	}
-	if err := lock.Release(); err != nil {
 		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Release() })
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != "preserve me" {
+		t.Fatalf("hard-link referent changed: contents %q error %v", contents, err)
+	}
+	metadataInfo, err := os.Lstat(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetInfo, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(metadataInfo, targetInfo) {
+		t.Fatal("published metadata still aliases the prior hard-link referent")
+	}
+}
+
+func TestAcquirePublicationFailuresPreservePriorMetadataAndUnlock(t *testing.T) {
+	injected := errors.New("injected metadata failure")
+	closeFailure := errors.New("injected close failure")
+	for _, test := range []struct {
+		name       string
+		mutate     func(metadataOperations) metadataOperations
+		wantErrors []error
+	}{
+		{
+			name: "encode",
+			mutate: func(operations metadataOperations) metadataOperations {
+				operations.encode = func(ownerMetadata) ([]byte, error) { return nil, injected }
+				return operations
+			},
+			wantErrors: []error{injected},
+		},
+		{
+			name: "create",
+			mutate: func(operations metadataOperations) metadataOperations {
+				operations.create = func(string) (*os.File, string, error) { return nil, "", injected }
+				return operations
+			},
+			wantErrors: []error{injected},
+		},
+		{
+			name: "write",
+			mutate: func(operations metadataOperations) metadataOperations {
+				operations.write = func(*os.File, []byte) (int, error) { return 0, injected }
+				return operations
+			},
+			wantErrors: []error{injected},
+		},
+		{
+			name: "short write",
+			mutate: func(operations metadataOperations) metadataOperations {
+				operations.write = func(_ *os.File, contents []byte) (int, error) { return len(contents) - 1, nil }
+				return operations
+			},
+			wantErrors: []error{io.ErrShortWrite},
+		},
+		{
+			name: "sync",
+			mutate: func(operations metadataOperations) metadataOperations {
+				operations.sync = func(*os.File) error { return injected }
+				return operations
+			},
+			wantErrors: []error{injected},
+		},
+		{
+			name: "cleanup close",
+			mutate: func(operations metadataOperations) metadataOperations {
+				operations.write = func(*os.File, []byte) (int, error) { return 0, injected }
+				operations.close = func(file *os.File) error {
+					return errors.Join(file.Close(), closeFailure)
+				}
+				return operations
+			},
+			wantErrors: []error{injected, closeFailure},
+		},
+		{
+			name: "replace",
+			mutate: func(operations metadataOperations) metadataOperations {
+				operations.replace = func(string, string) error { return injected }
+				return operations
+			},
+			wantErrors: []error{injected},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			info := testInfo(root, "data")
+			if err := os.MkdirAll(info.DataDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			metadataPath := filepath.Join(info.DataDir, "instance.json")
+			const priorMetadata = "prior owner metadata\n"
+			if err := os.WriteFile(metadataPath, []byte(priorMetadata), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			lock, err := acquire(info, test.mutate(defaultMetadataOperations()))
+			if lock != nil || err == nil {
+				t.Fatalf("acquire = lock %#v error %v, want nil lock and error", lock, err)
+			}
+			for _, want := range test.wantErrors {
+				if !errors.Is(err, want) {
+					t.Fatalf("error = %v, want errors.Is(%v)", err, want)
+				}
+			}
+			if contents, readErr := os.ReadFile(metadataPath); readErr != nil || string(contents) != priorMetadata {
+				t.Fatalf("prior metadata changed: contents %q error %v", contents, readErr)
+			}
+			temps, globErr := filepath.Glob(filepath.Join(info.DataDir, ".instance.json-*"))
+			if globErr != nil || len(temps) != 0 {
+				t.Fatalf("owned temporary metadata remains: paths %#v error %v", temps, globErr)
+			}
+
+			next, nextErr := Acquire(info)
+			if nextErr != nil {
+				t.Fatalf("publication failure leaked workflow lock: %v", nextErr)
+			}
+			if err := next.Release(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

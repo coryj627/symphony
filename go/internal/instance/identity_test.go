@@ -38,6 +38,60 @@ func TestResolveIsStableAcrossSymlinkedWorkflowPath(t *testing.T) {
 	}
 }
 
+func TestResolveIsStableAcrossCaseAliasedWorkflowPath(t *testing.T) {
+	root := t.TempDir()
+	realPath := filepath.Join(root, "Repository", "WORKFLOW.md")
+	mustWriteWorkflow(t, realPath)
+	aliasPath := filepath.Join(root, "repository", "workflow.md")
+	if _, err := os.Stat(aliasPath); err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("test volume is case-sensitive")
+		}
+		t.Fatal(err)
+	}
+
+	real, err := Resolve(realPath, "github:coryj627/symphony", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias, err := Resolve(aliasPath, "github:coryj627/symphony", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if real.WorkflowPath != alias.WorkflowPath || real.WorkflowID != alias.WorkflowID || real.ID != alias.ID {
+		t.Fatalf("case aliases produced different identities: real %#v alias %#v", real, alias)
+	}
+}
+
+func TestResolveMissingLeafIsStableAcrossCaseAliasedParent(t *testing.T) {
+	root := t.TempDir()
+	realParent := filepath.Join(root, "Repository")
+	if err := os.MkdirAll(realParent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasParent := filepath.Join(root, "repository")
+	if _, err := os.Stat(aliasParent); err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("test volume is case-sensitive")
+		}
+		t.Fatal(err)
+	}
+
+	real, err := Resolve(filepath.Join(realParent, "WORKFLOW.md"), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias, err := Resolve(filepath.Join(aliasParent, "WORKFLOW.md"), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if real.WorkflowPath != alias.WorkflowPath || real.WorkflowID != alias.WorkflowID {
+		t.Fatalf("case-aliased parents produced different missing-leaf identities: real %#v alias %#v", real, alias)
+	}
+}
+
 func TestResolveCanonicalizesMissingLeafThroughSymlinkedParent(t *testing.T) {
 	root := t.TempDir()
 	realParent := filepath.Join(root, "repo")
