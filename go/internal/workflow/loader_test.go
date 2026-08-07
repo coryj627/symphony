@@ -47,6 +47,23 @@ func TestParseErrorCarriesWorkflowPathAndLocation(t *testing.T) {
 	}
 }
 
+func TestParseKeepsIndentedDelimiterLikeHookLineInFrontMatter(t *testing.T) {
+	// Break caught: trimming a potential closing delimiter treats an indented
+	// shell line in a block scalar as the end of YAML front matter.
+	source := []byte("---\nhooks:\n  before_run: |\n    echo begin\n    ---\n    echo end\npolling:\n  interval_ms: 1\n---\nPrompt")
+	definition, err := Parse("WORKFLOW.md", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := Resolve("WORKFLOW.md", definition, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if definition.Prompt != "Prompt" || config.Hooks.BeforeRun != "echo begin\n---\necho end\n" {
+		t.Fatalf("definition=%#v hooks=%#v", definition, config.Hooks)
+	}
+}
+
 func TestLoadMissingFileIsTyped(t *testing.T) {
 	// Break caught: exposing an OS-specific read error prevents callers from
 	// presenting a stable missing-workflow diagnosis.

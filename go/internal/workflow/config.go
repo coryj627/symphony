@@ -2,13 +2,54 @@ package workflow
 
 import (
 	"encoding/json"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"go.yaml.in/yaml/v3"
 )
+
+type fieldLocator struct {
+	path string
+	root *yaml.Node
+}
+
+func (locator fieldLocator) error(field, detail string) error {
+	line, column := 1, 1
+	if node := mappingFieldNode(locator.root, field); node != nil {
+		line, column = node.Line+1, node.Column
+	}
+	if field != "" {
+		detail = field + " " + detail
+	}
+	return workflowError(ErrWorkflowParse, locator.path, line, column, detail)
+}
+
+func mappingFieldNode(root *yaml.Node, field string) *yaml.Node {
+	if root == nil || len(root.Content) != 1 {
+		return nil
+	}
+	node := root.Content[0]
+	for _, key := range strings.Split(field, ".") {
+		if node.Kind != yaml.MappingNode {
+			return nil
+		}
+		var value *yaml.Node
+		for index := 0; index+1 < len(node.Content); index += 2 {
+			if node.Content[index].Value == key {
+				value = node.Content[index+1]
+				break
+			}
+		}
+		if value == nil {
+			return nil
+		}
+		node = value
+	}
+	return node
+}
 
 const (
 	defaultPollingInterval        = 30 * time.Second
@@ -27,7 +68,8 @@ const (
 // Resolve applies workflow defaults and validates the typed settings Symphony
 // owns. Provider fields remain adapter-owned and are retained unchanged.
 func Resolve(path string, definition Definition, lookup LookupEnv) (EffectiveConfig, error) {
-	raw, err := rawMapping(path, definition)
+	locator := fieldLocator{path: path, root: definition.FrontMatter}
+	raw, err := rawMapping(locator, definition)
 	if err != nil {
 		return EffectiveConfig{}, err
 	}
@@ -42,37 +84,37 @@ func Resolve(path string, definition Definition, lookup LookupEnv) (EffectiveCon
 		Server:    ServerConfig{Port: 0, OperatorResponseWindow: defaultOperatorResponseWindow},
 	}
 
-	if err := resolveTracker(path, raw, &config); err != nil {
+	if err := resolveTracker(locator, raw, &config); err != nil {
 		return EffectiveConfig{}, err
 	}
-	if err := resolvePolling(path, raw, &config); err != nil {
+	if err := resolvePolling(locator, raw, &config); err != nil {
 		return EffectiveConfig{}, err
 	}
-	if err := resolveWorkspace(path, raw, lookup, &config); err != nil {
+	if err := resolveWorkspace(locator, raw, lookup, &config); err != nil {
 		return EffectiveConfig{}, err
 	}
-	if err := resolveHooks(path, raw, &config); err != nil {
+	if err := resolveHooks(locator, raw, &config); err != nil {
 		return EffectiveConfig{}, err
 	}
-	if err := resolveAgent(path, raw, &config); err != nil {
+	if err := resolveAgent(locator, raw, &config); err != nil {
 		return EffectiveConfig{}, err
 	}
-	if err := resolveCodex(path, raw, &config); err != nil {
+	if err := resolveCodex(locator, raw, &config); err != nil {
 		return EffectiveConfig{}, err
 	}
-	if err := resolveServer(path, raw, &config); err != nil {
+	if err := resolveServer(locator, raw, &config); err != nil {
 		return EffectiveConfig{}, err
 	}
 	return config, nil
 }
 
-func rawMapping(path string, definition Definition) (map[string]any, error) {
+func rawMapping(locator fieldLocator, definition Definition) (map[string]any, error) {
 	if definition.FrontMatter == nil {
-		return nil, workflowError(ErrWorkflowParse, path, 1, 1, "front matter is missing")
+		return nil, locator.error("", "front matter is missing")
 	}
 	var raw map[string]any
 	if err := definition.FrontMatter.Decode(&raw); err != nil {
-		return nil, workflowError(ErrWorkflowParse, path, definition.FrontMatter.Line, definition.FrontMatter.Column, err.Error())
+		return nil, locator.error("", err.Error())
 	}
 	if raw == nil {
 		return map[string]any{}, nil
@@ -80,24 +122,24 @@ func rawMapping(path string, definition Definition) (map[string]any, error) {
 	return raw, nil
 }
 
-func resolveTracker(path string, raw map[string]any, config *EffectiveConfig) error {
-	section, err := object(path, raw, "tracker")
+func resolveTracker(locator fieldLocator, raw map[string]any, config *EffectiveConfig) error {
+	section, err := object(locator, raw, "tracker")
 	if err != nil || section == nil {
 		return err
 	}
 	if value, ok := section["kind"]; ok {
 		kind, ok := value.(string)
 		if !ok {
-			return fieldError(path, "tracker.kind", "must be a string")
+			return fieldError(locator, "tracker.kind", "must be a string")
 		}
 		config.Tracker.Kind = kind
 	}
 	if value, ok := section["provider"]; ok {
 		provider, ok := value.(map[string]any)
 		if !ok {
-			return fieldError(path, "tracker.provider", "must be an object")
+			return fieldError(locator, "tracker.provider", "must be an object")
 		}
-		normalized, err := jsonSafe(path, "tracker.provider", provider)
+		normalized, err := jsonSafe(locator, "tracker.provider", provider)
 		if err != nil {
 			return err
 		}
@@ -111,7 +153,7 @@ func resolveTracker(path string, raw map[string]any, config *EffectiveConfig) er
 		if value, ok := section[key]; ok {
 			strings, ok := stringSlice(value)
 			if !ok {
-				return fieldError(path, "tracker."+key, "must be a list of strings")
+				return fieldError(locator, "tracker."+key, "must be a list of strings")
 			}
 			*destination = strings
 		}
@@ -119,13 +161,13 @@ func resolveTracker(path string, raw map[string]any, config *EffectiveConfig) er
 	return nil
 }
 
-func resolvePolling(path string, raw map[string]any, config *EffectiveConfig) error {
-	section, err := object(path, raw, "polling")
+func resolvePolling(locator fieldLocator, raw map[string]any, config *EffectiveConfig) error {
+	section, err := object(locator, raw, "polling")
 	if err != nil || section == nil {
 		return err
 	}
 	if value, ok := section["interval_ms"]; ok {
-		duration, err := milliseconds(path, "polling.interval_ms", value, true)
+		duration, err := milliseconds(locator, "polling.interval_ms", value, 1)
 		if err != nil {
 			return err
 		}
@@ -134,8 +176,8 @@ func resolvePolling(path string, raw map[string]any, config *EffectiveConfig) er
 	return nil
 }
 
-func resolveWorkspace(path string, raw map[string]any, lookup LookupEnv, config *EffectiveConfig) error {
-	section, err := object(path, raw, "workspace")
+func resolveWorkspace(locator fieldLocator, raw map[string]any, lookup LookupEnv, config *EffectiveConfig) error {
+	section, err := object(locator, raw, "workspace")
 	if err != nil {
 		return err
 	}
@@ -145,11 +187,11 @@ func resolveWorkspace(path string, raw map[string]any, lookup LookupEnv, config 
 			var valid bool
 			root, valid = value.(string)
 			if !valid {
-				return fieldError(path, "workspace.root", "must be a string")
+				return fieldError(locator, "workspace.root", "must be a string")
 			}
 		}
 	}
-	resolved, err := resolveWorkspaceRoot(path, root, lookup)
+	resolved, err := resolveWorkspaceRoot(locator, root, lookup)
 	if err != nil {
 		return err
 	}
@@ -157,8 +199,8 @@ func resolveWorkspace(path string, raw map[string]any, lookup LookupEnv, config 
 	return nil
 }
 
-func resolveHooks(path string, raw map[string]any, config *EffectiveConfig) error {
-	section, err := object(path, raw, "hooks")
+func resolveHooks(locator fieldLocator, raw map[string]any, config *EffectiveConfig) error {
+	section, err := object(locator, raw, "hooks")
 	if err != nil || section == nil {
 		return err
 	}
@@ -171,13 +213,13 @@ func resolveHooks(path string, raw map[string]any, config *EffectiveConfig) erro
 		if value, ok := section[key]; ok {
 			text, ok := value.(string)
 			if !ok {
-				return fieldError(path, "hooks."+key, "must be a string")
+				return fieldError(locator, "hooks."+key, "must be a string")
 			}
 			*destination = text
 		}
 	}
 	if value, ok := section["timeout_ms"]; ok {
-		duration, err := milliseconds(path, "hooks.timeout_ms", value, true)
+		duration, err := milliseconds(locator, "hooks.timeout_ms", value, 1)
 		if err != nil {
 			return err
 		}
@@ -186,27 +228,27 @@ func resolveHooks(path string, raw map[string]any, config *EffectiveConfig) erro
 	return nil
 }
 
-func resolveAgent(path string, raw map[string]any, config *EffectiveConfig) error {
-	section, err := object(path, raw, "agent")
+func resolveAgent(locator fieldLocator, raw map[string]any, config *EffectiveConfig) error {
+	section, err := object(locator, raw, "agent")
 	if err != nil || section == nil {
 		return err
 	}
 	if value, ok := section["max_concurrent_agents"]; ok {
 		limit, ok := integer(value)
 		if !ok || limit < 1 {
-			return fieldError(path, "agent.max_concurrent_agents", "must be a positive integer")
+			return fieldError(locator, "agent.max_concurrent_agents", "must be a positive integer")
 		}
 		config.Agent.MaxConcurrent = limit
 	}
 	if value, ok := section["max_turns"]; ok {
 		turns, ok := integer(value)
 		if !ok || turns < 1 {
-			return fieldError(path, "agent.max_turns", "must be a positive integer")
+			return fieldError(locator, "agent.max_turns", "must be a positive integer")
 		}
 		config.Agent.MaxTurns = turns
 	}
 	if value, ok := section["max_retry_backoff_ms"]; ok {
-		duration, err := milliseconds(path, "agent.max_retry_backoff_ms", value, false)
+		duration, err := milliseconds(locator, "agent.max_retry_backoff_ms", value, 0)
 		if err != nil {
 			return err
 		}
@@ -215,7 +257,7 @@ func resolveAgent(path string, raw map[string]any, config *EffectiveConfig) erro
 	if value, ok := section["max_concurrent_agents_by_state"]; ok {
 		limits, ok := value.(map[string]any)
 		if !ok {
-			return fieldError(path, "agent.max_concurrent_agents_by_state", "must be an object")
+			return fieldError(locator, "agent.max_concurrent_agents_by_state", "must be an object")
 		}
 		for state, rawLimit := range limits {
 			limit, valid := integer(rawLimit)
@@ -229,20 +271,20 @@ func resolveAgent(path string, raw map[string]any, config *EffectiveConfig) erro
 	return nil
 }
 
-func resolveCodex(path string, raw map[string]any, config *EffectiveConfig) error {
-	section, err := object(path, raw, "codex")
+func resolveCodex(locator fieldLocator, raw map[string]any, config *EffectiveConfig) error {
+	section, err := object(locator, raw, "codex")
 	if err != nil || section == nil {
 		return err
 	}
 	if value, ok := section["command"]; ok {
 		command, ok := value.(string)
 		if !ok || strings.TrimSpace(command) == "" {
-			return fieldError(path, "codex.command", "must be a non-empty string")
+			return fieldError(locator, "codex.command", "must be a non-empty string")
 		}
 		config.Codex.Command = command
 	}
 	if value, ok := section["approval_policy"]; ok {
-		normalized, err := jsonSafe(path, "codex.approval_policy", value)
+		normalized, err := jsonSafe(locator, "codex.approval_policy", value)
 		if err != nil {
 			return err
 		}
@@ -251,16 +293,16 @@ func resolveCodex(path string, raw map[string]any, config *EffectiveConfig) erro
 	if value, ok := section["thread_sandbox"]; ok {
 		sandbox, ok := value.(string)
 		if !ok {
-			return fieldError(path, "codex.thread_sandbox", "must be a string")
+			return fieldError(locator, "codex.thread_sandbox", "must be a string")
 		}
 		config.Codex.ThreadSandbox = sandbox
 	}
 	if value, ok := section["turn_sandbox_policy"]; ok {
 		policy, ok := value.(map[string]any)
 		if !ok {
-			return fieldError(path, "codex.turn_sandbox_policy", "must be an object")
+			return fieldError(locator, "codex.turn_sandbox_policy", "must be an object")
 		}
-		normalized, err := jsonSafe(path, "codex.turn_sandbox_policy", policy)
+		normalized, err := jsonSafe(locator, "codex.turn_sandbox_policy", policy)
 		if err != nil {
 			return err
 		}
@@ -268,14 +310,14 @@ func resolveCodex(path string, raw map[string]any, config *EffectiveConfig) erro
 	}
 	for key, setting := range map[string]struct {
 		destination *time.Duration
-		positive    bool
+		minimum     int
 	}{
-		"turn_timeout_ms":  {&config.Codex.TurnTimeout, true},
-		"read_timeout_ms":  {&config.Codex.ReadTimeout, true},
-		"stall_timeout_ms": {&config.Codex.StallTimeout, false},
+		"turn_timeout_ms":  {&config.Codex.TurnTimeout, 1},
+		"read_timeout_ms":  {&config.Codex.ReadTimeout, 1},
+		"stall_timeout_ms": {&config.Codex.StallTimeout, math.MinInt},
 	} {
 		if value, ok := section[key]; ok {
-			duration, err := milliseconds(path, "codex."+key, value, setting.positive)
+			duration, err := milliseconds(locator, "codex."+key, value, setting.minimum)
 			if err != nil {
 				return err
 			}
@@ -285,39 +327,39 @@ func resolveCodex(path string, raw map[string]any, config *EffectiveConfig) erro
 	return nil
 }
 
-func resolveServer(path string, raw map[string]any, config *EffectiveConfig) error {
-	section, err := object(path, raw, "server")
+func resolveServer(locator fieldLocator, raw map[string]any, config *EffectiveConfig) error {
+	section, err := object(locator, raw, "server")
 	if err != nil || section == nil {
 		return err
 	}
 	if value, ok := section["port"]; ok {
 		port, ok := integer(value)
 		if !ok || port < 0 || port > 65535 {
-			return fieldError(path, "server.port", "must be an integer from 0 through 65535")
+			return fieldError(locator, "server.port", "must be an integer from 0 through 65535")
 		}
 		config.Server.Port = port
 	}
 	if value, ok := section["operator_response_timeout_ms"]; ok {
-		duration, err := milliseconds(path, "server.operator_response_timeout_ms", value, true)
+		duration, err := milliseconds(locator, "server.operator_response_timeout_ms", value, 1)
 		if err != nil {
 			return err
 		}
 		if duration < minimumOperatorResponseWindow {
-			return fieldError(path, "server.operator_response_timeout_ms", "must be at least 30000ms")
+			return fieldError(locator, "server.operator_response_timeout_ms", "must be at least 30000ms")
 		}
 		config.Server.OperatorResponseWindow = duration
 	}
 	return nil
 }
 
-func object(path string, raw map[string]any, key string) (map[string]any, error) {
+func object(locator fieldLocator, raw map[string]any, key string) (map[string]any, error) {
 	value, ok := raw[key]
 	if !ok || value == nil {
 		return nil, nil
 	}
 	section, ok := value.(map[string]any)
 	if !ok {
-		return nil, fieldError(path, key, "must be an object")
+		return nil, fieldError(locator, key, "must be an object")
 	}
 	return section, nil
 }
@@ -357,41 +399,45 @@ func integer(value any) (int, bool) {
 	}
 }
 
-func milliseconds(path, field string, value any, positive bool) (time.Duration, error) {
+func milliseconds(locator fieldLocator, field string, value any, minimum int) (time.Duration, error) {
 	amount, ok := integer(value)
-	if !ok || (positive && amount < 1) || (!positive && amount < 0) {
-		return 0, fieldError(path, field, "must be a valid millisecond integer")
+	if !ok || amount < minimum {
+		return 0, fieldError(locator, field, "must be a valid millisecond integer")
 	}
-	if int64(amount) > int64(math.MaxInt64/int64(time.Millisecond)) {
-		return 0, fieldError(path, field, "is too large")
+	if int64(amount) > math.MaxInt64/int64(time.Millisecond) || int64(amount) < math.MinInt64/int64(time.Millisecond) {
+		return 0, fieldError(locator, field, "is too large")
 	}
 	return time.Duration(amount) * time.Millisecond, nil
 }
 
-func resolveWorkspaceRoot(path, root string, lookup LookupEnv) (string, error) {
+func resolveWorkspaceRoot(locator fieldLocator, root string, lookup LookupEnv) (string, error) {
 	if variable, ok := exactEnvironmentReference(root); ok {
 		if lookup == nil {
 			lookup = os.LookupEnv
 		}
 		value, found := lookup(variable)
 		if !found || value == "" {
-			return "", fieldError(path, "workspace.root", "references an unset environment variable")
+			return "", fieldError(locator, "workspace.root", "references an unset environment variable")
 		}
 		root = value
 	}
 	if root == "~" || strings.HasPrefix(root, "~/") || strings.HasPrefix(root, "~\\") {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", fieldError(path, "workspace.root", err.Error())
+			return "", fieldError(locator, "workspace.root", err.Error())
 		}
-		root = filepath.Join(home, root[2:])
+		if root == "~" {
+			root = home
+		} else {
+			root = filepath.Join(home, root[2:])
+		}
 	}
 	if !filepath.IsAbs(root) {
-		root = filepath.Join(filepath.Dir(path), root)
+		root = filepath.Join(filepath.Dir(locator.path), root)
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		return "", fieldError(path, "workspace.root", err.Error())
+		return "", fieldError(locator, "workspace.root", err.Error())
 	}
 	return filepath.Clean(abs), nil
 }
@@ -408,18 +454,13 @@ func exactEnvironmentReference(value string) (string, bool) {
 	return value[1:], true
 }
 
-func jsonSafe(path, field string, value any) (any, error) {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return nil, fieldError(path, field, "must contain JSON-safe values")
+func jsonSafe(locator fieldLocator, field string, value any) (any, error) {
+	if _, err := json.Marshal(value); err != nil {
+		return nil, fieldError(locator, field, "must contain JSON-safe values")
 	}
-	var normalized any
-	if err := json.Unmarshal(encoded, &normalized); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrWorkflowParse, err)
-	}
-	return normalized, nil
+	return value, nil
 }
 
-func fieldError(path, field, detail string) error {
-	return workflowError(ErrWorkflowParse, path, 1, 1, field+" "+detail)
+func fieldError(locator fieldLocator, field, detail string) error {
+	return locator.error(field, detail)
 }

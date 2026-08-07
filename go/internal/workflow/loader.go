@@ -89,17 +89,23 @@ func Load(path string, lookup LookupEnv) (Snapshot, error) {
 
 func startsFrontMatter(source string) bool {
 	firstLine, _, _ := strings.Cut(source, "\n")
-	return strings.TrimSuffix(firstLine, "\r") == "---"
+	return isDelimiterLine(firstLine)
 }
 
 func splitFrontMatter(source string) (frontMatter, prompt string, ok bool) {
 	lines := strings.SplitAfter(source, "\n")
 	for index := 1; index < len(lines); index++ {
-		if strings.TrimSpace(lines[index]) == "---" {
+		if isDelimiterLine(lines[index]) {
 			return strings.Join(lines[1:index], ""), strings.Join(lines[index+1:], ""), true
 		}
 	}
 	return "", "", false
+}
+
+func isDelimiterLine(line string) bool {
+	line = strings.TrimSuffix(line, "\n")
+	line = strings.TrimSuffix(line, "\r")
+	return line == "---"
 }
 
 func emptyMapNode() *yaml.Node {

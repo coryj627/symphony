@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,16 +45,17 @@ func TestResolveMakesRelativeAndHomeWorkspaceRootsAbsolute(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := []struct {
-		name string
-		root string
-		want string
+		name     string
+		yamlRoot string
+		want     string
 	}{
-		{name: "relative", root: "workspaces", want: "/repo/config/workspaces"},
-		{name: "home", root: "~/workspaces", want: filepath.Join(home, "workspaces")},
+		{name: "relative", yamlRoot: "workspaces", want: "/repo/config/workspaces"},
+		{name: "home", yamlRoot: "~/workspaces", want: filepath.Join(home, "workspaces")},
+		{name: "bare home", yamlRoot: "'~'", want: home},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			def, err := Parse("/repo/config/WORKFLOW.md", []byte("---\nworkspace:\n  root: "+test.root+"\n---\nPrompt"))
+			def, err := Parse("/repo/config/WORKFLOW.md", []byte("---\nworkspace:\n  root: "+test.yamlRoot+"\n---\nPrompt"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -137,5 +139,66 @@ func TestResolvePreservesCodexPolicyValues(t *testing.T) {
 	}
 	if got.Codex.TurnSandboxPolicy["network_access"] != false {
 		t.Fatalf("policy map = %#v", got.Codex.TurnSandboxPolicy)
+	}
+}
+
+func TestResolvePreservesLargeJSONSafeIntegers(t *testing.T) {
+	// Break caught: JSON validation that round-trips through interface{} turns
+	// integers larger than 2^53 into lossy float64 values.
+	const want = 9007199254740993
+	def, err := Parse("WORKFLOW.md", []byte("---\ntracker:\n  provider:\n    large_id: "+"9007199254740993"+"\ncodex:\n  turn_sandbox_policy:\n    maximum_bytes: "+"9007199254740993"+"\n---\nPrompt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Resolve("WORKFLOW.md", def, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Tracker.Provider["large_id"] != want || got.Codex.TurnSandboxPolicy["maximum_bytes"] != want {
+		t.Fatalf("large values changed: provider=%#v policy=%#v", got.Tracker.Provider, got.Codex.TurnSandboxPolicy)
+	}
+}
+
+func TestResolveAllowsNonPositiveStallTimeout(t *testing.T) {
+	// Break caught: rejecting a non-positive stall timeout makes the documented
+	// explicit stall-detection disable setting unusable.
+	for _, test := range []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{name: "negative disables", value: "-1", want: -time.Millisecond},
+		{name: "zero disables", value: "0", want: 0},
+		{name: "positive enables", value: "1500", want: 1500 * time.Millisecond},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			def, err := Parse("WORKFLOW.md", []byte("---\ncodex:\n  stall_timeout_ms: "+test.value+"\n---\nPrompt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := Resolve("WORKFLOW.md", def, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Codex.StallTimeout != test.want {
+				t.Fatalf("stall timeout = %v, want %v", got.Codex.StallTimeout, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveReportsInvalidFieldLocation(t *testing.T) {
+	// Break caught: reporting every typed validation error at 1:1 sends the
+	// operator to the opening delimiter instead of the invalid setting.
+	def, err := Parse("WORKFLOW.md", []byte("---\npolling:\n  interval_ms: 0\n---\nPrompt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Resolve("WORKFLOW.md", def, nil)
+	if !errors.Is(err, ErrWorkflowParse) {
+		t.Fatalf("got %v", err)
+	}
+	if !strings.Contains(err.Error(), "WORKFLOW.md:3:") {
+		t.Fatalf("error lacks invalid-field location: %v", err)
 	}
 }
