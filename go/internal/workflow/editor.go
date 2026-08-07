@@ -1,0 +1,362 @@
+package workflow
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"time"
+
+	"go.yaml.in/yaml/v3"
+)
+
+var (
+	ErrSaveConflict    = errors.New("workflow_save_conflict")
+	ErrInvalidWorkflow = errors.New("invalid_workflow")
+	ErrInvalidSave     = errors.New("invalid_save_command")
+)
+
+type FieldError struct {
+	Field   string
+	Code    string
+	Message string
+}
+
+type SafeError struct {
+	Code    string
+	Message string
+}
+
+type ValidationResult struct {
+	Valid        bool
+	FieldErrors  []FieldError
+	GlobalErrors []SafeError
+}
+
+type InvalidWorkflowError struct {
+	Validation ValidationResult
+}
+
+func (err *InvalidWorkflowError) Error() string { return ErrInvalidWorkflow.Error() }
+func (err *InvalidWorkflowError) Unwrap() error { return ErrInvalidWorkflow }
+
+// StructuredPatch is the supported structured-editor surface. Pointer fields
+// distinguish an omitted form value from an explicit zero or empty value.
+// Provider-owned mappings are patched one known leaf at a time so unknown
+// provider extension keys remain untouched.
+type StructuredPatch struct {
+	TrackerKind           *string
+	ProviderOwner         *string
+	ProviderRepository    *string
+	ProviderProjectSlug   *string
+	ProviderEndpoint      *string
+	ProviderCredentialRef *string
+	ProviderAssignee      *string
+	TrackerRequiredLabels *[]string
+	TrackerActiveStates   *[]string
+	TrackerTerminalStates *[]string
+
+	PollingIntervalMS *int
+	WorkspaceRoot     *string
+
+	HookAfterCreate  *string
+	HookBeforeRun    *string
+	HookAfterRun     *string
+	HookBeforeRemove *string
+	HookTimeoutMS    *int
+
+	AgentMaxConcurrent     *int
+	AgentMaxTurns          *int
+	AgentMaxRetryBackoffMS *int
+
+	CodexCommand        *string
+	CodexApprovalPolicy *string
+	CodexThreadSandbox  *string
+	CodexTurnTimeoutMS  *int
+	CodexReadTimeoutMS  *int
+	CodexStallTimeoutMS *int
+
+	ServerPort                      *int
+	ServerOperatorResponseTimeoutMS *int
+}
+
+type SaveCommand struct {
+	BaseDigest string
+	RawSource  []byte
+	Patch      *StructuredPatch
+}
+
+func (store *FileStore) Save(ctx context.Context, command SaveCommand) (Snapshot, error) {
+	if !store.beginOperation() {
+		return Snapshot{}, ErrStoreClosed
+	}
+	defer store.endOperation()
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
+	}
+	if (command.RawSource == nil) == (command.Patch == nil) {
+		return Snapshot{}, ErrInvalidSave
+	}
+
+	currentSource, err := os.ReadFile(store.path)
+	missing := errors.Is(err, os.ErrNotExist)
+	if err != nil && !missing {
+		return Snapshot{}, fmt.Errorf("reload workflow before save: %w", err)
+	}
+	currentDigest := ""
+	if !missing {
+		currentDigest = digestSource(currentSource)
+	}
+	if currentDigest != command.BaseDigest {
+		return Snapshot{}, ErrSaveConflict
+	}
+
+	candidate := command.RawSource
+	if command.Patch != nil {
+		candidate, err = patchStructuredSource(store.path, currentSource, command.Patch)
+		if err != nil {
+			result := safeValidation(err)
+			return Snapshot{}, &InvalidWorkflowError{Validation: result}
+		}
+	}
+	snapshot, validation, candidateErr := store.snapshotFromSource(candidate)
+	if candidateErr != nil || !validation.Valid {
+		return Snapshot{}, &InvalidWorkflowError{Validation: validation}
+	}
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
+	}
+
+	replaceErr := atomicReplace(store.path, candidate, store.atomic)
+	if replaceErr != nil && !errors.Is(replaceErr, ErrDurabilityUncertain) {
+		return Snapshot{}, replaceErr
+	}
+	store.installSnapshot(snapshot, true)
+	if replaceErr != nil {
+		return snapshot, replaceErr
+	}
+	return snapshot, nil
+}
+
+func digestSource(source []byte) string {
+	digest := sha256.Sum256(source)
+	return fmt.Sprintf("%x", digest)
+}
+
+func patchStructuredSource(path string, source []byte, patch *StructuredPatch) ([]byte, error) {
+	definition, err := Parse(path, source)
+	if err != nil {
+		return nil, err
+	}
+	if definition.FrontMatter == nil || len(definition.FrontMatter.Content) != 1 || definition.FrontMatter.Content[0].Kind != yaml.MappingNode {
+		return nil, ErrFrontMatterNotMap
+	}
+	root := definition.FrontMatter.Content[0]
+
+	setStringPointer(root, []string{"tracker", "kind"}, patch.TrackerKind)
+	setStringPointer(root, []string{"tracker", "provider", "owner"}, patch.ProviderOwner)
+	setStringPointer(root, []string{"tracker", "provider", "repository"}, patch.ProviderRepository)
+	setStringPointer(root, []string{"tracker", "provider", "project_slug"}, patch.ProviderProjectSlug)
+	setStringPointer(root, []string{"tracker", "provider", "endpoint"}, patch.ProviderEndpoint)
+	setStringPointer(root, []string{"tracker", "provider", "credential_ref"}, patch.ProviderCredentialRef)
+	setStringPointer(root, []string{"tracker", "provider", "assignee"}, patch.ProviderAssignee)
+	setStringSlicePointer(root, []string{"tracker", "required_labels"}, patch.TrackerRequiredLabels)
+	setStringSlicePointer(root, []string{"tracker", "active_states"}, patch.TrackerActiveStates)
+	setStringSlicePointer(root, []string{"tracker", "terminal_states"}, patch.TrackerTerminalStates)
+
+	setIntPointer(root, []string{"polling", "interval_ms"}, patch.PollingIntervalMS)
+	setStringPointer(root, []string{"workspace", "root"}, patch.WorkspaceRoot)
+	setStringPointer(root, []string{"hooks", "after_create"}, patch.HookAfterCreate)
+	setStringPointer(root, []string{"hooks", "before_run"}, patch.HookBeforeRun)
+	setStringPointer(root, []string{"hooks", "after_run"}, patch.HookAfterRun)
+	setStringPointer(root, []string{"hooks", "before_remove"}, patch.HookBeforeRemove)
+	setIntPointer(root, []string{"hooks", "timeout_ms"}, patch.HookTimeoutMS)
+	setIntPointer(root, []string{"agent", "max_concurrent_agents"}, patch.AgentMaxConcurrent)
+	setIntPointer(root, []string{"agent", "max_turns"}, patch.AgentMaxTurns)
+	setIntPointer(root, []string{"agent", "max_retry_backoff_ms"}, patch.AgentMaxRetryBackoffMS)
+	setStringPointer(root, []string{"codex", "command"}, patch.CodexCommand)
+	setStringPointer(root, []string{"codex", "approval_policy"}, patch.CodexApprovalPolicy)
+	setStringPointer(root, []string{"codex", "thread_sandbox"}, patch.CodexThreadSandbox)
+	setIntPointer(root, []string{"codex", "turn_timeout_ms"}, patch.CodexTurnTimeoutMS)
+	setIntPointer(root, []string{"codex", "read_timeout_ms"}, patch.CodexReadTimeoutMS)
+	setIntPointer(root, []string{"codex", "stall_timeout_ms"}, patch.CodexStallTimeoutMS)
+	setIntPointer(root, []string{"server", "port"}, patch.ServerPort)
+	setIntPointer(root, []string{"server", "operator_response_timeout_ms"}, patch.ServerOperatorResponseTimeoutMS)
+
+	frontMatter, err := encodeFrontMatter(definition.FrontMatter)
+	if err != nil {
+		return nil, fmt.Errorf("encode workflow front matter: %w", err)
+	}
+	prompt, delimiterEnding, hadFrontMatter, splitErr := exactPromptSuffix(source)
+	if splitErr != nil {
+		return nil, splitErr
+	}
+	if !hadFrontMatter {
+		delimiterEnding = []byte("\n")
+		prompt = source
+	}
+	result := make([]byte, 0, len(frontMatter)+len(prompt)+16)
+	result = append(result, "---\n"...)
+	result = append(result, frontMatter...)
+	if len(result) == 0 || result[len(result)-1] != '\n' {
+		result = append(result, '\n')
+	}
+	result = append(result, "---"...)
+	result = append(result, delimiterEnding...)
+	result = append(result, prompt...)
+	return result, nil
+}
+
+func encodeFrontMatter(document *yaml.Node) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := yaml.NewEncoder(&buffer)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(document); err != nil {
+		return nil, err
+	}
+	if err := encoder.Close(); err != nil {
+		return nil, err
+	}
+	encoded := buffer.Bytes()
+	if bytes.HasPrefix(encoded, []byte("---\n")) {
+		encoded = encoded[4:]
+	}
+	return append([]byte(nil), encoded...), nil
+}
+
+func exactPromptSuffix(source []byte) (prompt, delimiterEnding []byte, hadFrontMatter bool, err error) {
+	firstEnd, firstEnding := lineEnd(source, 0)
+	if firstEnd < 0 || string(source[:firstEnd-len(firstEnding)]) != "---" {
+		return source, nil, false, nil
+	}
+	position := firstEnd
+	for position <= len(source) {
+		end, ending := lineEnd(source, position)
+		if end < 0 {
+			end = len(source)
+			ending = nil
+		}
+		contentEnd := end - len(ending)
+		if contentEnd >= position && string(source[position:contentEnd]) == "---" {
+			return source[end:], append([]byte(nil), ending...), true, nil
+		}
+		if end >= len(source) {
+			break
+		}
+		position = end
+	}
+	return nil, nil, true, ErrWorkflowParse
+}
+
+func lineEnd(source []byte, start int) (int, []byte) {
+	if start > len(source) {
+		return -1, nil
+	}
+	index := bytes.IndexByte(source[start:], '\n')
+	if index < 0 {
+		return len(source), nil
+	}
+	end := start + index + 1
+	if end >= 2 && source[end-2] == '\r' {
+		return end, []byte("\r\n")
+	}
+	return end, []byte("\n")
+}
+
+func setStringPointer(root *yaml.Node, path []string, value *string) {
+	if value == nil {
+		return
+	}
+	node := mappingPath(root, path)
+	node.Tag = "!!str"
+	node.Value = *value
+}
+
+func setIntPointer(root *yaml.Node, path []string, value *int) {
+	if value == nil {
+		return
+	}
+	node := mappingPath(root, path)
+	node.Tag = "!!int"
+	node.Value = strconv.Itoa(*value)
+}
+
+func setStringSlicePointer(root *yaml.Node, path []string, value *[]string) {
+	if value == nil {
+		return
+	}
+	node := mappingPath(root, path)
+	node.Kind = yaml.SequenceNode
+	node.Tag = "!!seq"
+	node.Value = ""
+	node.Content = node.Content[:0]
+	for _, item := range *value {
+		node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: item})
+	}
+}
+
+func mappingPath(root *yaml.Node, path []string) *yaml.Node {
+	current := root
+	for index, key := range path {
+		var found *yaml.Node
+		for child := 0; child+1 < len(current.Content); child += 2 {
+			if current.Content[child].Value == key {
+				found = current.Content[child+1]
+				break
+			}
+		}
+		if found == nil {
+			keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}
+			found = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str"}
+			current.Content = append(current.Content, keyNode, found)
+		}
+		current = found
+		if index < len(path)-1 && current.Kind != yaml.MappingNode {
+			current.Kind = yaml.MappingNode
+			current.Tag = "!!map"
+			current.Value = ""
+			current.Content = nil
+		}
+	}
+	return current
+}
+
+func safeValidation(err error) ValidationResult {
+	result := ValidationResult{Valid: false, FieldErrors: []FieldError{}, GlobalErrors: []SafeError{}}
+	code := "invalid_workflow"
+	message := "The workflow is invalid. Review the highlighted settings."
+	switch {
+	case errors.Is(err, ErrMissingWorkflow):
+		code, message = "missing_workflow_file", "The workflow file does not exist."
+	case errors.Is(err, ErrFrontMatterNotMap):
+		code, message = "workflow_front_matter_not_a_map", "Workflow front matter must be a YAML mapping."
+	case errors.Is(err, ErrWorkflowParse):
+		code, message = "workflow_parse_error", "The workflow could not be parsed."
+	case errors.Is(err, ErrTemplateParse):
+		code, message = "template_parse_error", "The workflow prompt template could not be parsed."
+	}
+	result.GlobalErrors = append(result.GlobalErrors, SafeError{Code: code, Message: message})
+	return result
+}
+
+func validResult(fieldErrors []FieldError) ValidationResult {
+	result := ValidationResult{Valid: len(fieldErrors) == 0, FieldErrors: append([]FieldError(nil), fieldErrors...), GlobalErrors: []SafeError{}}
+	if result.FieldErrors == nil {
+		result.FieldErrors = []FieldError{}
+	}
+	return result
+}
+
+func snapshotAt(path string, source []byte, definition Definition, config EffectiveConfig) Snapshot {
+	return Snapshot{
+		Path:       path,
+		Source:     string(source),
+		Digest:     digestSource(source),
+		Definition: definition,
+		Config:     config,
+		LoadedAt:   time.Now(),
+	}
+}
