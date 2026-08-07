@@ -1,13 +1,17 @@
 package web
 
 import (
+	"bufio"
 	"context"
 	"io"
+	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -210,6 +214,142 @@ func TestUnauthenticatedStaticStylesRemainNarrowAndProtected(t *testing.T) {
 	defer mutation.Body.Close()
 	if mutation.StatusCode != http.StatusUnauthorized || !strings.HasPrefix(mutation.Header.Get("Content-Type"), "text/html") {
 		t.Fatalf("unauthenticated static mutation status/content type = %d/%q", mutation.StatusCode, mutation.Header.Get("Content-Type"))
+	}
+}
+
+func TestUnauthenticatedStaticRequestsRequireCanonicalRawTargets(t *testing.T) {
+	pageHandler, err := NewPageHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := &handlerCallRecorder{handler: pageHandler}
+	server := startTestServerWithErrorResponder(t, bootstrapFromValue("canonical-static-capability"), recorder, pageHandler)
+
+	rejected := []struct {
+		name   string
+		target string
+	}{
+		{name: "encoded parent segment", target: "/static/%2e%2e/templates/base.html"},
+		{name: "encoded slash after parent", target: "/static/..%2ftemplates/base.html"},
+		{name: "uppercase encoded slash after parent", target: "/static/..%2Ftemplates/base.html"},
+		{name: "encoded parent and slash", target: "/static/%2e%2e%2ftemplates/base.html"},
+		{name: "encoded backslash after parent", target: "/static/%2e%2e%5ctemplates/base.html"},
+		{name: "uppercase encoded backslash after parent", target: "/static/%2E%2E%5Ctemplates/base.html"},
+		{name: "encoded leading backslash", target: "/static/%5capp.css"},
+		{name: "encoded subtree slash", target: "/static%2fapp.css"},
+		{name: "uppercase encoded subtree slash", target: "/static%2Fapp.css"},
+		{name: "encoded asset dot", target: "/static/app%2ecss"},
+		{name: "double encoded slash", target: "/static/app%252f.css"},
+		{name: "literal parent segment", target: "/static/../templates/base.html"},
+		{name: "literal current segment", target: "/static/./app.css"},
+		{name: "cleaning changes path", target: "/static/assets/../app.css"},
+		{name: "repeated slash", target: "/static//app.css"},
+		{name: "static root", target: "/static/"},
+		{name: "encoded current directory", target: "/static/%2e/"},
+		{name: "encoded parent directory", target: "/static/%2e%2e/"},
+	}
+	for _, tt := range rejected {
+		t.Run(tt.name, func(t *testing.T) {
+			response, body := rawLoopbackRequest(t, server.bound.Port, http.MethodGet, tt.target)
+			if response.StatusCode != http.StatusUnauthorized || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") {
+				t.Fatalf("raw target status/content type = %d/%q, body category = %s; want semantic 401", response.StatusCode, response.Header.Get("Content-Type"), staticResponseBodyCategory(body))
+			}
+			if response.Header.Get("Content-Security-Policy") != contentSecurityPolicy {
+				t.Fatal("rejected raw target omitted the standard security policy")
+			}
+			if !strings.Contains(string(body), "Authorization required") {
+				t.Fatalf("rejected raw target body category = %s, want semantic authorization document", staticResponseBodyCategory(body))
+			}
+		})
+	}
+	if calls := recorder.calls.Load(); calls != 0 {
+		t.Fatalf("noncanonical static targets dispatched the application handler %d times", calls)
+	}
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run("canonical "+method, func(t *testing.T) {
+			response, body := rawLoopbackRequest(t, server.bound.Port, method, "/static/app.css")
+			if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/css") {
+				t.Fatalf("canonical stylesheet status/content type = %d/%q", response.StatusCode, response.Header.Get("Content-Type"))
+			}
+			if response.Header.Get("Content-Security-Policy") != contentSecurityPolicy {
+				t.Fatal("canonical stylesheet omitted the standard security policy")
+			}
+			if method == http.MethodGet && !strings.Contains(string(body), ":root") {
+				t.Fatal("canonical stylesheet GET omitted CSS content")
+			}
+			if method == http.MethodHead && len(body) != 0 {
+				t.Fatal("canonical stylesheet HEAD returned a response body")
+			}
+		})
+	}
+	if calls := recorder.calls.Load(); calls != 2 {
+		t.Fatalf("canonical static requests dispatched application handler %d times, want 2", calls)
+	}
+}
+
+func TestStaticFileSystemIsConfinedToTheEmbeddedStaticSubtree(t *testing.T) {
+	staticFiles, err := newStaticFileSystem()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := fs.ReadFile(staticFiles, "app.css")
+	if err != nil || !strings.Contains(string(stylesheet), ":root") {
+		t.Fatal("confined static file system omitted app.css")
+	}
+	for _, name := range []string{"../templates/base.html", "templates/base.html", "../embed.go"} {
+		if contents, err := fs.ReadFile(staticFiles, name); err == nil {
+			t.Fatalf("confined static file system exposed %q with %d bytes", name, len(contents))
+		}
+	}
+}
+
+type handlerCallRecorder struct {
+	handler http.Handler
+	calls   atomic.Int64
+}
+
+func (r *handlerCallRecorder) ServeHTTP(w http.ResponseWriter, request *http.Request) {
+	r.calls.Add(1)
+	r.handler.ServeHTTP(w, request)
+}
+
+func rawLoopbackRequest(t *testing.T, port int, method, target string) (*http.Response, []byte) {
+	t.Helper()
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	connection, err := net.Dial("tcp4", address)
+	if err != nil {
+		t.Fatal("dial raw loopback request")
+	}
+	defer connection.Close()
+	if _, err := io.WriteString(connection, method+" "+target+" HTTP/1.1\r\nHost: "+address+"\r\nConnection: close\r\n\r\n"); err != nil {
+		t.Fatal("write raw loopback request")
+	}
+	response, err := http.ReadResponse(bufio.NewReader(connection), &http.Request{Method: method})
+	if err != nil {
+		t.Fatal("read raw loopback response")
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal("read raw loopback response body")
+	}
+	return response, body
+}
+
+func staticResponseBodyCategory(body []byte) string {
+	text := string(body)
+	switch {
+	case strings.Contains(text, "{{define"):
+		return "embedded template source"
+	case strings.Contains(text, "Directory listing"):
+		return "embedded directory listing"
+	case strings.Contains(text, "<pre>") && strings.Contains(text, "href="):
+		return "embedded directory listing"
+	case strings.Contains(text, "Authorization required"):
+		return "semantic authorization document"
+	default:
+		return "other response"
 	}
 }
 

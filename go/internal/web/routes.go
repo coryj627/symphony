@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 )
@@ -42,7 +43,7 @@ func (s *Server) protectedHandler() http.Handler {
 		// Error documents use the same local stylesheet as authenticated pages.
 		// Static GET/HEAD requests carry no application state and remain bound by
 		// the loopback Host check and the standard response security headers.
-		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && strings.HasPrefix(r.URL.Path, "/static/") {
+		if isCanonicalPublicStaticRequest(r) {
 			setSecurityHeaders(w.Header())
 			s.handler.ServeHTTP(w, r)
 			return
@@ -70,6 +71,24 @@ func (s *Server) protectedHandler() http.Handler {
 		ctx := context.WithValue(r.Context(), csrfContextKey{}, session.csrf)
 		s.handler.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func isCanonicalPublicStaticRequest(request *http.Request) bool {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		return false
+	}
+	if request.URL.RawPath != "" || request.URL.EscapedPath() != request.URL.Path {
+		return false
+	}
+	const prefix = "/static/"
+	if !strings.HasPrefix(request.URL.Path, prefix) {
+		return false
+	}
+	asset := strings.TrimPrefix(request.URL.Path, prefix)
+	if asset == "" || strings.HasSuffix(asset, "/") || strings.Contains(asset, "\\") {
+		return false
+	}
+	return path.Clean(request.URL.Path) == request.URL.Path
 }
 
 func (s *Server) respondError(w http.ResponseWriter, status int, fallback string) {

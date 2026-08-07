@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"strings"
 
@@ -58,9 +59,13 @@ func NewPageHandler() (*PageHandler, error) {
 	if err != nil {
 		return nil, err
 	}
+	staticFiles, err := newStaticFileSystem()
+	if err != nil {
+		return nil, err
+	}
 	mux := http.NewServeMux()
 	handler := &PageHandler{renderer: renderer, mux: mux}
-	mux.Handle("GET /static/", http.FileServer(http.FS(webassets.Files)))
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFiles))))
 	mux.HandleFunc("GET /{$}", renderPage(renderer, "overview", func(*http.Request) Page {
 		return Page{
 			Title: "Overview — Symphony", Route: "/", Heading: "Overview", Mode: "configure",
@@ -90,6 +95,14 @@ func NewPageHandler() (*PageHandler, error) {
 	}))
 	mux.HandleFunc("/", handler.renderFallback)
 	return handler, nil
+}
+
+func newStaticFileSystem() (fs.FS, error) {
+	staticFiles, err := fs.Sub(webassets.Files, "static")
+	if err != nil {
+		return nil, fmt.Errorf("open embedded static subtree: %w", err)
+	}
+	return staticFiles, nil
 }
 
 // ServeHTTP dispatches a page/static request through the semantic page mux.
