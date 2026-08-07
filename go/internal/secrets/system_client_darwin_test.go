@@ -28,7 +28,7 @@ func TestMacOSKeyringSetUsesCompatibleEncodingWithoutSecretArguments(t *testing.
 			if strings.Contains(strings.Join(args, " "), canary) {
 				t.Fatal("credential appeared in security process arguments")
 			}
-			want := "add-generic-password -U -s service -a account -w go-keyring-base64:c2VjcmV0LWNhbmFyeQ==\n"
+			want := `add-generic-password -U -s 'service with '"'"' quote' -a 'account with '"'"' quote' -w go-keyring-base64:c2VjcmV0LWNhbmFyeQ==` + "\n"
 			if string(stdin) != want {
 				t.Fatal("security input did not use the go-keyring-compatible encoding")
 			}
@@ -37,8 +37,75 @@ func TestMacOSKeyringSetUsesCompatibleEncodingWithoutSecretArguments(t *testing.
 	}
 	client := newMacOSKeyringClient(runner)
 
-	if err := client.Set(ctx, "service", "account", canary); err != nil {
+	if err := client.Set(ctx, "service with ' quote", "account with ' quote", canary); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMacOSKeyringRejectsControlCharactersBeforeRunnerAccess(t *testing.T) {
+	const canary = "secret-canary"
+	unsafeIdentifiers := []struct {
+		name    string
+		service string
+		account string
+	}{
+		{name: "service line feed", service: "service\nhelp", account: "account"},
+		{name: "account carriage return", service: "service", account: "account\rhelp"},
+		{name: "service nul", service: "service\x00help", account: "account"},
+		{name: "account ascii control", service: "service", account: "account\x1fhelp"},
+		{name: "service del", service: "service\x7fhelp", account: "account"},
+	}
+	operations := []struct {
+		name string
+		call func(context.Context, keyringClient, string, string) error
+	}{
+		{
+			name: "set",
+			call: func(ctx context.Context, client keyringClient, service, account string) error {
+				return client.Set(ctx, service, account, canary)
+			},
+		},
+		{
+			name: "get",
+			call: func(ctx context.Context, client keyringClient, service, account string) error {
+				_, err := client.Get(ctx, service, account)
+				return err
+			},
+		},
+		{
+			name: "delete",
+			call: func(ctx context.Context, client keyringClient, service, account string) error {
+				return client.Delete(ctx, service, account)
+			},
+		},
+	}
+
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			for _, unsafeIdentifier := range unsafeIdentifiers {
+				t.Run(unsafeIdentifier.name, func(t *testing.T) {
+					accesses := 0
+					runner := &recordingSecurityRunner{
+						run: func(context.Context, []byte, string, ...string) ([]byte, error) {
+							accesses++
+							return nil, nil
+						},
+					}
+					client := newMacOSKeyringClient(runner)
+
+					err := operation.call(context.Background(), client, unsafeIdentifier.service, unsafeIdentifier.account)
+					if !errors.Is(err, errInvalidKeyringIdentifier) {
+						t.Fatalf("operation error = %v, want errInvalidKeyringIdentifier", err)
+					}
+					if strings.Contains(err.Error(), unsafeIdentifier.service) || strings.Contains(err.Error(), unsafeIdentifier.account) || strings.Contains(err.Error(), canary) {
+						t.Fatal("rejected identifier or credential appeared in the error")
+					}
+					if accesses != 0 {
+						t.Fatalf("security runner access count = %d, want 0", accesses)
+					}
+				})
+			}
+		})
 	}
 }
 

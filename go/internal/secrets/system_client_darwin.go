@@ -19,7 +19,10 @@ const (
 	maxSecurityCommandBytes  = 4096
 )
 
-var errCredentialTooLarge = errors.New("native keyring credential exceeds command limit")
+var (
+	errCredentialTooLarge       = errors.New("native keyring credential exceeds command limit")
+	errInvalidKeyringIdentifier = errors.New("native keyring identifier contains unsupported control character")
+)
 
 type securityRunner interface {
 	Run(context.Context, []byte, string, ...string) ([]byte, error)
@@ -56,6 +59,9 @@ func (c *macOSKeyringClient) Set(ctx context.Context, service, account, password
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := validateKeyringIdentifiers(service, account); err != nil {
+		return err
+	}
 
 	passwordBytes := []byte(password)
 	encodedPassword := make([]byte, len(compatibleEncodingPrefix)+base64.StdEncoding.EncodedLen(len(passwordBytes)))
@@ -84,6 +90,9 @@ func (c *macOSKeyringClient) Set(ctx context.Context, service, account, password
 
 func (c *macOSKeyringClient) Get(ctx context.Context, service, account string) (string, error) {
 	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := validateKeyringIdentifiers(service, account); err != nil {
 		return "", err
 	}
 
@@ -133,6 +142,9 @@ func (c *macOSKeyringClient) Delete(ctx context.Context, service, account string
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := validateKeyringIdentifiers(service, account); err != nil {
+		return err
+	}
 
 	output, err := c.runner.Run(ctx, nil, securityPath,
 		"delete-generic-password", "-s", service, "-a", account,
@@ -149,6 +161,17 @@ func (c *macOSKeyringClient) Delete(ctx context.Context, service, account string
 
 func keychainItemNotFound(output []byte) bool {
 	return bytes.Contains(output, []byte("could not be found"))
+}
+
+func validateKeyringIdentifiers(values ...string) error {
+	for _, value := range values {
+		for i := 0; i < len(value); i++ {
+			if value[i] < 0x20 || value[i] == 0x7f {
+				return errInvalidKeyringIdentifier
+			}
+		}
+	}
+	return nil
 }
 
 func quoteSecurityToken(value string) string {
