@@ -17,9 +17,13 @@ const (
 )
 
 var (
-	gitHubOwnerPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
-	gitHubRepoPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
-	environmentPattern = regexp.MustCompile(`^\$([A-Za-z_][A-Za-z0-9_]*)$`)
+	gitHubOwnerPattern     = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
+	gitHubRepoPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+	environmentPattern     = regexp.MustCompile(`^\$([A-Za-z_][A-Za-z0-9_]*)$`)
+	gitHubActiveDefaults   = []string{"open"}
+	gitHubTerminalDefaults = []string{"closed"}
+	linearActiveDefaults   = []string{"Todo", "In Progress"}
+	linearTerminalDefaults = []string{"Closed", "Cancelled", "Canceled", "Duplicate", "Done"}
 )
 
 type CredentialSpec struct {
@@ -35,6 +39,7 @@ type ProviderConfig interface {
 
 type GitHubConfig struct {
 	Owner, Repository, Endpoint, CredentialRef, CredentialEnv, Assignee string
+	ActiveStates, TerminalStates                                        []string
 }
 
 func (config GitHubConfig) Kind() string { return "github" }
@@ -49,6 +54,7 @@ func (config GitHubConfig) SecretEnvironmentNames() []string {
 
 type LinearConfig struct {
 	ProjectSlug, Endpoint, CredentialRef, CredentialEnv string
+	ActiveStates, TerminalStates                        []string
 }
 
 func (config LinearConfig) Kind() string { return "linear" }
@@ -108,6 +114,7 @@ func decodeGitHubConfig(raw workflow.TrackerConfig) (GitHubConfig, error) {
 	return GitHubConfig{
 		Owner: owner, Repository: repository, Endpoint: endpoint,
 		CredentialRef: credentialRef, CredentialEnv: credentialEnv, Assignee: assignee,
+		ActiveStates: profileStates(raw.ActiveStates, gitHubActiveDefaults), TerminalStates: profileStates(raw.TerminalStates, gitHubTerminalDefaults),
 	}, nil
 }
 
@@ -130,6 +137,7 @@ func decodeLinearConfig(raw workflow.TrackerConfig) (LinearConfig, error) {
 	return LinearConfig{
 		ProjectSlug: projectSlug, Endpoint: endpoint,
 		CredentialRef: credentialRef, CredentialEnv: credentialEnv,
+		ActiveStates: profileStates(raw.ActiveStates, linearActiveDefaults), TerminalStates: profileStates(raw.TerminalStates, linearTerminalDefaults),
 	}, nil
 }
 
@@ -207,6 +215,13 @@ func validateGitHubStates(active, terminal []string) error {
 		}
 	}
 	return nil
+}
+
+func profileStates(authored, defaults []string) []string {
+	if len(authored) > 0 {
+		return append([]string(nil), authored...)
+	}
+	return append([]string(nil), defaults...)
 }
 
 func secretEnvironmentNames(defaults []string, explicit string) []string {

@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -64,6 +65,98 @@ func TestDecodeLinearConfigDefaultsProfile(t *testing.T) {
 	}
 	if names := got.SecretEnvironmentNames(); len(names) != 1 || names[0] != "LINEAR_API_KEY" {
 		t.Fatalf("secret environment names = %#v", names)
+	}
+}
+
+func TestDecodeConfigMaterializesProviderStateDefaults(t *testing.T) {
+	// Break caught: returning empty state lists makes the scheduler have no
+	// eligible or terminal states when a valid profile relies on its defaults.
+	for _, test := range []struct {
+		name         string
+		raw          workflow.TrackerConfig
+		wantActive   []string
+		wantTerminal []string
+	}{
+		{
+			name: "GitHub defaults",
+			raw: workflow.TrackerConfig{Kind: "github", Provider: map[string]any{
+				"owner": "coryj627", "repository": "symphony",
+			}},
+			wantActive:   []string{"open"},
+			wantTerminal: []string{"closed"},
+		},
+		{
+			name: "Linear defaults",
+			raw: workflow.TrackerConfig{Kind: "linear", Provider: map[string]any{
+				"project_slug": "symphony",
+			}},
+			wantActive:   []string{"Todo", "In Progress"},
+			wantTerminal: []string{"Closed", "Cancelled", "Canceled", "Duplicate", "Done"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, err := DecodeConfig(test.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			active, terminal := decodedProfileStates(t, config)
+			if !reflect.DeepEqual(active, test.wantActive) || !reflect.DeepEqual(terminal, test.wantTerminal) {
+				t.Fatalf("states = active %#v terminal %#v, want active %#v terminal %#v", active, terminal, test.wantActive, test.wantTerminal)
+			}
+		})
+	}
+}
+
+func TestDecodeConfigPreservesAuthoredProviderStateOverrides(t *testing.T) {
+	// Break caught: replacing non-empty authored state lists with profile
+	// defaults prevents users from selecting their intended Linear workflow or
+	// preserving a valid GitHub state list exactly.
+	for _, test := range []struct {
+		name         string
+		raw          workflow.TrackerConfig
+		wantActive   []string
+		wantTerminal []string
+	}{
+		{
+			name: "GitHub authored states",
+			raw: workflow.TrackerConfig{Kind: "github", Provider: map[string]any{
+				"owner": "coryj627", "repository": "symphony",
+			}, ActiveStates: []string{"open", "open"}, TerminalStates: []string{"closed", "closed"}},
+			wantActive:   []string{"open", "open"},
+			wantTerminal: []string{"closed", "closed"},
+		},
+		{
+			name: "Linear authored states",
+			raw: workflow.TrackerConfig{Kind: "linear", Provider: map[string]any{
+				"project_slug": "symphony",
+			}, ActiveStates: []string{"Triage"}, TerminalStates: []string{"Archived"}},
+			wantActive:   []string{"Triage"},
+			wantTerminal: []string{"Archived"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, err := DecodeConfig(test.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			active, terminal := decodedProfileStates(t, config)
+			if !reflect.DeepEqual(active, test.wantActive) || !reflect.DeepEqual(terminal, test.wantTerminal) {
+				t.Fatalf("states = active %#v terminal %#v, want active %#v terminal %#v", active, terminal, test.wantActive, test.wantTerminal)
+			}
+		})
+	}
+}
+
+func decodedProfileStates(t *testing.T, config ProviderConfig) ([]string, []string) {
+	t.Helper()
+	switch config := config.(type) {
+	case GitHubConfig:
+		return config.ActiveStates, config.TerminalStates
+	case LinearConfig:
+		return config.ActiveStates, config.TerminalStates
+	default:
+		t.Fatalf("config type = %T, want a provider profile", config)
+		return nil, nil
 	}
 }
 
