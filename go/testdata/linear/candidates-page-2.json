@@ -1,0 +1,32 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [
+        {
+          "id": "issue-13",
+          "identifier": "LIN-13",
+          "title": "Second candidate",
+          "description": null,
+          "priority": null,
+          "state": { "name": "In Progress" },
+          "branchName": null,
+          "url": "https://linear.app/example/issue/LIN-13",
+          "assignee": null,
+          "labels": {
+            "nodes": [],
+            "pageInfo": { "hasNextPage": false }
+          },
+          "inverseRelations": {
+            "nodes": [],
+            "pageInfo": { "hasNextPage": false }
+          },
+          "project": { "id": "project-1", "slugId": "symphony" },
+          "team": { "id": "team-1" },
+          "createdAt": "2026-08-08T17:00:00Z",
+          "updatedAt": "2026-08-08T17:05:00Z"
+        }
+      ],
+      "pageInfo": { "hasNextPage": false, "endCursor": null }
+    }
+  }
+}

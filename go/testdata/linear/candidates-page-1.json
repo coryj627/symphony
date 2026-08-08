@@ -1,0 +1,41 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [
+        {
+          "id": "issue-12",
+          "identifier": "LIN-12",
+          "title": "First candidate",
+          "description": "Candidate from page one",
+          "priority": 2,
+          "state": { "name": "Todo" },
+          "branchName": "cory/lin-12",
+          "url": "https://linear.app/example/issue/LIN-12",
+          "assignee": { "id": "user-12" },
+          "labels": {
+            "nodes": [{ "name": " Symphony " }, { "name": "BUG" }],
+            "pageInfo": { "hasNextPage": false }
+          },
+          "inverseRelations": {
+            "nodes": [
+              {
+                "type": "blocks",
+                "issue": {
+                  "id": "issue-2",
+                  "identifier": "LIN-2",
+                  "state": { "name": "Done" }
+                }
+              }
+            ],
+            "pageInfo": { "hasNextPage": false }
+          },
+          "project": { "id": "project-1", "slugId": "symphony" },
+          "team": { "id": "team-1" },
+          "createdAt": "2026-08-08T12:00:00-04:00",
+          "updatedAt": "2026-08-08T16:30:00Z"
+        }
+      ],
+      "pageInfo": { "hasNextPage": true, "endCursor": "cursor-1" }
+    }
+  }
+}

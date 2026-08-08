@@ -1,0 +1,14 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [],
+      "pageInfo": { "hasNextPage": false, "endCursor": null }
+    }
+  },
+  "errors": [
+    {
+      "message": "provider diagnostic that must stay private",
+      "extensions": { "code": "INTERNAL_ERROR" }
+    }
+  ]
+}
