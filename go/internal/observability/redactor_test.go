@@ -152,6 +152,97 @@ func TestRedactorSanitizesNonHTTPWholeURLStrings(t *testing.T) {
 	}
 }
 
+func TestRedactorResanitizesURLsReconstructedByControlRemoval(t *testing.T) {
+	t.Parallel()
+
+	reconstructed := "https:\x1b[31m//alice:ordinary-password@example.test/path?access_token=short-secret#capability-fragment"
+	redactor := NewRedactor(nil, nil)
+	for _, input := range []any{
+		reconstructed,
+		"before " + reconstructed + " after",
+		map[string]any{"value": reconstructed},
+		map[string]any{reconstructed: "safe"},
+	} {
+		assertURLCredentialsAbsent(t, safeSprint(redactor.Value(input)))
+	}
+}
+
+func TestRedactorSanitizesAbsoluteMalformedAndEncodedURLs(t *testing.T) {
+	t.Parallel()
+
+	redactor := NewRedactor(nil, nil)
+	redactor.RegisterSecret([]byte("ordinary/credential"))
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "opaque absolute URL",
+			input: "custom:opaque-capability?access_token=short-secret#capability-fragment",
+		},
+		{
+			name:  "malformed credential URL",
+			input: "https://alice:ordinary-password@[::1/path?access_token=short-secret#capability-fragment",
+		},
+		{
+			name:  "encoded credential query value",
+			input: "https://example.test/docs/readme?next=ordinary%2Fcredential&safe=yes",
+		},
+		{
+			name:  "double encoded credential query value",
+			input: "https://example.test/docs/readme?next=ordinary%252Fcredential&safe=yes",
+		},
+		{
+			name:  "encoded credential path",
+			input: "https://example.test/files/ordinary%2Fcredential?safe=yes",
+		},
+		{
+			name:  "mixed case repeated sensitive values",
+			input: "https://example.test/docs/readme?AcCeSs_ToKeN=one&AcCeSs_ToKeN=two&safe=yes",
+		},
+		{
+			name:  "embedded encoded credential URL",
+			input: "before https://example.test/docs/readme?next=ordinary%2Fcredential&safe=yes after",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := safeSprint(redactor.Value(test.input))
+			assertURLCredentialsAbsent(t, got)
+			if strings.Contains(strings.ToLower(got), "ordinary%2fcredential") ||
+				strings.Contains(strings.ToLower(got), "ordinary%252fcredential") ||
+				strings.Contains(got, "ordinary/credential") {
+				t.Fatal("reversibly encoded credential survived URL sanitization")
+			}
+		})
+	}
+
+	safe := safeSprint(redactor.Value("ordinary text https://example.test/docs/readme?safe=yes remains"))
+	if !strings.Contains(safe, "/docs/readme") || !strings.Contains(safe, "safe=yes") || !strings.Contains(safe, "ordinary text") {
+		t.Fatal("non-sensitive URL path or surrounding text was not preserved")
+	}
+}
+
+func TestRedactorSanitizesEncodedTypedURLWithoutMutatingCaller(t *testing.T) {
+	t.Parallel()
+
+	typed, err := url.Parse("custom://example.test/files/ordinary%2Fcredential?next=ordinary%2Fcredential&safe=yes#capability-fragment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := typed.String()
+	redactor := NewRedactor(nil, nil)
+	redactor.RegisterSecret([]byte("ordinary/credential"))
+	got := safeSprint(redactor.Value(typed))
+	if typed.String() != before {
+		t.Fatal("typed URL caller value was mutated")
+	}
+	assertURLCredentialsAbsent(t, got)
+	if strings.Contains(strings.ToLower(got), "ordinary%2fcredential") || strings.Contains(got, "ordinary/credential") {
+		t.Fatal("typed URL retained a reversibly encoded credential")
+	}
+}
+
 func TestRedactorDoesNotRevealSecretsWhenControlsAreRemoved(t *testing.T) {
 	t.Parallel()
 
@@ -169,6 +260,33 @@ func TestRedactorRemovesRawC1ControlBytes(t *testing.T) {
 	got := redactor.Value(string([]byte{'a', 0x80, 'b'}))
 	if got != "ab" {
 		t.Fatal("raw C1 control byte was not removed")
+	}
+}
+
+func TestRedactorStripsComplete8BitC1ANSISequences(t *testing.T) {
+	t.Parallel()
+
+	redactor := NewRedactor(nil, nil)
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "raw CSI terminated", input: string([]byte{0x9b}) + "31mred", want: "red"},
+		{name: "raw CSI unterminated", input: "safe" + string([]byte{0x9b}) + "31", want: "safe"},
+		{name: "raw OSC BEL", input: string([]byte{0x9d}) + "0;window-title" + string([]byte{0x07}) + "safe", want: "safe"},
+		{name: "raw OSC ST", input: string([]byte{0x9d}) + "0;window-title" + string([]byte{0x9c}) + "safe", want: "safe"},
+		{name: "raw OSC ESC ST", input: string([]byte{0x9d}) + "0;window-title\x1b\\safe", want: "safe"},
+		{name: "raw OSC unterminated", input: "safe" + string([]byte{0x9d}) + "0;window-title", want: "safe"},
+		{name: "UTF-8 CSI", input: "\u009b31mred", want: "red"},
+		{name: "UTF-8 OSC", input: "\u009d0;window-title\u009csafe", want: "safe"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := redactor.Value(test.input); got != test.want {
+				t.Fatal("C1 ANSI sequence payload survived or safe text was removed")
+			}
+		})
 	}
 }
 
@@ -295,6 +413,17 @@ func assertNoCanaryString(t *testing.T, value, canary string) {
 	t.Helper()
 	if strings.Contains(value, canary) {
 		t.Fatal("secret canary survived sanitization")
+	}
+}
+
+func assertURLCredentialsAbsent(t *testing.T, value string) {
+	t.Helper()
+	for _, forbidden := range []string{
+		"alice", "ordinary-password", "short-secret", "capability-fragment", "opaque-capability",
+	} {
+		if strings.Contains(value, forbidden) {
+			t.Fatal("URL credential or capability survived sanitization")
+		}
 	}
 }
 

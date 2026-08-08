@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -42,6 +43,80 @@ func TestLoggerRedactsMessagesAttributesErrorsAndURLs(t *testing.T) {
 	assertNoCanary(t, record)
 	if !strings.Contains(record.Message, "failed") || !strings.Contains(toJSON(record.Fields), "[REDACTED]") {
 		t.Fatalf("safe diagnostic context missing from record")
+	}
+}
+
+func TestLoggerResanitizesReconstructedURLAcrossMessageKeyAndValue(t *testing.T) {
+	t.Parallel()
+
+	reconstructed := "https:\x1b[31m//alice:ordinary-password@example.test/path?access_token=short-secret#capability-fragment"
+	logger, store, err := NewLogger(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	logger.Info(reconstructed, reconstructed, reconstructed)
+	page, err := store.Query(context.Background(), LogQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 1 {
+		t.Fatalf("record count = %d, want 1", len(page.Records))
+	}
+	assertURLCredentialsAbsent(t, safeSprint(page.Records[0]))
+}
+
+func TestNewLoggerRejectsOversizedJSONLineButRetainsRing(t *testing.T) {
+	dataDir := t.TempDir()
+	var warnings strings.Builder
+	logger, store, err := NewLogger(Options{DataDir: dataDir, Stderr: &warnings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs := make([]any, 0, 400)
+	for index := 0; index < 200; index++ {
+		attrs = append(attrs, fmt.Sprintf("field-%03d", index), strings.Repeat("x", maxSanitizedBytes))
+	}
+	logger.Info("oversized", attrs...)
+	if !store.Degraded() {
+		t.Fatal("oversized public log record did not degrade the file sink")
+	}
+	if warnings.String() != degradationWarning+"\n" {
+		t.Fatal("oversized public log record did not emit exactly one static warning")
+	}
+	page, err := store.Query(context.Background(), LogQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 1 || page.Records[0].Message != "oversized" {
+		t.Fatal("oversized public log record was not retained in the ring")
+	}
+	active := filepath.Join(dataDir, "logs", "symphony.jsonl")
+	info, err := os.Stat(active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != 0 {
+		t.Fatal("oversized public log record partially wrote the active file")
+	}
+	if _, err := os.Stat(active + ".1"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("oversized public log record created an archive")
+	}
+
+	logger.Info("small-after-failure")
+	if warnings.String() != degradationWarning+"\n" {
+		t.Fatal("sticky degradation emitted more than one warning")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	logger.Info("after-close")
+	page, err = store.Query(context.Background(), LogQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 3 || !page.Degraded {
+		t.Fatal("ring did not survive oversized failure and close")
 	}
 }
 

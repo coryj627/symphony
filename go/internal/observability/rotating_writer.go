@@ -15,6 +15,8 @@ const (
 	defaultLogArchives   = 5
 )
 
+var errLogLineTooLarge = errors.New("log line exceeds active file size limit")
+
 type lineSink interface {
 	WriteLine([]byte) error
 	Close() error
@@ -90,7 +92,10 @@ func (w *rotatingWriter) WriteLine(line []byte) error {
 	if w.closed || w.file == nil {
 		return errors.New("rotating writer is closed")
 	}
-	if w.size > 0 && int64(len(line)) > w.maxSize-w.size {
+	if uint64(len(line)) > uint64(w.maxSize) {
+		return errLogLineTooLarge
+	}
+	if int64(len(line)) > w.maxSize-w.size {
 		if err := w.rotate(); err != nil {
 			return err
 		}
@@ -142,6 +147,10 @@ func (w *rotatingWriter) openActive() error {
 	if !openedInfo.Mode().IsRegular() {
 		_ = file.Close()
 		return errors.New("opened active log is not a regular file")
+	}
+	if openedInfo.Size() > w.maxSize {
+		_ = file.Close()
+		return errLogLineTooLarge
 	}
 	w.file = file
 	w.size = openedInfo.Size()

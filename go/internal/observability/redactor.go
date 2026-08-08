@@ -26,7 +26,7 @@ const (
 )
 
 var (
-	embeddedURLPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]{0,31}://[^\s"'<>]+`)
+	embeddedURLPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]{0,31}:[^\s"'<>]+`)
 	bearerPattern      = regexp.MustCompile(`(?i)\bBearer[ \t]+[A-Za-z0-9._~+/=-]{16,}`)
 	githubTokenPattern = regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b`)
 	openAITokenPattern = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`)
@@ -390,24 +390,79 @@ func (s *sanitizer) cleanURL(source *url.URL) string {
 	if source == nil {
 		return ""
 	}
+	value, ok := s.sanitizeParsedURL(source)
+	if !ok {
+		return s.snapshot.redactedMarker
+	}
+	value = s.redactCredentialText(value)
+	value = stripANSIAndControls(value)
+	value = strings.ToValidUTF8(value, "�")
+	value = s.redactCredentialText(value)
+	return truncateUTF8(value, s.snapshot.truncationMarker)
+}
+
+func (s *sanitizer) sanitizeParsedURL(source *url.URL) (string, bool) {
 	copyURL := *source
 	copyURL.User = nil
 	copyURL.Fragment = ""
+	copyURL.RawFragment = ""
 	if copyURL.Opaque != "" {
 		copyURL.Opaque = s.snapshot.redactedMarker
 	}
-	query := copyURL.Query()
-	for key := range query {
-		if sensitiveURLKey(key) {
-			query[key] = []string{s.snapshot.redactedMarker}
-		}
+
+	if s.credentialInURLValue(copyURL.Host, false) {
+		return s.snapshot.redactedMarker, true
 	}
-	copyURL.RawQuery = query.Encode()
-	return s.cleanStringNoURLs(copyURL.String())
+	copyURL.Host = s.cleanURLComponent(copyURL.Host)
+	copyURL.Scheme = s.cleanURLComponent(copyURL.Scheme)
+	copyURL.Path = s.cleanURLPath(copyURL.Path)
+	copyURL.RawPath = ""
+
+	if copyURL.RawQuery != "" {
+		query, err := url.ParseQuery(copyURL.RawQuery)
+		if err != nil {
+			return "", false
+		}
+		cleanQuery := make(url.Values, len(query))
+		for key, values := range query {
+			cleanKey := s.cleanURLComponent(key)
+			if sensitiveURLKey(key) || sensitiveURLKey(cleanKey) {
+				count := max(1, len(values))
+				cleanQuery[cleanKey] = make([]string, count)
+				for index := range cleanQuery[cleanKey] {
+					cleanQuery[cleanKey][index] = s.snapshot.redactedMarker
+				}
+				continue
+			}
+			cleanValues := make([]string, 0, len(values))
+			for _, value := range values {
+				if s.credentialInURLValue(value, true) {
+					cleanValues = append(cleanValues, s.snapshot.redactedMarker)
+				} else {
+					cleanValues = append(cleanValues, s.cleanURLComponent(value))
+				}
+			}
+			cleanQuery[cleanKey] = cleanValues
+		}
+		copyURL.RawQuery = cleanQuery.Encode()
+	}
+	return copyURL.String(), true
 }
 
 func (s *sanitizer) cleanString(value string) string {
-	value = embeddedURLPattern.ReplaceAllStringFunc(value, func(candidate string) string {
+	// Redact known credentials before any transformation, then repeat URL and
+	// credential sanitization after control removal so repair is monotonic.
+	value = s.redactCredentialText(value)
+	value = stripANSIAndControls(value)
+	value = strings.ToValidUTF8(value, "�")
+	value = s.redactCredentialText(value)
+	value = s.sanitizeURLText(value)
+	value = s.redactCredentialText(value)
+	return truncateUTF8(value, s.snapshot.truncationMarker)
+}
+
+func (s *sanitizer) sanitizeURLText(value string) string {
+	return embeddedURLPattern.ReplaceAllStringFunc(value, func(candidate string) string {
 		trailing := ""
 		for len(candidate) > 0 {
 			last := candidate[len(candidate)-1]
@@ -418,22 +473,94 @@ func (s *sanitizer) cleanString(value string) string {
 			candidate = candidate[:len(candidate)-1]
 		}
 		parsed, err := url.Parse(candidate)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		if err != nil || parsed.Scheme == "" {
+			if s.riskyURLCandidate(candidate) {
+				return s.snapshot.redactedMarker + trailing
+			}
 			return candidate + trailing
 		}
-		return s.cleanURL(parsed) + trailing
+		if strings.Contains(candidate, "://") && parsed.Host == "" {
+			if s.riskyURLCandidate(candidate) {
+				return s.snapshot.redactedMarker + trailing
+			}
+			return candidate + trailing
+		}
+		if !strings.Contains(candidate, "://") && !s.riskyURLCandidate(candidate) {
+			return candidate + trailing
+		}
+		cleaned, ok := s.sanitizeParsedURL(parsed)
+		if !ok {
+			if s.riskyURLCandidate(candidate) {
+				return s.snapshot.redactedMarker + trailing
+			}
+			return candidate + trailing
+		}
+		return cleaned + trailing
 	})
-	return s.cleanStringNoURLs(value)
 }
 
-func (s *sanitizer) cleanStringNoURLs(value string) string {
+func (s *sanitizer) cleanURLComponent(value string) string {
 	value = s.redactCredentialText(value)
 	value = stripANSIAndControls(value)
 	value = strings.ToValidUTF8(value, "�")
-	// Removing controls can join credential fragments. Redact a second time so
-	// sanitization itself can never reconstruct a secret.
-	value = s.redactCredentialText(value)
-	return truncateUTF8(value, s.snapshot.truncationMarker)
+	return s.redactCredentialText(value)
+}
+
+func (s *sanitizer) cleanURLPath(value string) string {
+	current := value
+	for attempts := 0; attempts < 4; attempts++ {
+		redacted := s.redactCredentialText(current)
+		if redacted != current {
+			return s.cleanURLComponent(redacted)
+		}
+		next, err := url.PathUnescape(current)
+		if err != nil || next == current {
+			break
+		}
+		current = next
+	}
+	return s.cleanURLComponent(value)
+}
+
+func (s *sanitizer) credentialInURLValue(value string, query bool) bool {
+	current := value
+	for attempts := 0; attempts < 4; attempts++ {
+		if s.redactCredentialText(current) != current {
+			return true
+		}
+		var (
+			next string
+			err  error
+		)
+		if query {
+			next, err = url.QueryUnescape(current)
+		} else {
+			next, err = url.PathUnescape(current)
+		}
+		if err != nil {
+			return true
+		}
+		if next == current {
+			return false
+		}
+		current = next
+	}
+	return s.redactCredentialText(current) != current
+}
+
+func (s *sanitizer) riskyURLCandidate(candidate string) bool {
+	if strings.ContainsAny(candidate, "@?#%") || s.credentialInURLValue(candidate, false) {
+		return true
+	}
+	lower := strings.ToLower(candidate)
+	for _, fragment := range []string{
+		"token", "secret", "password", "passwd", "authorization", "session", "cookie", "csrf", "capability",
+	} {
+		if strings.Contains(lower, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *sanitizer) redactCredentialText(value string) string {
@@ -586,36 +713,36 @@ func stripANSIAndControls(value string) string {
 	builder.Grow(len(value))
 	for index := 0; index < len(value); {
 		if value[index] == 0x1b {
-			index++
-			if index >= len(value) {
+			if index+1 >= len(value) {
 				break
 			}
-			switch value[index] {
+			switch value[index+1] {
 			case '[':
-				index++
-				for index < len(value) {
-					current := value[index]
-					index++
-					if current >= 0x40 && current <= 0x7e {
-						break
-					}
-				}
+				index = skipANSISequenceCSI(value, index+2)
 				continue
 			case ']':
-				index++
-				for index < len(value) {
-					if value[index] == 0x07 {
-						index++
-						break
-					}
-					if value[index] == 0x1b && index+1 < len(value) && value[index+1] == '\\' {
-						index += 2
-						break
-					}
-					index++
-				}
+				index = skipANSISequenceOSC(value, index+2)
 				continue
 			default:
+				index++
+				continue
+			}
+		}
+		if value[index] == 0x9b {
+			index = skipANSISequenceCSI(value, index+1)
+			continue
+		}
+		if value[index] == 0x9d {
+			index = skipANSISequenceOSC(value, index+1)
+			continue
+		}
+		if value[index] == 0xc2 && index+1 < len(value) {
+			switch value[index+1] {
+			case 0x9b:
+				index = skipANSISequenceCSI(value, index+2)
+				continue
+			case 0x9d:
+				index = skipANSISequenceOSC(value, index+2)
 				continue
 			}
 		}
@@ -640,6 +767,33 @@ func stripANSIAndControls(value string) string {
 		builder.WriteRune(runeValue)
 	}
 	return builder.String()
+}
+
+func skipANSISequenceCSI(value string, index int) int {
+	for index < len(value) {
+		current := value[index]
+		index++
+		if current >= 0x40 && current <= 0x7e {
+			return index
+		}
+	}
+	return len(value)
+}
+
+func skipANSISequenceOSC(value string, index int) int {
+	for index < len(value) {
+		switch {
+		case value[index] == 0x07 || value[index] == 0x9c:
+			return index + 1
+		case value[index] == 0xc2 && index+1 < len(value) && value[index+1] == 0x9c:
+			return index + 2
+		case value[index] == 0x1b && index+1 < len(value) && value[index+1] == '\\':
+			return index + 2
+		default:
+			index++
+		}
+	}
+	return len(value)
 }
 
 func truncateUTF8(value, marker string) string {

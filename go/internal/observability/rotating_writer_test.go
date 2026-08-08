@@ -38,6 +38,49 @@ func TestRotatingWriterKeepsExactBoundaryActive(t *testing.T) {
 	assertFileContents(t, path, "x")
 }
 
+func TestRotatingWriterRejectsOversizedCompleteLinesWithoutMutation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("oversized first line", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "symphony.jsonl")
+		writer, err := newRotatingWriter(path, 10, 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.WriteLine([]byte("12345678901")); !errors.Is(err, errLogLineTooLarge) {
+			t.Fatal("limit+1 first line did not return the deterministic size error")
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		assertFileContents(t, path, "")
+		if _, err := os.Stat(path + ".1"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("oversized first line created an archive")
+		}
+	})
+
+	t.Run("oversized line after content", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "symphony.jsonl")
+		writer, err := newRotatingWriter(path, 10, 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.WriteLine([]byte("safe")); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.WriteLine([]byte("12345678901")); !errors.Is(err, errLogLineTooLarge) {
+			t.Fatal("limit+1 line after content did not return the deterministic size error")
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		assertFileContents(t, path, "safe")
+		if _, err := os.Stat(path + ".1"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("rejected oversized line rotated existing content")
+		}
+	})
+}
+
 func TestRotatingWriterKeepsExactTenMiBBoundaryActive(t *testing.T) {
 	t.Parallel()
 
