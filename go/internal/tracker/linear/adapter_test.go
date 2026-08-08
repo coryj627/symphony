@@ -65,6 +65,7 @@ func TestFetchIssuesByStatesFollowsCursorAndLocksEveryScopeVariable(t *testing.T
 	if len(requests) != 2 {
 		t.Fatalf("requests = %d, want 2", len(requests))
 	}
+	wantFirst := []string{"40", "10"}
 	for index, request := range requests {
 		if request.Method != http.MethodPost {
 			t.Fatalf("request %d method = %s", index, request.Method)
@@ -77,7 +78,7 @@ func TestFetchIssuesByStatesFollowsCursorAndLocksEveryScopeVariable(t *testing.T
 		if !reflect.DeepEqual(keys, []string{"query", "variables"}) {
 			t.Fatalf("request keys = %#v", keys)
 		}
-		assertJSONNumber(t, request.Variables["first"], "50")
+		assertJSONNumber(t, request.Variables["first"], wantFirst[index])
 		assertJSONNumber(t, request.Variables["relationFirst"], "50")
 		if request.Variables["projectSlug"] != "symphony" {
 			t.Fatalf("request %d projectSlug = %#v", index, request.Variables["projectSlug"])
@@ -165,20 +166,21 @@ func TestFetchIssuesByStatesOmitsOutOfScopeUnexpectedStateAndTruncatedLabels(t *
 }
 
 func TestFetchIssuesByIDsBatchesFiftyDeduplicatesAndPreservesFirstSeenInputs(t *testing.T) {
-	// Break caught: an oversized ID query or unstable dedup order violates the
-	// documented Linear request limit and can refresh the wrong active set.
+	// Break caught: changing the logical 50-ID contract while splitting provider
+	// requests can lose, reorder, or duplicate active issue refreshes.
 	ids := make([]string, 0, 53)
-	firstNodes := make([]map[string]any, 0, 50)
+	logicalNodes := make([]map[string]any, 0, 50)
 	for number := 1; number <= 50; number++ {
 		identifier := "LIN-" + jsonNumber(number)
 		ids = append(ids, "issue-"+jsonNumber(number))
-		firstNodes = append(firstNodes, fixtureIssue(identifier, "In Progress", nil))
+		logicalNodes = append(logicalNodes, fixtureIssue(identifier, "In Progress", nil))
 	}
 	ids = append(ids, "issue-1", "issue-51")
-	secondNode := fixtureIssue("LIN-51", "Done", nil)
+	lastNode := fixtureIssue("LIN-51", "Done", nil)
 	server := linearFixtureServer(t,
-		fixtureResponse{Body: graphQLPage(firstNodes, false, nil)},
-		fixtureResponse{Body: graphQLPage([]map[string]any{secondNode}, false, nil)},
+		fixtureResponse{Body: graphQLPage(logicalNodes[:40], false, nil)},
+		fixtureResponse{Body: graphQLPage(logicalNodes[40:], false, nil)},
+		fixtureResponse{Body: graphQLPage([]map[string]any{lastNode}, false, nil)},
 	)
 	got, err := newLinearAdapter(t, server).FetchIssuesByIDs(context.Background(), ids)
 	if err != nil {
@@ -188,7 +190,7 @@ func TestFetchIssuesByIDsBatchesFiftyDeduplicatesAndPreservesFirstSeenInputs(t *
 		t.Fatalf("issues = %d, want 51", len(got))
 	}
 	requests := server.Requests()
-	if len(requests) != 2 {
+	if len(requests) != 3 {
 		t.Fatalf("requests = %d", len(requests))
 	}
 	for index, request := range requests {
@@ -200,15 +202,51 @@ func TestFetchIssuesByIDsBatchesFiftyDeduplicatesAndPreservesFirstSeenInputs(t *
 		}
 		assertJSONNumber(t, request.Variables["relationFirst"], "50")
 	}
-	assertJSONNumber(t, requests[0].Variables["first"], "50")
-	assertJSONNumber(t, requests[1].Variables["first"], "1")
+	assertJSONNumber(t, requests[0].Variables["first"], "40")
+	assertJSONNumber(t, requests[1].Variables["first"], "10")
+	assertJSONNumber(t, requests[2].Variables["first"], "1")
 	firstIDs := requests[0].Variables["ids"].([]any)
-	if len(firstIDs) != 50 || firstIDs[0] != "issue-1" || firstIDs[49] != "issue-50" {
+	if len(firstIDs) != 40 || firstIDs[0] != "issue-1" || firstIDs[39] != "issue-40" {
 		t.Fatalf("first batch IDs = %#v", firstIDs)
 	}
-	if !reflect.DeepEqual(requests[1].Variables["ids"], []any{"issue-51"}) {
+	secondIDs := requests[1].Variables["ids"].([]any)
+	if len(secondIDs) != 10 || secondIDs[0] != "issue-41" || secondIDs[9] != "issue-50" {
 		t.Fatalf("second batch IDs = %#v", requests[1].Variables["ids"])
 	}
+	if !reflect.DeepEqual(requests[2].Variables["ids"], []any{"issue-51"}) {
+		t.Fatalf("third batch IDs = %#v", requests[2].Variables["ids"])
+	}
+	for _, boundary := range []struct {
+		index int
+		want  string
+	}{
+		{index: 0, want: "LIN-1"},
+		{index: 39, want: "LIN-40"},
+		{index: 40, want: "LIN-41"},
+		{index: 49, want: "LIN-50"},
+		{index: 50, want: "LIN-51"},
+	} {
+		if got[boundary.index].Identifier != boundary.want {
+			t.Fatalf("issue %d = %q, want %q", boundary.index, got[boundary.index].Identifier, boundary.want)
+		}
+	}
+}
+
+func TestFetchIssuesByIDsRejectsIssueFromDifferentInternalRequest(t *testing.T) {
+	// Break caught: accepting a response ID from another subrequest weakens the
+	// exact ID filter after a logical 50-ID batch is split for complexity.
+	ids := make([]string, 50)
+	for index := range ids {
+		ids[index] = "issue-" + jsonNumber(index+1)
+	}
+	server := linearFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{
+		fixtureIssue("LIN-41", "In Progress", nil),
+	}, false, nil)})
+	got, err := newLinearAdapter(t, server).FetchIssuesByIDs(context.Background(), ids)
+	if got == nil || len(got) != 0 {
+		t.Fatalf("partial result = %#v", got)
+	}
+	requireTrackerError(t, err, tracker.CategoryPayload)
 }
 
 func TestFetchIssuesByIDsOmitsMissingAndOutOfProjectRequestedIDs(t *testing.T) {
@@ -268,17 +306,18 @@ func TestFetchIssuesByIDsRejectsBlankOpaqueIDWithoutRequest(t *testing.T) {
 func TestFetchIssuesByIDsFailsAtomicallyOnLateMalformedBatch(t *testing.T) {
 	// Break caught: publishing the first successful batch after a later batch
 	// fails makes missing active issues look invisible to reconciliation.
-	firstNodes := make([]map[string]any, 50)
+	logicalNodes := make([]map[string]any, 50)
 	ids := make([]string, 51)
 	for number := 1; number <= 50; number++ {
-		firstNodes[number-1] = fixtureIssue("LIN-"+jsonNumber(number), "In Progress", nil)
+		logicalNodes[number-1] = fixtureIssue("LIN-"+jsonNumber(number), "In Progress", nil)
 		ids[number-1] = "issue-" + jsonNumber(number)
 	}
 	ids[50] = "issue-51"
 	bad := fixtureIssue("LIN-51", "In Progress", nil)
 	bad["title"] = nil
 	server := linearFixtureServer(t,
-		fixtureResponse{Body: graphQLPage(firstNodes, false, nil)},
+		fixtureResponse{Body: graphQLPage(logicalNodes[:40], false, nil)},
+		fixtureResponse{Body: graphQLPage(logicalNodes[40:], false, nil)},
 		fixtureResponse{Body: graphQLPage([]map[string]any{bad}, false, nil)},
 	)
 	got, err := newLinearAdapter(t, server).FetchIssuesByIDs(context.Background(), ids)

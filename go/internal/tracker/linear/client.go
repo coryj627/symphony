@@ -177,14 +177,30 @@ func decodeIssuePage(raw json.RawMessage) (issuePage, bool) {
 		return issuePage{}, false
 	}
 	var pageInfo rawPageInfo
-	if !decodeOneJSON(connection.PageInfo, &pageInfo) || len(pageInfo.EndCursor) == 0 {
+	if !decodeOneJSON(connection.PageInfo, &pageInfo) {
 		return issuePage{}, false
 	}
 	var hasNext bool
 	if !decodeOneJSON(pageInfo.HasNextPage, &hasNext) {
 		return issuePage{}, false
 	}
-	return issuePage{nodes: nodes, hasNextPage: hasNext, endCursor: optionalString(pageInfo.EndCursor)}, true
+	endCursor, ok := decodeEndCursor(pageInfo.EndCursor)
+	if !ok {
+		return issuePage{}, false
+	}
+	return issuePage{nodes: nodes, hasNextPage: hasNext, endCursor: endCursor}, true
+}
+
+func decodeEndCursor(raw json.RawMessage) (*string, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, true
+	}
+	var cursor string
+	if !decodeOneJSON(raw, &cursor) {
+		return nil, false
+	}
+	return stringPointer(cursor), true
 }
 
 func graphQLError(records []graphQLErrorRecord, status int, header http.Header, now time.Time) error {
