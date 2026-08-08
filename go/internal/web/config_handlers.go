@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -429,6 +430,10 @@ func structuredCommand(form url.Values) (app.ConfigValues, *workflow.StructuredP
 	if values.TrackerKind != "github" && values.TrackerKind != "linear" {
 		fieldErrors = append(fieldErrors, workflow.FieldError{Field: "tracker.kind", Code: "invalid_tracker_config", Message: "Choose GitHub or Linear."})
 	}
+	approvalPolicy, err := parseApprovalPolicy(values.CodexApprovalPolicy)
+	if err != nil {
+		fieldErrors = append(fieldErrors, workflow.FieldError{Field: "codex.approval_policy", Code: "invalid_json", Message: "Enter a policy name or a valid JSON value."})
+	}
 	patch := &workflow.StructuredPatch{
 		TrackerKind:           &values.TrackerKind,
 		TrackerRequiredLabels: listPointer(values.RequiredLabels), TrackerActiveStates: listPointer(values.ActiveStates), TrackerTerminalStates: listPointer(values.TerminalStates),
@@ -436,7 +441,7 @@ func structuredCommand(form url.Values) (app.ConfigValues, *workflow.StructuredP
 		HookAfterCreate: &values.HookAfterCreate, HookBeforeRun: &values.HookBeforeRun, HookAfterRun: &values.HookAfterRun, HookBeforeRemove: &values.HookBeforeRemove,
 		HookTimeoutMS: parseInt("hooks.timeout_ms", values.HookTimeoutMS), AgentMaxConcurrent: parseInt("agent.max_concurrent_agents", values.AgentMaxConcurrent),
 		AgentMaxTurns: parseInt("agent.max_turns", values.AgentMaxTurns), AgentMaxRetryBackoffMS: parseInt("agent.max_retry_backoff_ms", values.AgentMaxRetryBackoffMS),
-		CodexCommand: &values.CodexCommand, CodexApprovalPolicy: &values.CodexApprovalPolicy, CodexThreadSandbox: &values.CodexThreadSandbox,
+		CodexCommand: &values.CodexCommand, CodexApprovalPolicy: approvalPolicy, CodexThreadSandbox: &values.CodexThreadSandbox,
 		CodexTurnTimeoutMS: parseInt("codex.turn_timeout_ms", values.CodexTurnTimeoutMS), CodexReadTimeoutMS: parseInt("codex.read_timeout_ms", values.CodexReadTimeoutMS),
 		CodexStallTimeoutMS: parseInt("codex.stall_timeout_ms", values.CodexStallTimeoutMS), ServerPort: parseInt("server.port", values.ServerPort),
 		ServerOperatorResponseTimeoutMS: parseInt("server.operator_response_timeout_ms", values.ServerOperatorResponseTimeoutMS),
@@ -449,6 +454,77 @@ func structuredCommand(form url.Values) (app.ConfigValues, *workflow.StructuredP
 		patch.ProviderCredentialRef = &values.CredentialRef
 	}
 	return values, patch, fieldErrors
+}
+
+func parseApprovalPolicy(input string) (*any, error) {
+	trimmed := strings.TrimSpace(input)
+	if json.Valid([]byte(trimmed)) {
+		decoder := json.NewDecoder(strings.NewReader(trimmed))
+		decoder.UseNumber()
+		var decoded any
+		if err := decoder.Decode(&decoded); err != nil {
+			return nil, err
+		}
+		normalized, err := normalizeJSONValue(decoded)
+		if err != nil {
+			return nil, err
+		}
+		return &normalized, nil
+	}
+	if looksLikeJSON(trimmed) {
+		return nil, errors.New("invalid_json_value")
+	}
+	value := any(input)
+	return &value, nil
+}
+
+func looksLikeJSON(value string) bool {
+	if value == "" {
+		return false
+	}
+	switch value[0] {
+	case '{', '[', '"', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeJSONValue(value any) (any, error) {
+	switch value := value.(type) {
+	case json.Number:
+		if strings.ContainsAny(value.String(), ".eE") {
+			return strconv.ParseFloat(value.String(), 64)
+		}
+		if integer, err := strconv.Atoi(value.String()); err == nil {
+			return integer, nil
+		}
+		unsigned, err := strconv.ParseUint(value.String(), 10, 64)
+		if err != nil {
+			return nil, errors.New("json_integer_out_of_range")
+		}
+		return unsigned, nil
+	case []any:
+		for index, item := range value {
+			normalized, err := normalizeJSONValue(item)
+			if err != nil {
+				return nil, err
+			}
+			value[index] = normalized
+		}
+		return value, nil
+	case map[string]any:
+		for key, item := range value {
+			normalized, err := normalizeJSONValue(item)
+			if err != nil {
+				return nil, err
+			}
+			value[key] = normalized
+		}
+		return value, nil
+	default:
+		return value, nil
+	}
 }
 
 func listPointer(value string) *[]string {

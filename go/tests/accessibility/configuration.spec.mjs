@@ -11,6 +11,11 @@ import {
   environmentManagedWorkflow,
 } from './fixtures.mjs';
 
+const storedCredentialLabel = {
+  darwin: 'Stored in macOS Keychain',
+  win32: 'Stored in Windows Credential Manager',
+}[process.platform];
+
 async function expectNoAxeViolations(page) {
   const results = await new AxeBuilder({page})
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
@@ -115,7 +120,7 @@ test('credential success announces once, restores focus, and leaves no canary ar
   await expect(page.getByRole('status')).toHaveCount(1);
   await expect(page.getByRole('status')).toHaveText('Credential stored.');
   await expect(page.getByRole('button', {name: 'Replace credential'})).toBeFocused();
-  await expect(page.getByText('Current state:')).toContainText('Stored in macOS Keychain');
+  await expect(page.getByText('Current state:')).toContainText(storedCredentialLabel);
   expect(await page.content()).not.toContain(canary);
   await expectNoAxeViolations(page);
 

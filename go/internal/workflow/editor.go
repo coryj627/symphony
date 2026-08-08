@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -74,7 +75,7 @@ type StructuredPatch struct {
 	AgentMaxRetryBackoffMS *int
 
 	CodexCommand        *string
-	CodexApprovalPolicy *string
+	CodexApprovalPolicy *any
 	CodexThreadSandbox  *string
 	CodexTurnTimeoutMS  *int
 	CodexReadTimeoutMS  *int
@@ -210,7 +211,9 @@ func patchStructuredSource(path string, source []byte, patch *StructuredPatch) (
 	setIntPointer(root, []string{"agent", "max_turns"}, patch.AgentMaxTurns)
 	setIntPointer(root, []string{"agent", "max_retry_backoff_ms"}, patch.AgentMaxRetryBackoffMS)
 	setStringPointer(root, []string{"codex", "command"}, patch.CodexCommand)
-	setStringPointer(root, []string{"codex", "approval_policy"}, patch.CodexApprovalPolicy)
+	if err := setAnyPointer(root, []string{"codex", "approval_policy"}, patch.CodexApprovalPolicy); err != nil {
+		return nil, err
+	}
 	setStringPointer(root, []string{"codex", "thread_sandbox"}, patch.CodexThreadSandbox)
 	setIntPointer(root, []string{"codex", "turn_timeout_ms"}, patch.CodexTurnTimeoutMS)
 	setIntPointer(root, []string{"codex", "read_timeout_ms"}, patch.CodexReadTimeoutMS)
@@ -394,6 +397,52 @@ func setStringSlicePointer(root *yaml.Node, path []string, value *[]string) {
 			detachDroppedAnchors(root, child)
 		}
 	}
+}
+
+func setAnyPointer(root *yaml.Node, path []string, value *any) error {
+	if value == nil {
+		return nil
+	}
+	if current := existingMappingPath(root, path); current != nil {
+		var decoded any
+		if err := current.Decode(&decoded); err == nil && reflect.DeepEqual(decoded, *value) {
+			return nil
+		}
+	}
+
+	node := mappingPath(root, path)
+	prepareEditableNode(root, node)
+	originalKind, originalTag, originalStyle := node.Kind, node.Tag, node.Style
+	head, line, foot := node.HeadComment, node.LineComment, node.FootComment
+	var replacement yaml.Node
+	if err := replacement.Encode(*value); err != nil {
+		return fmt.Errorf("encode structured value: %w", err)
+	}
+	if replacement.Kind == yaml.DocumentNode && len(replacement.Content) == 1 {
+		replacement = *replacement.Content[0]
+	}
+	if originalKind == replacement.Kind {
+		replacement.Style = originalStyle
+	}
+	if originalTag != "" && !strings.HasPrefix(originalTag, "!!") {
+		replacement.Tag = originalTag
+	}
+	replacement.HeadComment = head
+	replacement.LineComment = line
+	replacement.FootComment = foot
+	*node = replacement
+	return nil
+}
+
+func existingMappingPath(root *yaml.Node, path []string) *yaml.Node {
+	current := root
+	for _, key := range path {
+		current = mergedMappingValue(current, key, map[*yaml.Node]bool{})
+		if current == nil {
+			return nil
+		}
+	}
+	return current
 }
 
 func detachDroppedAnchors(root, node *yaml.Node) {

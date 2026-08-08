@@ -157,6 +157,83 @@ func TestStructuredSaveMapsKnownFieldsPreservesUnknownAndUsesPRG(t *testing.T) {
 	}
 }
 
+func TestStructuredSavePreservesNonScalarApprovalPolicyOnUnrelatedEdit(t *testing.T) {
+	t.Parallel()
+	source := strings.Replace(validGitHubSource, "server:\n", "codex:\n  approval_policy: &approval # keep policy comment\n    mode: ask\n    future: true\napproval_consumer: *approval\nserver:\n", 1)
+	server, path, _ := configuredHTTPApp(t, source, secrets.Status{})
+	cookie := exchange(t, server)
+	csrf := csrfForCookie(t, server, cookie)
+	response := postForm(t, server, cookie, "/api/v1/config/save", completeStructuredForm(csrf, digestOf(source), map[string]string{
+		"provider_repository":   "symphony-next",
+		"codex_approval_policy": `{"future":true,"mode":"ask"}`,
+	}))
+	if response.StatusCode != http.StatusSeeOther {
+		t.Fatalf("structured save = %d, body %s", response.StatusCode, readResponse(t, response))
+	}
+	got := mustReadFile(t, path)
+	for _, retained := range []string{"approval_policy: &approval", "# keep policy comment", "mode: ask", "future: true", "approval_consumer: *approval"} {
+		assertContains(t, got, retained)
+	}
+	definition, err := workflow.Parse(path, []byte(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := workflow.Resolve(path, definition, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, ok := config.Codex.ApprovalPolicy.(map[string]any)
+	if !ok || policy["mode"] != "ask" || policy["future"] != true {
+		t.Fatalf("approval policy = %#v", config.Codex.ApprovalPolicy)
+	}
+}
+
+func TestStructuredSaveAppliesTypedApprovalPolicyWithoutStringCoercion(t *testing.T) {
+	t.Parallel()
+	server, path, _ := configuredHTTPApp(t, validGitHubSource, secrets.Status{})
+	cookie := exchange(t, server)
+	csrf := csrfForCookie(t, server, cookie)
+	response := postForm(t, server, cookie, "/api/v1/config/save", completeStructuredForm(csrf, digestOf(validGitHubSource), map[string]string{
+		"codex_approval_policy": `{"future":true,"mode":"never"}`,
+	}))
+	if response.StatusCode != http.StatusSeeOther {
+		t.Fatalf("structured save = %d, body %s", response.StatusCode, readResponse(t, response))
+	}
+	got := mustReadFile(t, path)
+	definition, err := workflow.Parse(path, []byte(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := workflow.Resolve(path, definition, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, ok := config.Codex.ApprovalPolicy.(map[string]any)
+	if !ok || policy["mode"] != "never" || policy["future"] != true {
+		t.Fatalf("approval policy = %#v in source %s", config.Codex.ApprovalPolicy, got)
+	}
+}
+
+func TestStructuredSaveRejectsMalformedApprovalPolicyInput(t *testing.T) {
+	t.Parallel()
+	server, path, _ := configuredHTTPApp(t, validGitHubSource, secrets.Status{})
+	cookie := exchange(t, server)
+	csrf := csrfForCookie(t, server, cookie)
+	response := postForm(t, server, cookie, "/api/v1/config/save", completeStructuredForm(csrf, digestOf(validGitHubSource), map[string]string{
+		"codex_approval_policy": `{"mode":`,
+	}))
+	body := readResponse(t, response)
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("malformed approval policy = %d, body %s", response.StatusCode, body)
+	}
+	assertContains(t, body, `href="#codex-approval-policy"`)
+	assertContains(t, body, `id="codex-approval-policy" name="codex_approval_policy" type="text" value="{&#34;mode&#34;:"`)
+	assertContains(t, body, `aria-invalid="true"`)
+	if got := mustReadFile(t, path); got != validGitHubSource {
+		t.Fatal("malformed approval policy mutated workflow")
+	}
+}
+
 func TestRawSavePreservesExactBytesAndUsesPRG(t *testing.T) {
 	t.Parallel()
 	server, path, _ := configuredHTTPApp(t, validGitHubSource, secrets.Status{})
@@ -371,6 +448,8 @@ func TestCredentialDeleteFailureKeepsLinkedSummaryInsideConfirmation(t *testing.
 	assertContains(t, body, `href="#credential-delete-confirm"`)
 	assertContains(t, body, `data-focus-target="error-summary"`)
 	assertContains(t, body, `id="credential-delete-cancel" href="/configuration#delete-credential"`)
+	assertContains(t, body, `id="credential-delete-confirm-error"`)
+	assertContains(t, body, `id="credential-delete-confirm" type="submit" form="credential-form" formaction="/api/v1/config/credential/delete" name="confirm_delete" value="Delete credential" aria-invalid="true" aria-describedby="credential-delete-confirm-error"`)
 	if strings.Contains(body, "delete canary") {
 		t.Fatal("delete cause leaked into response")
 	}

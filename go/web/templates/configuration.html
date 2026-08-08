@@ -101,7 +101,7 @@
     <input id="codex-command" name="codex_command" type="text" value="{{.Content.Values.CodexCommand}}" aria-describedby="codex-command-description{{with index .Content.Errors "codex-command"}} codex-command-error{{end}}"{{with index .Content.Errors "codex-command"}} aria-invalid="true"{{end}}>
     {{with index .Content.Errors "codex-command"}}<p class="field-error" id="codex-command-error">{{.}}</p>{{end}}
     <label for="codex-approval-policy">Approval policy</label>
-    <p id="codex-approval-policy-description">Codex approval-policy name. Review repository policy before changing it.</p>
+    <p id="codex-approval-policy-description">Codex approval-policy name or JSON value. Review repository policy before changing it.</p>
     <input id="codex-approval-policy" name="codex_approval_policy" type="text" value="{{.Content.Values.CodexApprovalPolicy}}" aria-describedby="codex-approval-policy-description{{with index .Content.Errors "codex-approval-policy"}} codex-approval-policy-error{{end}}"{{with index .Content.Errors "codex-approval-policy"}} aria-invalid="true"{{end}}>
     {{with index .Content.Errors "codex-approval-policy"}}<p class="field-error" id="codex-approval-policy-error">{{.}}</p>{{end}}
     <label for="codex-thread-sandbox">Thread sandbox</label>
@@ -169,10 +169,10 @@
   <h2 id="credential-delete-title">Delete credential?</h2>
   <p id="credential-delete-description">Delete the stored credential for the selected tracker? Symphony will not display or ask you to transcribe the secret.</p>
   {{if .ErrorSummaryInDialog}}{{template "error-summary" .}}{{end}}
-  {{with index .Content.Errors "delete-credential"}}<p class="field-error" id="delete-credential-error">{{.}}</p>{{end}}
+  {{with index .Content.Errors "credential-delete-confirm"}}<p class="field-error" id="credential-delete-confirm-error">{{.}}</p>{{end}}
   <div class="button-row">
     <a class="button-link" id="credential-delete-cancel" href="/configuration#delete-credential" tabindex="0">Cancel</a>
-    <button id="credential-delete-confirm" type="submit" form="credential-form" formaction="/api/v1/config/credential/delete" name="confirm_delete" value="Delete credential">Delete credential</button>
+    <button id="credential-delete-confirm" type="submit" form="credential-form" formaction="/api/v1/config/credential/delete" name="confirm_delete" value="Delete credential"{{with index .Content.Errors "credential-delete-confirm"}} aria-invalid="true" aria-describedby="credential-delete-confirm-error"{{end}}>Delete credential</button>
   </div>
 </dialog>
 
