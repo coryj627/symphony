@@ -25,6 +25,16 @@ configuration experience without starting orchestration. An explicit `--port
 ## Development checks
 
 ```bash
-go test ./...
+npm ci
+npx playwright install chromium webkit
+npm run verify
 gofmt -w cmd internal
 ```
+
+`npm run verify` is the deterministic Phase 1 gate for the supported macOS and
+Windows implementations. It includes Go tests and vet, rendered HTML and
+browser accessibility checks, wrapper tests, and the review-only source scan;
+macOS also runs the Go race detector. See
+[`docs/accessibility-testing.md`](docs/accessibility-testing.md) for scanner
+installation, pre-commit hook activation, evidence boundaries, and manual test
+requirements.

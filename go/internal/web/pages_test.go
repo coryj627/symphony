@@ -110,7 +110,8 @@ func TestRenderedShellUsesSemanticListsTableAndTextualEmptyStates(t *testing.T) 
 	t.Parallel()
 	issues := renderedGET(t, "/issues")
 	for _, want := range []string{
-		`<table>`, `<caption>Issues available to Symphony</caption>`, `<th scope="col">Identifier</th>`,
+		`<table>`, `<caption>Issues available to Symphony</caption>`, `<th id="issue-identifier" scope="col">Identifier</th>`,
+		`headers="issue-identifier issue-title issue-state"`,
 		`<ul class="issue-list" aria-label="Issues available to Symphony">`, "No issues are available.",
 	} {
 		assertContains(t, issues, want)

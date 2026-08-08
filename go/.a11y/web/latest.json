@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-08T18:59:11.520Z",
+  "versions": {
+    "rule_engine": "1.36.0",
+    "matcher": "1.1.0",
+    "baseline_engine": "1.36.0"
+  },
+  "engine_churn": false,
+  "summary": {
+    "actionable_findings": 0,
+    "by_severity": {
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "by_label": {
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "new": 0,
+    "carried": 0,
+    "resolved": 0,
+    "preserved": 0,
+    "scanned_files": 12,
+    "skipped_files": 0
+  },
+  "findings": [],
+  "resolved": [],
+  "preserved": [],
+  "skipped_files": [],
+  "scan_health": {
+    "too_large": 0,
+    "timed_out": 0,
+    "parse_failed": 0,
+    "read_failed": 0,
+    "stat_failed": 0,
+    "parse_recovered": 0,
+    "templating_unsupported": 0,
+    "analyzer_failed": 0,
+    "collector_warnings": 0
+  },
+  "coverage_scope": [],
+  "coverage_caveats": [],
+  "contrast_skipped_by_reason": {
+    "css_color_only_unpaired": 11,
+    "css_background_only_unpaired": 10,
+    "css_wcag_exempt": 1,
+    "template_unresolved_foreground": 52
+  },
+  "contrast_diagnostics": [
+    {
+      "severity": "info",
+      "source": "css",
+      "message": "1 contrast use-site(s) suppressed as WCAG 1.4.3-exempt (inactive :disabled/[disabled]/[inert] UI components)"
+    },
+    {
+      "severity": "info",
+      "source": "css",
+      "message": "contrast: 11 color-only [redacted-path] 10 background-only rule(s) not paired — inherited-pair analysis is out of scope for v1"
+    },
+    {
+      "severity": "info",
+      "source": "pipeline",
+      "message": "contrast skipped_by_reason: css_background_only_unpaired=10, css_color_only_unpaired=11, css_wcag_exempt=1, template_unresolved_foreground=52"
+    }
+  ],
+  "artifacts": {
+    "json": ".a11y/web/latest.json",
+    "sarif": ".a11y/web/latest.sarif",
+    "markdown": ".a11y/web/latest.md"
+  }
+}

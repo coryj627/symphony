@@ -1,0 +1,274 @@
+# a11y-check-web configuration
+
+# Regenerate with `a11y-check-web init --force` — your edits are LOST, so copy
+# anything you want to keep first.
+
+# `version`, `severity.scale`, `severity.defaults` (all three engine levels) and
+# `severity.fail_at` are REQUIRED: remove one and the scan stops with the line
+# number rather than guessing what you meant. `groups` and `rules` are optional —
+# anything you do not list is reported at its engine severity, so this file as
+# generated scans exactly as no file at all.
+
+# Full rule list for a group: `a11y-check-web rules --guideline 1.1`
+
+version: 1
+# Severity
+
+# `scale` is YOUR vocabulary, ordered MOST severe first. Rename the labels,
+# reorder them, add or remove them — this is the matrix.
+
+# Your labels are what the Markdown summary groups by, what `label` carries in
+# the JSON report and in SARIF result properties, and what `fail_at` compares
+# against. The engine's own high/medium/low still appears alongside them: the
+# baseline matches on it, so it is what makes an accepted finding stay accepted
+# no matter how you relabel it.
+
+# `sarif:` maps each label onto a SARIF level (error, warning, note, none) for
+# code-scanning surfaces. A label you leave out keeps the engine's default level.
+severity:
+  scale:
+    - high
+    - medium
+    - low
+  defaults:
+    high: high
+    medium: medium
+    low: low
+  fail_at: low
+  sarif:
+    high: error
+    medium: warning
+    low: note
+# Rule groups
+
+# One block per WCAG guideline. `enabled: false` removes that group's findings
+# from every report and from the exit code; the engine still scans them, and the
+# suppressed count is reported as a scan warning, so nothing is hidden — it is
+# filtered.
+
+# Disabling a group does NOT rewrite your baseline. Those findings stay recorded
+# at their engine severity, so turning the group back on later reads as carried
+# rather than as a wall of new findings on code nobody touched.
+
+# Each heading has two parts: the prose describes the WCAG guideline, and the
+# `WCAG ...` list is what this engine actually checks within it. A guideline
+# holds more criteria than any static analyser can verify, so the list is the
+# coverage claim — not the sentence above it.
+
+# `severity:` reassigns the whole group onto your scale.
+
+# Keys are QUOTED on purpose: unquoted, YAML reads 1.1 as a number, and 1.10
+# would silently collapse onto 1.1.
+groups:
+  # 1.1 Text Alternatives — 56 rules · WCAG 1.1.1
+  # Non-text content carries a text alternative: img alt, icon labels, media fallbacks.
+
+  # area-alt                        high    react vue vue-jsx stencil angular svelte html
+  #   Detects image-map areas without an accessible name
+  # aria-label-missing-interactive  high    react vue vue-jsx stencil angular svelte html
+  #   Detects interactive elements without an accessible name
+  # img-alt-empty                   low     react vue vue-jsx stencil angular svelte html
+  #   Detects <img> elements with an empty alt="" that may be informative images
+  # img-alt-missing                 high    react vue vue-jsx stencil angular svelte html
+  #   Detects <img> elements without an alt attribute
+  # input-image-alt                 high    react vue vue-jsx stencil angular svelte html
+  #   Detects <input type="image"> with no accessible name
+  # object-alt                      high    react vue vue-jsx stencil angular svelte html
+  #   Detects <object> elements without accessible text content, aria-label, or title
+  # role-img-alt                    high    react vue vue-jsx stencil angular svelte html
+  #   Detects role=img elements without an accessible name
+  # svg-accessible-name             medium  react vue vue-jsx stencil angular svelte html
+  #   Detects <svg> elements without an accessible name
+  "1.1":
+    enabled: true
+  # 1.2 Time-based Media — 14 rules · WCAG 1.2.1, 1.2.2
+  # Audio and video carry captions, transcripts, and audio descriptions.
+
+  # audio-missing-description  medium  react vue vue-jsx stencil angular svelte html
+  #   Detects <audio> elements without an accessible description or text alternative
+  # video-missing-captions     high    react vue vue-jsx stencil angular svelte html
+  #   Detects <video> elements without captions or subtitles track
+  "1.2":
+    enabled: true
+  # 1.3 Adaptable — 63 rules · WCAG 1.3.1, 1.3.5
+  # Structure survives restyling: headings, lists, tables, form labels, and reading order
+  # expressed in markup rather than only visually.
+
+  # autocomplete-valid     medium  react vue vue-jsx stencil angular svelte html
+  #   Detects invalid autocomplete attribute token lists
+  # definition-list        medium  react vue vue-jsx stencil angular svelte html
+  #   Detects <dt>/<dd> outside a <dl>, and <dl> with disallowed children
+  # empty-heading          high    react vue vue-jsx stencil angular svelte html
+  #   Detects heading elements (h1-h6) with no text content
+  # heading-hierarchy      medium  react vue vue-jsx stencil angular svelte html
+  #   Detects heading level jumps greater than 1 (e.g., h1 followed by h3)
+  # label-has-for          medium  react vue vue-jsx stencil angular svelte html
+  #   Detects <label> elements that have neither a `for` attribute nor a nested form control
+  # list-structure         medium  react vue vue-jsx stencil angular svelte html
+  #   Detects <li> elements not inside <ul>/<ol>, and <ul>/<ol> with non-<li> children
+  # table-missing-headers  medium  react vue vue-jsx stencil angular svelte html
+  #   Detects <table> elements without <th> header cells or <th> without scope attribute
+  # td-headers-attr        medium  react vue vue-jsx stencil angular svelte html
+  #   Detects table data cells whose headers attribute references missing header ids
+  # th-has-data-cells      medium  react vue vue-jsx stencil angular svelte html
+  #   Detects table header cells that do not describe any data cells
+  "1.3":
+    enabled: true
+  # 1.4 Distinguishable — 23 rules · WCAG 1.4.2, 1.4.3, 1.4.4
+  # Content is perceivable without relying on one sense: colour contrast, text resizing,
+  # and not using colour alone to convey meaning.
+
+  # autoplay-media                medium  react vue vue-jsx stencil angular svelte html
+  #   Detects <video> or <audio> elements with autoplay attribute
+  # contrast-apca-insufficient    low     css
+  #   Advisory: text color/background pairs that pass WCAG 2.2 AA but fail APCA Bronze (WCAG 3 draft).
+  # contrast-wcag22-insufficient  high    css
+  #   Detects text and high-confidence non-text color/background pairs that fail WCAG 2.2 AA contrast.
+  # meta-viewport-scalable        high    react vue vue-jsx stencil angular svelte html
+  #   Detects <meta name="viewport"> with user-scalable=no or maximum-scale=1
+  # text-size-absolute-units      medium  react vue vue-jsx stencil angular svelte html
+  #   Detects inline style fontSize using absolute px units instead of relative units
+  "1.4":
+    enabled: true
+  # 2.1 Keyboard Accessible — 28 rules · WCAG 2.1.1
+  # Everything works from a keyboard, with no traps and no mouse-only interactions.
+
+  # click-handler-no-keyboard  high    react vue vue-jsx stencil angular svelte html
+  #   Detects non-interactive elements with onClick but no keyboard event handler, role, or tabIndex
+  # mouse-event-no-keyboard    medium  react vue vue-jsx stencil angular svelte html
+  #   Detects elements with onMouseOver/onMouseOut but missing corresponding onFocus/onBlur
+  # nested-interactive         high    react vue vue-jsx stencil angular svelte html
+  #   Detects interactive elements nested inside other interactive elements
+  # tabindex-positive          medium  react vue vue-jsx stencil angular svelte html
+  #   Detects tabIndex values greater than 0, which disrupt natural tab order
+  "2.1":
+    enabled: true
+  # 2.2 Enough Time — 14 rules · WCAG 2.2.1, 2.2.2
+  # Time limits, auto-updating content, and moving content can be controlled.
+
+  # meta-refresh             high    react vue vue-jsx stencil angular svelte html
+  #   Detects <meta> elements with http-equiv="refresh" that cause automatic page redirects
+  # no-distracting-elements  high    react vue vue-jsx stencil angular svelte html
+  #   Detects <marquee> and <blink> elements that are distracting and inaccessible
+  "2.2":
+    enabled: true
+  # 2.4 Navigable — 49 rules · WCAG 2.4.2, 2.4.4, 2.4.6, 2.4.7
+  # Users can find their way: page titles, focus order, visible focus, link purpose,
+  # headings, and skip links.
+
+  # anchor-has-content    high    react vue vue-jsx stencil angular svelte html
+  #   Detects <a> elements with href but no accessible text content
+  # duplicate-link-text   medium  react vue vue-jsx stencil angular svelte html
+  #   Detects multiple <a> elements with identical text but different hrefs
+  # empty-table-header    medium  react vue vue-jsx stencil angular svelte html
+  #   Detects <th> elements with no text content and no aria-label
+  # missing-focus-styles  high    react vue vue-jsx stencil angular svelte html
+  #   Detects interactive elements with outline removed via inline style without replacement
+  # missing-page-title    high    react vue vue-jsx stencil angular svelte html
+  #   Detects pages missing a <title> element or having an empty <title>
+  # page-has-heading-one  medium  react vue vue-jsx stencil angular svelte html
+  #   Detects page-like HTML documents without a visible <h1>
+  # summary-name          high    react vue vue-jsx stencil angular svelte html
+  #   Detects summary elements without an accessible name
+  "2.4":
+    enabled: true
+  # 2.5 Input Modalities — 14 rules · WCAG 2.5.3, 2.5.8
+  # Touch targets are big enough to hit, and a control's accessible name contains
+  # its visible label.
+
+  # label-content-name-mismatch  medium  react vue vue-jsx stencil angular svelte html
+  #   Detects controls whose accessible name does not include the visible label
+  # touch-target-too-small       medium  react vue vue-jsx stencil angular svelte html
+  #   Detects interactive elements with inline styles specifying touch targets smaller than 24px
+  "2.5":
+    enabled: true
+  # 3.1 Readable — 28 rules · WCAG 3.1.1, 3.1.2
+  # Language of the page and of parts is declared.
+
+  # html-xml-lang-mismatch  high    react vue vue-jsx stencil angular svelte html
+  #   Detects html lang and xml:lang values that disagree
+  # invalid-html-lang       high    react vue vue-jsx stencil angular svelte html
+  #   Detects <html> elements with an empty or invalid lang attribute value
+  # missing-html-lang       high    react vue vue-jsx stencil angular svelte html
+  #   Detects <html> elements without a lang attribute
+  # valid-lang              high    react vue vue-jsx stencil angular svelte html
+  #   Detects invalid lang attributes on non-page elements
+  "3.1":
+    enabled: true
+  # 3.2 Predictable — 7 rules · WCAG 3.2.1
+  # Focus and input do not trigger surprising changes of context.
+
+  # autofocus-attribute  low     react vue vue-jsx stencil angular svelte html
+  #   Detects elements with autoFocus attribute that causes unexpected focus changes
+  "3.2":
+    enabled: true
+  # 3.3 Input Assistance — 28 rules · WCAG 3.3.2
+  # Errors are identified and described, and labels and instructions are provided.
+
+  # form-field-multiple-labels   medium  react vue vue-jsx stencil angular svelte html
+  #   Detects form fields with more than one static label
+  # form-input-no-label          high    react vue vue-jsx stencil angular svelte html
+  #   Detects form inputs without an accessible label
+  # required-field-no-indicator  medium  react vue vue-jsx stencil angular svelte html
+  #   Detects form fields that appear required but lack proper required markup
+  # select-missing-name          high    react vue vue-jsx stencil angular svelte html
+  #   Detects <select> elements without an accessible name
+  "3.3":
+    enabled: true
+  # 4.1 Compatible — 91 rules · WCAG 4.1.2
+  # Name, role, and value are exposed to assistive technology: ARIA correctness, custom
+  # control semantics, and status messages.
+
+  # aria-allowed-attr        high    react vue vue-jsx stencil angular svelte html
+  #   Detects ARIA attributes that are not allowed for a resolved role
+  # aria-allowed-role        high    react vue vue-jsx stencil angular svelte html
+  #   Detects roles that are not allowed on a host element
+  # aria-braille-equivalent  medium  react vue vue-jsx stencil angular svelte html
+  #   Detects braille-specific ARIA labels without non-braille equivalents
+  # aria-hidden-body         high    react vue vue-jsx stencil angular svelte html
+  #   Detects body elements hidden from assistive technologies
+  # aria-hidden-focus        high    react vue vue-jsx stencil angular svelte html
+  #   Detects focusable content inside aria-hidden subtrees
+  # aria-required-attr       high    react vue vue-jsx stencil angular svelte html
+  #   Detects elements with ARIA roles that are missing required ARIA attributes
+  # aria-valid-attr          high    react vue vue-jsx stencil angular svelte html
+  #   Detects invalid aria-* attributes
+  # aria-valid-attr-value    high    react vue vue-jsx stencil angular svelte html
+  #   Detects aria-* attributes with invalid values
+  # deprecated-aria          medium  react vue vue-jsx stencil angular svelte html
+  #   Detects deprecated ARIA role values
+  # duplicate-id             high    react vue vue-jsx stencil angular svelte html
+  #   Detects duplicate id attribute values within a file
+  # iframe-missing-title     high    react vue vue-jsx stencil angular svelte html
+  #   Detects <iframe> elements without a title attribute
+  # invalid-aria-role        high    react vue vue-jsx stencil angular svelte html
+  #   Detects role attributes whose value is not a valid ARIA role
+  # no-redundant-roles       low     react vue vue-jsx stencil angular svelte html
+  #   Detects elements with a role attribute that matches the element's implicit role
+  "4.1":
+    enabled: true
+  # best-practice Best practice (no WCAG criterion) — 28 rules
+  # Recommendations beyond conformance. Disable this group to report only findings
+  # traceable to a WCAG success criterion.
+
+  # anchor-is-valid             medium  react vue vue-jsx stencil angular svelte html
+  #   Detects <a> elements with a javascript: href (not real navigation)
+  # no-access-key               low     react vue vue-jsx stencil angular svelte html
+  #   Detects elements with accessKey attribute
+  # no-noninteractive-tabindex  medium  react vue vue-jsx stencil angular svelte html
+  #   Detects non-interactive elements with tabIndex but no role attribute
+  # scope-on-td                 medium  react vue vue-jsx stencil angular svelte html
+  #   Detects <td> elements with scope attribute, which should be on <th> instead
+  best-practice:
+    enabled: true
+# Per-rule overrides
+
+# Optional, and wins over the rule's group. Use it for the one rule your team
+# treats differently from its neighbours.
+
+#   rules:
+#     angular/anchor-has-content:
+#       severity: high
+#     stencil/input-image-alt:
+#       enabled: false
+rules: {}

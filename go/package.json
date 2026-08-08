@@ -4,9 +4,12 @@
     "node": "24.18.0"
   },
   "scripts": {
-    "start:e2e": "mise exec -- go run -tags=e2e ./cmd/symphony configure ./testdata/manual/WORKFLOW.md --port 43127",
+    "start:e2e": "node scripts/go-tool.mjs run -tags=e2e ./cmd/symphony configure ./testdata/manual/WORKFLOW.md --port 43127",
     "test:a11y": "playwright test",
-    "html:validate": "playwright test tests/accessibility/html-validity.spec.mjs"
+    "html:validate": "playwright test tests/accessibility/html-validity.spec.mjs",
+    "test:wrappers": "node --test scripts/a11y-precommit.test.mjs scripts/a11y-scan-all.test.mjs scripts/go-tool.test.mjs scripts/verify.test.mjs",
+    "a11y:source": "node scripts/a11y-scan-all.mjs",
+    "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",

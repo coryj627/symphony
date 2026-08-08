@@ -1,0 +1,112 @@
+name: Go Phase 1
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  phase-1:
+    name: Phase 1 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+    defaults:
+      run:
+        working-directory: go
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: go/package-lock.json
+
+      - name: Test Go
+        run: go test ./...
+
+      - name: Vet Go
+        run: go vet ./...
+
+      - name: Test Go with the race detector
+        if: runner.os == 'macOS'
+        run: go test -race ./...
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install browser engines
+        run: npx playwright install chromium webkit
+
+      - name: Test verification wrappers
+        run: node --test scripts/a11y-precommit.test.mjs scripts/a11y-scan-all.test.mjs scripts/go-tool.test.mjs scripts/verify.test.mjs
+
+      - name: Validate rendered HTML
+        run: npm run html:validate
+
+      - name: Test browser accessibility
+        run: npm run test:a11y
+
+  source-accessibility:
+    name: Source accessibility
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: go
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+
+      - name: Require a11y-check-web release token
+        shell: bash
+        env:
+          A11Y_RELEASE_READ_TOKEN: ${{ secrets.A11Y_RELEASE_READ_TOKEN }}
+        run: |
+          if [[ -z "${A11Y_RELEASE_READ_TOKEN:-}" ]]; then
+            echo "::error::A11Y_RELEASE_READ_TOKEN is required to download a11y-check-web v0.3.1"
+            exit 1
+          fi
+
+      - name: Install a11y-check-web v0.3.1
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.A11Y_RELEASE_READ_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/a11y-check-web"
+          gh release download v0.3.1 --repo coryj627/a11y-check-web \
+            --pattern 'a11y-check-web-mcp-server-*.tgz' \
+            --dir "$RUNNER_TEMP/a11y-check-web"
+          npm install -g "$RUNNER_TEMP"/a11y-check-web/a11y-check-web-mcp-server-*.tgz
+
+      - name: Scan source accessibility without updating the baseline
+        env:
+          A11Y_ALLOWED_ROOTS: ${{ github.workspace }}/go
+        run: node scripts/a11y-scan-all.mjs
