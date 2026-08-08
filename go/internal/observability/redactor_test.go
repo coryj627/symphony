@@ -404,6 +404,116 @@ func TestRedactorPreservesLiteralPlusIntroducedByQueryDecoding(t *testing.T) {
 	}
 }
 
+func TestRedactorDetectsRawDecodedURLCredentialBytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		secret      []byte
+		input       string
+		forbidden   string
+		surrounding bool
+	}{
+		{
+			name:      "CR credential in query value",
+			secret:    []byte("alpha\rbravo"),
+			input:     "https://example.test/docs?next=alpha%250Dbravo&safe=yes",
+			forbidden: "alpha",
+		},
+		{
+			name:      "ESC credential in query key",
+			secret:    []byte("alpha\x1bbravo"),
+			input:     "https://example.test/docs?alpha%251Bbravo=value&safe=yes",
+			forbidden: "alpha",
+		},
+		{
+			name:      "invalid UTF-8 credential in path",
+			secret:    []byte{0xff, 'x'},
+			input:     "https://example.test/files/%25FFx?safe=yes",
+			forbidden: "FFx",
+		},
+		{
+			name:      "multiply encoded CR credential",
+			secret:    []byte("alpha\rbravo"),
+			input:     "https://example.test/docs?next=alpha%2525250Dbravo&safe=yes",
+			forbidden: "alpha",
+		},
+		{
+			name:      "ESC credential in path",
+			secret:    []byte("alpha\x1bbravo"),
+			input:     "https://example.test/files/alpha%251Bbravo?safe=yes",
+			forbidden: "alpha",
+		},
+		{
+			name:        "invalid UTF-8 credential beside multibyte text in embedded URL",
+			secret:      []byte{'l', 'e', 'f', 't', 0xc3, 0xa9, 0xff, 0xe6, 0xbc, 0xa2, 'r', 'i', 'g', 'h', 't'},
+			input:       "before https://example.test/docs?next=left%25C3%25A9%25FF%25E6%25BC%25A2right&safe=yes after",
+			forbidden:   "left",
+			surrounding: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			redactor := NewRedactor(nil, nil)
+			redactor.RegisterSecret(test.secret)
+			got := safeSprint(redactor.Value(test.input))
+			if strings.Contains(got, test.forbidden) {
+				t.Fatal("raw decoded registered credential survived URL sanitization")
+			}
+			if !strings.Contains(got, "safe=yes") {
+				t.Fatal("safe query diagnostic was removed")
+			}
+			if test.surrounding && (!strings.Contains(got, "before ") || !strings.Contains(got, " after")) {
+				t.Fatal("safe surrounding text was removed")
+			}
+		})
+	}
+}
+
+func TestRedactorDetectsRawDecodedTypedURLCredentialWithoutMutatingCaller(t *testing.T) {
+	t.Parallel()
+
+	typed := &url.URL{
+		Scheme:   "https",
+		Host:     "example.test",
+		Path:     "/files/alpha%0Dbravo",
+		RawQuery: "safe=yes",
+	}
+	before := typed.String()
+	redactor := NewRedactor(nil, nil)
+	redactor.RegisterSecret([]byte("alpha\rbravo"))
+	got := safeSprint(redactor.Value(typed))
+	if typed.String() != before {
+		t.Fatal("caller URL was mutated")
+	}
+	if strings.Contains(got, "alpha") {
+		t.Fatal("raw decoded typed URL credential survived sanitization")
+	}
+	if !strings.Contains(got, "safe=yes") {
+		t.Fatal("safe typed URL query diagnostic was removed")
+	}
+}
+
+func TestRedactorPreservesSafeEncodedControlAndInvalidByteValues(t *testing.T) {
+	t.Parallel()
+
+	redactor := NewRedactor(nil, nil)
+	redactor.RegisterSecret([]byte("alpha\rbravo"))
+	redactor.RegisterSecret([]byte("alpha\x1bbravo"))
+	redactor.RegisterSecret([]byte{0xff, 'x'})
+	tests := []string{
+		"https://example.test/docs?next=charlie%250Ddelta&safe=yes",
+		"https://example.test/docs?next=charlie%251Bdelta&safe=yes",
+		"https://example.test/docs?next=%25FFsafe&safe=yes",
+	}
+	for _, input := range tests {
+		got := safeSprint(redactor.Value(input))
+		if !strings.Contains(got, "safe=yes") || !strings.Contains(got, "next=") {
+			t.Fatal("ordinary safe encoded URL value was removed")
+		}
+	}
+}
+
 func TestRedactorDoesNotRevealSecretsWhenControlsAreRemoved(t *testing.T) {
 	t.Parallel()
 

@@ -546,6 +546,9 @@ func (s *sanitizer) credentialInURLValue(value string) (bool, bool) {
 }
 
 func (s *sanitizer) credentialInURLForm(value string) bool {
+	if s.redactCredentialText(value) != value {
+		return true
+	}
 	value = stripANSIAndControls(value)
 	value = strings.ToValidUTF8(value, "�")
 	return s.redactCredentialText(value) != value
