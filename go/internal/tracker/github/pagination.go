@@ -108,6 +108,13 @@ func cloneCachedPage(page cachedPage) cachedPage {
 }
 
 func nextPageFromLinks(values []string, current *url.URL, allowed apiOrigin) (int, bool, error) {
+	if current == nil {
+		return 0, false, paginationError("GitHub pagination current page was invalid")
+	}
+	currentPage, err := strconv.Atoi(current.Query().Get("page"))
+	if err != nil || currentPage < 1 || currentPage > maxPages {
+		return 0, false, paginationError("GitHub pagination current page was invalid")
+	}
 	nextPage := 0
 	foundNext := false
 	for _, value := range values {
@@ -149,6 +156,9 @@ func nextPageFromLinks(values []string, current *url.URL, allowed apiOrigin) (in
 			page, err := strconv.Atoi(pageText)
 			if err != nil || page < 1 || page > maxPages {
 				return 0, false, paginationError("GitHub pagination next link had an invalid page")
+			}
+			if page != currentPage+1 {
+				return 0, false, paginationError("GitHub pagination next link was not sequential")
 			}
 			nextPage = page
 			foundNext = true

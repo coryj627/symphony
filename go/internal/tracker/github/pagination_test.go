@@ -44,6 +44,30 @@ func TestFetchIssuesByStatesPaginatesAcrossMultipleLinkLinesAndReconstructsScope
 	assertIdentifiers(t, issues, []string{"#42", "#43"})
 }
 
+func TestNextPageFromLinksRequiresStrictlySequentialPages(t *testing.T) {
+	// Break caught: range and cycle checks alone allow a provider to skip an
+	// unvisited page or report a rollback as a usable next-page instruction.
+	adapter := mustNewGitHubAdapter(t, defaultGitHubConfig("https://api.github.test"), nil, nil)
+	for _, test := range []struct {
+		name    string
+		current int
+		next    int
+	}{
+		{name: "page one jumps to page three", current: 1, next: 3},
+		{name: "page two rolls back to page one", current: 2, next: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			currentURL := adapter.statePageURL(test.current)
+			links := []string{fmt.Sprintf(`<https://api.github.test/canonical?page=%d>; rel="next"`, test.next)}
+			next, found, err := nextPageFromLinks(links, currentURL, adapter.origin)
+			if err == nil {
+				t.Fatalf("next page = %d, found = %v, want pagination error", next, found)
+			}
+			requireTrackerError(t, err, tracker.CategoryPagination)
+		})
+	}
+}
+
 func TestFetchIssuesByStatesRejectsMalformedDuplicateCyclicAndUnsafeNextLinks(t *testing.T) {
 	// Break caught: accepting ambiguous or unsafe rel=next metadata can repeat a
 	// page, cross credential origins, bypass the page cap, or truncate results.

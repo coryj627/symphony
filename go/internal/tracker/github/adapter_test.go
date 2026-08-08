@@ -209,6 +209,21 @@ func TestFetchIssuesByIDsOmitsPullRequestsButFailsMalformedVisibleIssues(t *test
 		requireTrackerError(t, err, tracker.CategoryPayload)
 	})
 
+	t.Run("malformed pull request mismatch fails before omission", func(t *testing.T) {
+		// Break caught: checking required display fields before raw identity lets a
+		// malformed PR for another number masquerade as an omitted requested issue.
+		server := githubFixtureServer(t, []fixtureResponse{{
+			Path: "/repos/coryj627/symphony/issues/9",
+			Body: `{"number":10,"state":"open","pull_request":{}}`,
+		}})
+		adapter := mustNewGitHubAdapter(t, defaultGitHubConfig(server.URL), server.Client(), nil)
+		issues, err := adapter.FetchIssuesByIDs(context.Background(), []string{"github:coryj627/symphony#9"})
+		if issues == nil || len(issues) != 0 {
+			t.Fatalf("partial issues = %#v", issues)
+		}
+		requireTrackerError(t, err, tracker.CategoryPayload)
+	})
+
 	t.Run("malformed visible record fails atomically", func(t *testing.T) {
 		server := githubFixtureServer(t, []fixtureResponse{
 			{Path: "/repos/coryj627/symphony/issues/8", Body: singleIssue(8, "open")},

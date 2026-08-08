@@ -121,16 +121,22 @@ func (adapter *Adapter) FetchIssuesByIDs(ctx context.Context, ids []string) ([]d
 		if response.status == http.StatusNotFound {
 			continue
 		}
+		var identity struct {
+			Number json.RawMessage `json:"number"`
+		}
+		if !decodeOneJSON(response.body, &identity) {
+			return emptyIssues(), payloadError("GitHub issue response was malformed")
+		}
+		returnedNumber, ok := requiredPositiveNumber(identity.Number)
+		if !ok || returnedNumber != number {
+			return emptyIssues(), payloadError("GitHub issue response did not match the requested issue")
+		}
 		issue, pullRequest, err := normalizeIssueRecord(response.body, adapter.config)
 		if err != nil {
 			if pullRequest {
 				continue
 			}
 			return emptyIssues(), payloadError("GitHub issue response was malformed")
-		}
-		returnedNumber, ok := issue.NativeRef["number"].(json.Number)
-		if !ok || returnedNumber.String() != number {
-			return emptyIssues(), payloadError("GitHub issue response did not match the requested issue")
 		}
 		if pullRequest {
 			continue

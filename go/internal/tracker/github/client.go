@@ -64,6 +64,7 @@ func cloneHTTPClient(client *http.Client, allowed apiOrigin) *http.Client {
 	if client != nil {
 		*clone = *client
 	}
+	clone.Jar = nil
 	clone.Timeout = requestTimeout
 	clone.CheckRedirect = func(request *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {

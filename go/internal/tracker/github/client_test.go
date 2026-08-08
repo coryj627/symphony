@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -103,6 +105,40 @@ func TestNewClonesTokenAndHTTPClientAndSendsExactScopedHeaders(t *testing.T) {
 	assertIdentifiers(t, issues, []string{"#42"})
 	if requests.Load() != 1 {
 		t.Fatalf("requests = %d, want 1", requests.Load())
+	}
+}
+
+func TestNewDoesNotShareCallerCookieJar(t *testing.T) {
+	// Break caught: retaining the caller's CookieJar sends unrelated cookies to
+	// GitHub and lets provider Set-Cookie responses mutate caller-owned state.
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Cookie"); got != "" {
+			t.Errorf("adapter sent caller cookie %q", got)
+		}
+		writer.Header().Set("Set-Cookie", "github_session=provider-value; Path=/")
+		_, _ = writer.Write([]byte(issuePage(singleIssue(42, "open"))))
+	}))
+	defer server.Close()
+
+	jar := &recordingCookieJar{}
+	caller := server.Client()
+	caller.Jar = jar
+	adapter := mustNewGitHubAdapter(t, defaultGitHubConfig(server.URL), caller, nil)
+	if caller.Jar != jar {
+		t.Fatal("New mutated the caller-owned CookieJar")
+	}
+
+	issues, err := adapter.FetchIssuesByStates(context.Background(), []string{"open"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertIdentifiers(t, issues, []string{"#42"})
+	reads, writes := jar.calls()
+	if reads != 0 || writes != 0 {
+		t.Fatalf("caller CookieJar calls = reads %d, writes %d; want zero", reads, writes)
+	}
+	if caller.Jar != jar {
+		t.Fatal("adapter request mutated the original HTTP client")
 	}
 }
 
@@ -301,6 +337,31 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+type recordingCookieJar struct {
+	mu     sync.Mutex
+	reads  int
+	writes int
+}
+
+func (jar *recordingCookieJar) Cookies(*url.URL) []*http.Cookie {
+	jar.mu.Lock()
+	defer jar.mu.Unlock()
+	jar.reads++
+	return []*http.Cookie{{Name: "caller_session", Value: "caller-cookie-canary"}}
+}
+
+func (jar *recordingCookieJar) SetCookies(*url.URL, []*http.Cookie) {
+	jar.mu.Lock()
+	defer jar.mu.Unlock()
+	jar.writes++
+}
+
+func (jar *recordingCookieJar) calls() (int, int) {
+	jar.mu.Lock()
+	defer jar.mu.Unlock()
+	return jar.reads, jar.writes
 }
 
 type repeatedByteReader struct {
