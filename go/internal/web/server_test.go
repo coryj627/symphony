@@ -456,6 +456,23 @@ func TestCancellationClosesEveryListenerAndShutdownIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestServerDoneSignalsAfterShutdown(t *testing.T) {
+	server := startTestServer(t, bootstrapFromValue("completion-signal-capability"), http.NotFoundHandler())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := server.server.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-server.server.Done():
+		if err != nil {
+			t.Fatalf("normal shutdown completion = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server completion signal did not close promptly")
+	}
+}
+
 func TestIPv6BindFailureRollsBackIPv4Listener(t *testing.T) {
 	ipv6, err := net.Listen("tcp6", "[::1]:0")
 	if err != nil {

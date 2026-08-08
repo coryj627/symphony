@@ -17,7 +17,7 @@ export default defineConfig({
     {name: 'webkit', use: {browserName: 'webkit'}},
   ],
   webServer: {
-    command: 'go run -tags=e2e ./cmd/symphony configure ./testdata/workflows/valid-linear.md --port 43127',
+    command: '/Users/coryj/.local/share/mise/installs/go/1.26.5/bin/go run -tags=e2e ./cmd/symphony configure ./testdata/manual/WORKFLOW.md --port 43127',
     url: 'http://127.0.0.1:43127/',
     reuseExistingServer: false,
     timeout: 120000,

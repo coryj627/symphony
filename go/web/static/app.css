@@ -162,7 +162,9 @@ h2 {
 
 section,
 aside,
-.flash {
+.flash,
+#error-summary,
+dialog {
   min-inline-size: 0;
   margin-block: 1rem;
   padding: clamp(1rem, 3vw, 1.5rem);
@@ -179,6 +181,29 @@ aside,
 .status-summary {
   color: var(--color-success);
   font-weight: 700;
+}
+
+.status-warning {
+  color: var(--color-focus);
+}
+
+#error-summary {
+  border-color: var(--color-danger);
+}
+
+#error-summary a,
+.field-error {
+  color: var(--color-danger);
+}
+
+.field-error {
+  margin-block: 0;
+  font-weight: 700;
+}
+
+h3 {
+  margin-block: 1rem 0;
+  font-size: 1.05rem;
 }
 
 .identity-list,
@@ -227,6 +252,12 @@ fieldset {
 form {
   display: grid;
   gap: 1rem;
+}
+
+form + section,
+section + form,
+form + form {
+  margin-block-start: 2rem;
 }
 
 fieldset {
@@ -293,6 +324,21 @@ button {
   color: var(--color-text);
   font-weight: 750;
   cursor: pointer;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+dialog {
+  inline-size: min(36rem, calc(100% - 2rem));
+  color: var(--color-text);
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 72%);
 }
 
 button:hover:not(:disabled) {
@@ -458,6 +504,10 @@ pre {
   .code-scroll,
   .log-scroll {
     border: 1px solid CanvasText;
+  }
+
+  dialog::backdrop {
+    background: Canvas;
   }
 
   nav a[aria-current="page"] {

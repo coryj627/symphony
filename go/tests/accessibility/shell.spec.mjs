@@ -55,11 +55,11 @@ test('authenticated missing page renders one accessible not-found document', asy
 });
 
 test('nonempty flash replaces the fallback in the single persistent status', async ({page}) => {
-  await authorize(page, '/__e2e/flash');
+  await authorize(page, '/configuration?result=configuration-saved&focus=save-structured');
   const status = page.getByRole('status');
   await expect(status).toHaveCount(1);
   await expect(status).toHaveText('Configuration saved.');
-  await expect(page.getByText('Scheduler configuration is ready.')).toHaveCount(0);
+  await expect(page.getByText('Configuration is ready.')).toHaveCount(0);
   await expectNoAxeViolations(page);
 });
 
@@ -131,7 +131,7 @@ test('pages reflow at 320 CSS pixels and product controls meet 44 pixel targets'
 test('reduced motion disables transitions and smooth scrolling', async ({page}) => {
   await page.emulateMedia({reducedMotion: 'reduce'});
   await authorize(page, '/configuration');
-  const styles = await page.getByRole('button', {name: 'Save configuration'}).evaluate(element => {
+  const styles = await page.getByRole('button', {name: 'Save structured settings'}).evaluate(element => {
     const computed = getComputedStyle(element);
     return {
       transitionDuration: computed.transitionDuration,
@@ -229,5 +229,5 @@ test('forced colors retains current state and visible control boundaries', async
   await expect(current).toHaveAttribute('aria-current', 'page');
   await page.keyboard.press('Tab');
   await expect(page.getByRole('link', {name: 'Skip to main content'})).toHaveCSS('outline-style', 'solid');
-  await expect(page.getByRole('button', {name: 'Save configuration'})).toHaveCSS('border-style', 'solid');
+  await expect(page.getByRole('button', {name: 'Save structured settings'})).toHaveCSS('border-style', 'solid');
 });

@@ -1,23 +1,200 @@
 {{define "content"}}
-<form method="post" action="/configuration">
+{{if .Content.CurrentSource}}<section aria-labelledby="current-workflow-heading">
+  <h2 id="current-workflow-heading">Current workflow on disk</h2>
+  <p>The file changed after this page was loaded. Compare this current source with your retained unsaved values below.</p>
+  <pre class="code-scroll"><code>{{.Content.CurrentSource}}</code></pre>
+</section>{{end}}
+
+<form id="structured-settings-form" method="post" action="/api/v1/config/save">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-  <fieldset><legend>Tracker</legend><label for="tracker-provider">Provider</label><select id="tracker-provider" name="tracker_provider"><option value="">Not configured</option></select></fieldset>
-  <fieldset><legend>Credential</legend><p>Credentials are stored by the operating system and never displayed here.</p><button type="button" disabled>Delete credential</button></fieldset>
-  <fieldset><legend>Workspace</legend><label for="workspace-root">Workspace root</label><input id="workspace-root" name="workspace_root" type="text"></fieldset>
-  <fieldset><legend>Orchestration</legend><label for="concurrency">Maximum concurrent runs</label><input id="concurrency" name="concurrency" type="number" min="1" value="1"></fieldset>
-  <fieldset><legend>Codex policy</legend><label for="approval-policy">Approval policy</label><select id="approval-policy" name="approval_policy"><option value="">Not configured</option></select></fieldset>
-  <fieldset><legend>Hooks</legend><p>No hooks are configured.</p></fieldset>
-  <fieldset><legend>Raw workflow</legend><label for="raw-workflow">WORKFLOW.md</label><textarea id="raw-workflow" name="raw_workflow" rows="10"></textarea></fieldset>
-  <button type="submit">Save configuration</button>
+  <input type="hidden" name="mode" value="structured">
+  <input type="hidden" name="base_digest" value="{{.Content.View.Digest}}">
+  <input type="hidden" name="submit_action" value="save-structured">
+  <p>This editor saves only the labelled settings below. Comments, prompt text, ordering, and unknown extension keys are preserved.</p>
+
+  <fieldset{{if not .Content.View.StructuredAvailable}} disabled{{end}}>
+    <legend>Tracker</legend>
+    <label for="tracker-kind">Provider</label>
+    <p id="tracker-kind-description">Choose the tracker used by this workflow. GitHub and Linear each have their own persistent fields below.</p>
+    <select id="tracker-kind" name="tracker_kind" aria-describedby="tracker-kind-description{{with index .Content.Errors "tracker-kind"}} tracker-kind-error{{end}}"{{with index .Content.Errors "tracker-kind"}} aria-invalid="true"{{end}}>
+      <option value="">Choose a provider</option>
+      <option value="github"{{if eq .Content.Values.TrackerKind "github"}} selected{{end}}>GitHub</option>
+      <option value="linear"{{if eq .Content.Values.TrackerKind "linear"}} selected{{end}}>Linear</option>
+    </select>
+    {{with index .Content.Errors "tracker-kind"}}<p class="field-error" id="tracker-kind-error">{{.}}</p>{{end}}
+
+    <h3>GitHub repository</h3>
+    <label for="github-owner">Owner</label>
+    <p id="github-owner-description">GitHub organization or user name, for example <code>openai</code>.</p>
+    <input id="github-owner" name="provider_owner" type="text" value="{{.Content.Values.ProviderOwner}}" aria-describedby="github-owner-description{{with index .Content.Errors "github-owner"}} github-owner-error{{end}}"{{with index .Content.Errors "github-owner"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "github-owner"}}<p class="field-error" id="github-owner-error">{{.}}</p>{{end}}
+    <label for="github-repository">Repository</label>
+    <p id="github-repository-description">One GitHub repository name, without the owner prefix.</p>
+    <input id="github-repository" name="provider_repository" type="text" value="{{.Content.Values.ProviderRepository}}" aria-describedby="github-repository-description{{with index .Content.Errors "github-repository"}} github-repository-error{{end}}"{{with index .Content.Errors "github-repository"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "github-repository"}}<p class="field-error" id="github-repository-error">{{.}}</p>{{end}}
+    <label for="github-assignee">Assignee filter</label>
+    <p id="github-assignee-description">Optional GitHub login. Leave blank to include issues regardless of assignee.</p>
+    <input id="github-assignee" name="provider_assignee" type="text" value="{{.Content.Values.ProviderAssignee}}" aria-describedby="github-assignee-description{{with index .Content.Errors "github-assignee"}} github-assignee-error{{end}}"{{with index .Content.Errors "github-assignee"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "github-assignee"}}<p class="field-error" id="github-assignee-error">{{.}}</p>{{end}}
+
+    <h3>Linear project</h3>
+    <label for="linear-project-slug">Project slug</label>
+    <p id="linear-project-slug-description">The stable slug for exactly one Linear project.</p>
+    <input id="linear-project-slug" name="provider_project_slug" type="text" value="{{.Content.Values.ProviderProjectSlug}}" aria-describedby="linear-project-slug-description{{with index .Content.Errors "linear-project-slug"}} linear-project-slug-error{{end}}"{{with index .Content.Errors "linear-project-slug"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "linear-project-slug"}}<p class="field-error" id="linear-project-slug-error">{{.}}</p>{{end}}
+
+    <label for="tracker-endpoint">Provider endpoint</label>
+    <p id="tracker-endpoint-description">Optional HTTPS API endpoint. Leave blank for the selected provider default.</p>
+    <input id="tracker-endpoint" name="provider_endpoint" type="url" value="{{.Content.Values.ProviderEndpoint}}" aria-describedby="tracker-endpoint-description{{with index .Content.Errors "tracker-endpoint"}} tracker-endpoint-error{{end}}"{{with index .Content.Errors "tracker-endpoint"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "tracker-endpoint"}}<p class="field-error" id="tracker-endpoint-error">{{.}}</p>{{end}}
+    <label for="credential-reference">Credential source</label>
+    <p id="credential-reference-description">Use <code>os-vault</code> or an environment reference such as <code>$GITHUB_TOKEN</code>. Never enter a token here.</p>
+    <input id="credential-reference" name="provider_credential_ref" type="text" value="{{.Content.Values.CredentialRef}}" aria-describedby="credential-reference-description{{with index .Content.Errors "credential-reference"}} credential-reference-error{{end}}"{{with index .Content.Errors "credential-reference"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "credential-reference"}}<p class="field-error" id="credential-reference-error">{{.}}</p>{{end}}
+    <label for="tracker-required-labels">Required labels</label>
+    <p id="tracker-required-labels-description">Enter one label per line. Blank lines are ignored.</p>
+    <textarea id="tracker-required-labels" name="tracker_required_labels" rows="3" aria-describedby="tracker-required-labels-description{{with index .Content.Errors "tracker-required-labels"}} tracker-required-labels-error{{end}}"{{with index .Content.Errors "tracker-required-labels"}} aria-invalid="true"{{end}}>{{.Content.Values.RequiredLabels}}</textarea>
+    {{with index .Content.Errors "tracker-required-labels"}}<p class="field-error" id="tracker-required-labels-error">{{.}}</p>{{end}}
+    <label for="tracker-active-states">Active states</label>
+    <p id="tracker-active-states-description">Enter one state per line, using the provider's displayed spelling.</p>
+    <textarea id="tracker-active-states" name="tracker_active_states" rows="3" aria-describedby="tracker-active-states-description{{with index .Content.Errors "tracker-active-states"}} tracker-active-states-error{{end}}"{{with index .Content.Errors "tracker-active-states"}} aria-invalid="true"{{end}}>{{.Content.Values.ActiveStates}}</textarea>
+    {{with index .Content.Errors "tracker-active-states"}}<p class="field-error" id="tracker-active-states-error">{{.}}</p>{{end}}
+    <label for="tracker-terminal-states">Terminal states</label>
+    <p id="tracker-terminal-states-description">Enter one state per line. Terminal issues are never dispatched.</p>
+    <textarea id="tracker-terminal-states" name="tracker_terminal_states" rows="3" aria-describedby="tracker-terminal-states-description{{with index .Content.Errors "tracker-terminal-states"}} tracker-terminal-states-error{{end}}"{{with index .Content.Errors "tracker-terminal-states"}} aria-invalid="true"{{end}}>{{.Content.Values.TerminalStates}}</textarea>
+    {{with index .Content.Errors "tracker-terminal-states"}}<p class="field-error" id="tracker-terminal-states-error">{{.}}</p>{{end}}
+    {{if .Content.View.StructuredAvailable}}<p>Selected scope: <strong>{{.Content.View.Tracker.Scope}}</strong></p>{{end}}
+  </fieldset>
+
+  <fieldset{{if not .Content.View.StructuredAvailable}} disabled{{end}}>
+    <legend>Workspace</legend>
+    <label for="workspace-root">Workspace root</label>
+    <p id="workspace-root-description">Directory where Symphony creates issue workspaces. Relative paths resolve from WORKFLOW.md.</p>
+    <input id="workspace-root" name="workspace_root" type="text" value="{{.Content.Values.WorkspaceRoot}}" aria-describedby="workspace-root-description{{with index .Content.Errors "workspace-root"}} workspace-root-error{{end}}"{{with index .Content.Errors "workspace-root"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "workspace-root"}}<p class="field-error" id="workspace-root-error">{{.}}</p>{{end}}
+  </fieldset>
+
+  <fieldset{{if not .Content.View.StructuredAvailable}} disabled{{end}}>
+    <legend>Polling and orchestration</legend>
+    <label for="polling-interval-ms">Polling interval</label>
+    <p id="polling-interval-ms-description">Milliseconds; enter a positive whole number.</p>
+    <input id="polling-interval-ms" name="polling_interval_ms" type="number" min="1" step="1" value="{{.Content.Values.PollingIntervalMS}}" aria-describedby="polling-interval-ms-description{{with index .Content.Errors "polling-interval-ms"}} polling-interval-ms-error{{end}}"{{with index .Content.Errors "polling-interval-ms"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "polling-interval-ms"}}<p class="field-error" id="polling-interval-ms-error">{{.}}</p>{{end}}
+    <label for="agent-max-concurrent">Maximum concurrent agents</label>
+    <p id="agent-max-concurrent-description">Runs; enter a whole number of at least 1.</p>
+    <input id="agent-max-concurrent" name="agent_max_concurrent" type="number" min="1" step="1" value="{{.Content.Values.AgentMaxConcurrent}}" aria-describedby="agent-max-concurrent-description{{with index .Content.Errors "agent-max-concurrent"}} agent-max-concurrent-error{{end}}"{{with index .Content.Errors "agent-max-concurrent"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "agent-max-concurrent"}}<p class="field-error" id="agent-max-concurrent-error">{{.}}</p>{{end}}
+    <label for="agent-max-turns">Maximum turns</label>
+    <p id="agent-max-turns-description">Turns per run; enter a whole number of at least 1.</p>
+    <input id="agent-max-turns" name="agent_max_turns" type="number" min="1" step="1" value="{{.Content.Values.AgentMaxTurns}}" aria-describedby="agent-max-turns-description{{with index .Content.Errors "agent-max-turns"}} agent-max-turns-error{{end}}"{{with index .Content.Errors "agent-max-turns"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "agent-max-turns"}}<p class="field-error" id="agent-max-turns-error">{{.}}</p>{{end}}
+    <label for="agent-max-retry-backoff-ms">Maximum retry backoff</label>
+    <p id="agent-max-retry-backoff-ms-description">Milliseconds; enter 0 or a positive whole number.</p>
+    <input id="agent-max-retry-backoff-ms" name="agent_max_retry_backoff_ms" type="number" min="0" step="1" value="{{.Content.Values.AgentMaxRetryBackoffMS}}" aria-describedby="agent-max-retry-backoff-ms-description{{with index .Content.Errors "agent-max-retry-backoff-ms"}} agent-max-retry-backoff-ms-error{{end}}"{{with index .Content.Errors "agent-max-retry-backoff-ms"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "agent-max-retry-backoff-ms"}}<p class="field-error" id="agent-max-retry-backoff-ms-error">{{.}}</p>{{end}}
+  </fieldset>
+
+  <fieldset{{if not .Content.View.StructuredAvailable}} disabled{{end}}>
+    <legend>Agent and Codex policy</legend>
+    <label for="codex-command">Codex command</label>
+    <p id="codex-command-description">Non-empty local command used to launch the Codex app server.</p>
+    <input id="codex-command" name="codex_command" type="text" value="{{.Content.Values.CodexCommand}}" aria-describedby="codex-command-description{{with index .Content.Errors "codex-command"}} codex-command-error{{end}}"{{with index .Content.Errors "codex-command"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "codex-command"}}<p class="field-error" id="codex-command-error">{{.}}</p>{{end}}
+    <label for="codex-approval-policy">Approval policy</label>
+    <p id="codex-approval-policy-description">Codex approval-policy name. Review repository policy before changing it.</p>
+    <input id="codex-approval-policy" name="codex_approval_policy" type="text" value="{{.Content.Values.CodexApprovalPolicy}}" aria-describedby="codex-approval-policy-description{{with index .Content.Errors "codex-approval-policy"}} codex-approval-policy-error{{end}}"{{with index .Content.Errors "codex-approval-policy"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "codex-approval-policy"}}<p class="field-error" id="codex-approval-policy-error">{{.}}</p>{{end}}
+    <label for="codex-thread-sandbox">Thread sandbox</label>
+    <p id="codex-thread-sandbox-description">Codex sandbox mode applied to the thread.</p>
+    <input id="codex-thread-sandbox" name="codex_thread_sandbox" type="text" value="{{.Content.Values.CodexThreadSandbox}}" aria-describedby="codex-thread-sandbox-description{{with index .Content.Errors "codex-thread-sandbox"}} codex-thread-sandbox-error{{end}}"{{with index .Content.Errors "codex-thread-sandbox"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "codex-thread-sandbox"}}<p class="field-error" id="codex-thread-sandbox-error">{{.}}</p>{{end}}
+    <label for="codex-turn-timeout-ms">Turn timeout</label><p id="codex-turn-timeout-ms-description">Milliseconds; positive whole number.</p>
+    <input id="codex-turn-timeout-ms" name="codex_turn_timeout_ms" type="number" min="1" step="1" value="{{.Content.Values.CodexTurnTimeoutMS}}" aria-describedby="codex-turn-timeout-ms-description{{with index .Content.Errors "codex-turn-timeout-ms"}} codex-turn-timeout-ms-error{{end}}"{{with index .Content.Errors "codex-turn-timeout-ms"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "codex-turn-timeout-ms"}}<p class="field-error" id="codex-turn-timeout-ms-error">{{.}}</p>{{end}}
+    <label for="codex-read-timeout-ms">Read timeout</label><p id="codex-read-timeout-ms-description">Milliseconds; positive whole number.</p>
+    <input id="codex-read-timeout-ms" name="codex_read_timeout_ms" type="number" min="1" step="1" value="{{.Content.Values.CodexReadTimeoutMS}}" aria-describedby="codex-read-timeout-ms-description{{with index .Content.Errors "codex-read-timeout-ms"}} codex-read-timeout-ms-error{{end}}"{{with index .Content.Errors "codex-read-timeout-ms"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "codex-read-timeout-ms"}}<p class="field-error" id="codex-read-timeout-ms-error">{{.}}</p>{{end}}
+    <label for="codex-stall-timeout-ms">Stall timeout</label><p id="codex-stall-timeout-ms-description">Milliseconds; use a negative value only when repository policy permits disabling this timeout.</p>
+    <input id="codex-stall-timeout-ms" name="codex_stall_timeout_ms" type="number" step="1" value="{{.Content.Values.CodexStallTimeoutMS}}" aria-describedby="codex-stall-timeout-ms-description{{with index .Content.Errors "codex-stall-timeout-ms"}} codex-stall-timeout-ms-error{{end}}"{{with index .Content.Errors "codex-stall-timeout-ms"}} aria-invalid="true"{{end}}>
+    {{with index .Content.Errors "codex-stall-timeout-ms"}}<p class="field-error" id="codex-stall-timeout-ms-error">{{.}}</p>{{end}}
+  </fieldset>
+
+  <fieldset{{if not .Content.View.StructuredAvailable}} disabled{{end}}>
+    <legend>Hooks</legend>
+    <p>Hook commands are trusted repository policy. Each field accepts a local command string.</p>
+    <label for="hook-after-create">After create</label><p id="hook-after-create-description">Command run after workspace creation.</p>
+    <input id="hook-after-create" name="hook_after_create" type="text" value="{{.Content.Values.HookAfterCreate}}" aria-describedby="hook-after-create-description{{with index .Content.Errors "hook-after-create"}} hook-after-create-error{{end}}"{{with index .Content.Errors "hook-after-create"}} aria-invalid="true"{{end}}>{{with index .Content.Errors "hook-after-create"}}<p class="field-error" id="hook-after-create-error">{{.}}</p>{{end}}
+    <label for="hook-before-run">Before run</label><p id="hook-before-run-description">Command run before an agent starts.</p>
+    <input id="hook-before-run" name="hook_before_run" type="text" value="{{.Content.Values.HookBeforeRun}}" aria-describedby="hook-before-run-description{{with index .Content.Errors "hook-before-run"}} hook-before-run-error{{end}}"{{with index .Content.Errors "hook-before-run"}} aria-invalid="true"{{end}}>{{with index .Content.Errors "hook-before-run"}}<p class="field-error" id="hook-before-run-error">{{.}}</p>{{end}}
+    <label for="hook-after-run">After run</label><p id="hook-after-run-description">Command run after an agent stops.</p>
+    <input id="hook-after-run" name="hook_after_run" type="text" value="{{.Content.Values.HookAfterRun}}" aria-describedby="hook-after-run-description{{with index .Content.Errors "hook-after-run"}} hook-after-run-error{{end}}"{{with index .Content.Errors "hook-after-run"}} aria-invalid="true"{{end}}>{{with index .Content.Errors "hook-after-run"}}<p class="field-error" id="hook-after-run-error">{{.}}</p>{{end}}
+    <label for="hook-before-remove">Before remove</label><p id="hook-before-remove-description">Command run before a workspace is removed.</p>
+    <input id="hook-before-remove" name="hook_before_remove" type="text" value="{{.Content.Values.HookBeforeRemove}}" aria-describedby="hook-before-remove-description{{with index .Content.Errors "hook-before-remove"}} hook-before-remove-error{{end}}"{{with index .Content.Errors "hook-before-remove"}} aria-invalid="true"{{end}}>{{with index .Content.Errors "hook-before-remove"}}<p class="field-error" id="hook-before-remove-error">{{.}}</p>{{end}}
+    <label for="hook-timeout-ms">Hook timeout</label><p id="hook-timeout-ms-description">Milliseconds; positive whole number.</p>
+    <input id="hook-timeout-ms" name="hook_timeout_ms" type="number" min="1" step="1" value="{{.Content.Values.HookTimeoutMS}}" aria-describedby="hook-timeout-ms-description{{with index .Content.Errors "hook-timeout-ms"}} hook-timeout-ms-error{{end}}"{{with index .Content.Errors "hook-timeout-ms"}} aria-invalid="true"{{end}}>{{with index .Content.Errors "hook-timeout-ms"}}<p class="field-error" id="hook-timeout-ms-error">{{.}}</p>{{end}}
+  </fieldset>
+
+  <fieldset{{if not .Content.View.StructuredAvailable}} disabled{{end}}>
+    <legend>Server settings</legend>
+    {{if .Content.View.PortOverride}}<p>The CLI <code>--port {{.Content.View.RequestedPort}}</code> override is active and takes precedence over this file.</p>{{end}}
+    <label for="server-port">Server port</label><p id="server-port-description">Port 0 lets the operating system choose; otherwise enter 1 through 65535. A change requires restart unless a CLI override is active.</p>
+    <input id="server-port" name="server_port" type="number" min="0" max="65535" step="1" value="{{.Content.Values.ServerPort}}" aria-describedby="server-port-description{{with index .Content.Errors "server-port"}} server-port-error{{end}}"{{with index .Content.Errors "server-port"}} aria-invalid="true"{{end}}>{{with index .Content.Errors "server-port"}}<p class="field-error" id="server-port-error">{{.}}</p>{{end}}
+    <label for="server-operator-response-timeout-ms">Operator response timeout</label><p id="server-operator-response-timeout-ms-description">Milliseconds; at least 30000.</p>
+    <input id="server-operator-response-timeout-ms" name="server_operator_response_timeout_ms" type="number" min="30000" step="1" value="{{.Content.Values.ServerOperatorResponseTimeoutMS}}" aria-describedby="server-operator-response-timeout-ms-description{{with index .Content.Errors "server-operator-response-timeout-ms"}} server-operator-response-timeout-ms-error{{end}}"{{with index .Content.Errors "server-operator-response-timeout-ms"}} aria-invalid="true"{{end}}>{{with index .Content.Errors "server-operator-response-timeout-ms"}}<p class="field-error" id="server-operator-response-timeout-ms-error">{{.}}</p>{{end}}
+  </fieldset>
+  <button id="save-structured" type="submit">Save structured settings</button>
 </form>
+
+<section aria-labelledby="credential-heading">
+  <h2 id="credential-heading">Credential management</h2>
+  <p>Credentials are stored by the operating system and never displayed here.</p>
+  <p>Current state: <strong>{{if .Content.Credential.Label}}{{.Content.Credential.Label}}{{else}}Not configured{{end}}</strong></p>
+  <form id="credential-form" method="post" action="/api/v1/config/credential">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <input type="hidden" name="submit_action" value="replace-credential">
+    <label for="credential">New {{if .Content.Credential.TrackerKind}}{{.Content.Credential.TrackerKind}}{{else}}tracker{{end}} credential</label>
+    <p id="credential-description">Enter a replacement credential. The existing value is never retrieved for this page.</p>
+    <input id="credential" name="credential" type="password" autocomplete="new-password" aria-describedby="credential-description{{with index .Content.Errors "credential"}} credential-error{{end}}"{{with index .Content.Errors "credential"}} aria-invalid="true"{{end}}{{if or .Content.Credential.EnvironmentManaged (not .Content.View.StructuredAvailable)}} disabled{{end}}>
+    {{with index .Content.Errors "credential"}}<p class="field-error" id="credential-error">{{.}}</p>{{end}}
+    <div class="button-row">
+      <button id="replace-credential" type="submit"{{if or .Content.Credential.EnvironmentManaged (not .Content.View.StructuredAvailable)}} disabled{{end}}>Replace credential</button>
+      <button id="delete-credential" type="submit" formaction="/api/v1/config/credential/delete" name="request_delete" value="1"{{if or .Content.Credential.EnvironmentManaged (not .Content.View.StructuredAvailable)}} disabled{{end}}>Delete credential</button>
+    </div>
+  </form>
+</section>
+
+<dialog id="credential-delete-dialog" aria-labelledby="credential-delete-title" aria-describedby="credential-delete-description"{{if .Content.DeleteConfirmation}} open{{end}}>
+  <h2 id="credential-delete-title">Delete credential?</h2>
+  <p id="credential-delete-description">Delete the stored credential for the selected tracker? Symphony will not display or ask you to transcribe the secret.</p>
+  {{with index .Content.Errors "delete-credential"}}<p class="field-error" id="delete-credential-error">{{.}}</p>{{end}}
+  <div class="button-row">
+    <button id="credential-delete-cancel" type="button">Cancel</button>
+    <button id="credential-delete-confirm" type="submit" form="credential-form" formaction="/api/v1/config/credential/delete" name="confirm_delete" value="Delete credential">Delete credential</button>
+  </div>
+</dialog>
+
+<form id="complete-workflow-form" method="post" action="/api/v1/config/save">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <input type="hidden" name="mode" value="raw">
+  <input type="hidden" name="base_digest" value="{{.Content.View.Digest}}">
+  <input type="hidden" name="submit_action" value="save-raw">
+  <fieldset>
+    <legend>Complete workflow</legend>
+    <p>This editor creates or replaces the complete WORKFLOW.md after full core, template, and provider validation.</p>
+    <label for="raw-source">Complete WORKFLOW.md</label>
+    <p id="raw-source-description">Include YAML front matter, closing delimiter, and Markdown prompt. Source bytes are saved exactly as submitted.</p>
+    <textarea id="raw-source" name="raw_source" rows="24" spellcheck="false" aria-describedby="raw-source-description{{with index .Content.Errors "raw-source"}} raw-source-error{{end}}"{{with index .Content.Errors "raw-source"}} aria-invalid="true"{{end}}>{{.Content.RawSource}}</textarea>
+    {{with index .Content.Errors "raw-source"}}<p class="field-error" id="raw-source-error">{{.}}</p>{{end}}
+  </fieldset>
+  <div class="button-row">
+    <button id="validate-raw" type="submit" formaction="/api/v1/config/validate">Validate complete workflow</button>
+    <button id="save-raw" type="submit">Save complete workflow</button>
+  </div>
+</form>
+
 <p><a href="/configuration#documentation">Configuration documentation</a></p>
 <section id="documentation" tabindex="-1" aria-labelledby="configuration-help-heading">
   <h2 id="configuration-help-heading">Configuration help</h2>
-  <p>Review each setting before saving. Empty values leave the related integration unconfigured.</p>
-  <ul>
-    <li>The workspace root identifies where Symphony may run work.</li>
-    <li>Maximum concurrent runs limits how many issues Symphony processes at once.</li>
-    <li>The approval policy controls when Codex pauses for confirmation.</li>
-  </ul>
+  <p>Use structured settings for known fields and the complete editor to create, repair, or review every byte. Validation never saves changes.</p>
 </section>
 {{end}}

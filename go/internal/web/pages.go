@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/coryj627/symphony/go/internal/app"
 	webassets "github.com/coryj627/symphony/go/web"
 )
 
@@ -19,8 +20,9 @@ type Renderer struct {
 
 // PageHandler serves the application pages and their semantic error documents.
 type PageHandler struct {
-	renderer *Renderer
-	mux      *http.ServeMux
+	renderer      *Renderer
+	mux           *http.ServeMux
+	configService *app.ConfigService
 }
 
 // NewRenderer parses every embedded page with the shared shell and partials.
@@ -55,6 +57,16 @@ func (r *Renderer) Render(w http.ResponseWriter, templateName string, page Page)
 // NewPageHandler returns the placeholder shell routes used until live view
 // models are supplied by later phases.
 func NewPageHandler() (*PageHandler, error) {
+	return newPageHandler(nil, "configure")
+}
+
+// NewConfiguredPageHandler composes the protected shell with live
+// configuration state and mutations.
+func NewConfiguredPageHandler(service *app.ConfigService, mode string) (*PageHandler, error) {
+	return newPageHandler(service, mode)
+}
+
+func newPageHandler(service *app.ConfigService, mode string) (*PageHandler, error) {
 	renderer, err := NewRenderer()
 	if err != nil {
 		return nil, err
@@ -64,14 +76,30 @@ func NewPageHandler() (*PageHandler, error) {
 		return nil, err
 	}
 	mux := http.NewServeMux()
-	handler := &PageHandler{renderer: renderer, mux: mux}
+	handler := &PageHandler{renderer: renderer, mux: mux, configService: service}
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFiles))))
-	mux.HandleFunc("GET /{$}", renderPage(renderer, "overview", func(*http.Request) Page {
-		return Page{
-			Title: "Overview — Symphony", Route: "/", Heading: "Overview", Mode: "configure",
+	mux.HandleFunc("GET /{$}", renderPage(renderer, "overview", func(request *http.Request) Page {
+		page := Page{
+			Title: "Overview — Symphony", Route: "/", Heading: "Overview", Mode: mode,
 			Status:  "Scheduler configuration is ready.",
-			Content: overviewContent{Repository: "Repository not selected"},
+			Content: overviewContent{Repository: "Repository not selected", Mode: mode},
 		}
+		if service == nil {
+			return page
+		}
+		page.Status = "Configuration mode is ready. No scheduler is running."
+		if mode == "run" {
+			page.Status = "Run mode is ready. Phase 1 starts no scheduler."
+		}
+		view, err := service.View(request.Context())
+		if err != nil {
+			page.Status = "Configuration status is unavailable. Review the Configuration page."
+			return page
+		}
+		if view.StructuredAvailable {
+			page.Content = overviewContent{Repository: view.Tracker.Scope, Mode: mode}
+		}
+		return page
 	}))
 	mux.HandleFunc("GET /issues", renderPage(renderer, "issues", func(*http.Request) Page {
 		return Page{Title: "Issues — Symphony", Route: "/issues", Heading: "Issues", Mode: "configure", Status: "No issues are available.", Content: issuesContent{}}
@@ -87,9 +115,13 @@ func NewPageHandler() (*PageHandler, error) {
 	mux.HandleFunc("GET /activity", renderPage(renderer, "activity", func(*http.Request) Page {
 		return Page{Title: "Activity — Symphony", Route: "/activity", Heading: "Activity", Mode: "configure", Status: "No activity has been recorded.", Content: activityContent{}}
 	}))
-	mux.HandleFunc("GET /configuration", renderPage(renderer, "configuration", func(*http.Request) Page {
-		return Page{Title: "Configuration — Symphony", Route: "/configuration", Heading: "Configuration", Mode: "configure", Status: "Configuration has not been loaded.", Content: configurationContent{}}
-	}))
+	if service == nil {
+		mux.HandleFunc("GET /configuration", renderPage(renderer, "configuration", func(*http.Request) Page {
+			return Page{Title: "Configuration — Symphony", Route: "/configuration", Heading: "Configuration", Mode: mode, Status: "Configuration has not been loaded.", Content: configurationContent{Errors: map[string]string{}}}
+		}))
+	} else {
+		registerConfigurationRoutes(handler, service, mode)
+	}
 	mux.HandleFunc("GET /logs", renderPage(renderer, "logs", func(*http.Request) Page {
 		return Page{Title: "Logs — Symphony", Route: "/logs", Heading: "Logs", Mode: "configure", Status: "No log entries are available.", Content: logsContent{}}
 	}))

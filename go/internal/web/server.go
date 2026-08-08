@@ -61,6 +61,8 @@ type Server struct {
 	serveWG         sync.WaitGroup
 	stopCh          chan struct{}
 	stopOnce        sync.Once
+	done            chan error
+	doneOnce        sync.Once
 }
 
 // NewServer constructs a protected server without opening listeners.
@@ -96,6 +98,7 @@ func NewServer(options Options) (*Server, error) {
 		launchValue:    launchValue,
 		shutdownDone:   make(chan struct{}),
 		stopCh:         make(chan struct{}),
+		done:           make(chan error, 1),
 	}, nil
 }
 
@@ -152,10 +155,26 @@ func (s *Server) Start(ctx context.Context) (Bound, error) {
 		s.serveWG.Add(1)
 		go s.serve(httpServer, listener)
 	}
+	go s.awaitServeCompletion()
 	go s.stopOnContext(ctx)
 
 	return bound, nil
 }
+
+func (s *Server) awaitServeCompletion() {
+	s.serveWG.Wait()
+	s.mu.Lock()
+	err := s.serveErr
+	s.mu.Unlock()
+	s.doneOnce.Do(func() {
+		s.done <- err
+		close(s.done)
+	})
+}
+
+// Done reports normal listener completion with nil and unexpected serve
+// failure with a bounded, capability-free error.
+func (s *Server) Done() <-chan error { return s.done }
 
 func (s *Server) serve(httpServer *http.Server, listener net.Listener) {
 	defer s.serveWG.Done()

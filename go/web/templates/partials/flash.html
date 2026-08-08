@@ -1,1 +1,1 @@
-{{define "flash"}}<div class="persistent-status status-summary" role="status" aria-live="polite">{{if .Flash}}{{.Flash}}{{else}}{{if eq .Route "/"}}<span aria-hidden="true">●</span> {{end}}{{.Status}}{{end}}</div>{{end}}
+{{define "flash"}}<div class="persistent-status status-summary{{if eq .FlashKind "warning"}} status-warning{{end}}" role="status" aria-live="polite">{{if .Flash}}{{.Flash}}{{else}}{{if eq .Route "/"}}<span aria-hidden="true">●</span> {{end}}{{.Status}}{{end}}</div>{{end}}

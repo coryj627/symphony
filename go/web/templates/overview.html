@@ -4,7 +4,7 @@
   <dl class="identity-list">
     <div><dt>Service</dt><dd>Symphony</dd></div>
     <div><dt>Repository</dt><dd>{{.Content.Repository}}</dd></div>
-    <div><dt>Mode</dt><dd>Configure</dd></div>
+    <div><dt>Mode</dt><dd>{{if eq .Content.Mode "run"}}Run{{else}}Configure{{end}}</dd></div>
   </dl>
 </section>
 <section aria-labelledby="work-heading">

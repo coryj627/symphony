@@ -89,6 +89,40 @@ func TestMutationRejectsNullOrigin(t *testing.T) {
 	}
 }
 
+func TestMutationAcceptsNullOriginOnlyWithExactSameOriginFetchMetadata(t *testing.T) {
+	server, cookie, csrf := csrfTestServer(t)
+	headers := http.Header{
+		"Content-Type":   {"application/x-www-form-urlencoded"},
+		"Origin":         {"null"},
+		"Sec-Fetch-Site": {"same-origin"},
+	}
+	form := url.Values{"csrf_token": {csrf}, "sentinel": {"present"}}
+	res := authenticatedRequest(t, server, cookie, http.MethodPost, "/api/v1/config/save", strings.NewReader(form.Encode()), headers)
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("same-origin native form got %d", res.StatusCode)
+	}
+}
+
+func TestMutationRejectsNullOriginWithoutExactSameOriginFetchMetadata(t *testing.T) {
+	for _, metadata := range []string{"", "none", "cross-site"} {
+		t.Run("fetch-site-"+metadata, func(t *testing.T) {
+			server, cookie, csrf := csrfTestServer(t)
+			headers := http.Header{
+				"Content-Type": {"application/json"},
+				"X-CSRF-Token": {csrf},
+				"Origin":       {"null"},
+			}
+			if metadata != "" {
+				headers.Set("Sec-Fetch-Site", metadata)
+			}
+			res := authenticatedRequest(t, server, cookie, http.MethodPost, "/api/v1/config/validate", strings.NewReader("{}"), headers)
+			if res.StatusCode != http.StatusForbidden {
+				t.Fatalf("Sec-Fetch-Site %q got %d", metadata, res.StatusCode)
+			}
+		})
+	}
+}
+
 func TestMutationRejectsCrossSiteFetchMetadata(t *testing.T) {
 	server, cookie, csrf := csrfTestServer(t)
 	headers := http.Header{

@@ -39,7 +39,8 @@ func authorizeMethod(r *http.Request, sessions *sessionStore, session authentica
 }
 
 func sameOriginSignals(r *http.Request) bool {
-	switch strings.ToLower(r.Header.Get("Sec-Fetch-Site")) {
+	fetchSite := strings.ToLower(r.Header.Get("Sec-Fetch-Site"))
+	switch fetchSite {
 	case "", "none", "same-origin":
 	default:
 		return false
@@ -47,6 +48,14 @@ func sameOriginSignals(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return true
+	}
+	// Referrer-Policy: no-referrer intentionally gives native Chromium form
+	// submissions an opaque Origin. Accept that narrow browser case only when
+	// independently supplied fetch metadata says the navigation is same-origin;
+	// the protected Host, session, content type, method, and CSRF checks still
+	// run before dispatch.
+	if origin == "null" {
+		return fetchSite == "same-origin"
 	}
 	parsed, err := url.Parse(origin)
 	if err != nil || parsed.Scheme != "http" || parsed.Host != r.Host || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
