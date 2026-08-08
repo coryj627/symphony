@@ -214,14 +214,18 @@ func (handler *PageHandler) credentialReplace(service *app.ConfigService, mode s
 		}
 		credential, ok := exactFormValue(request.PostForm, "credential")
 		binding, bindingOK := credentialBinding(request.PostForm)
-		if !ok || !bindingOK || hasUnexpectedFields(request.PostForm, map[string]bool{
+		malformed := !ok || !bindingOK || hasUnexpectedFields(request.PostForm, map[string]bool{
 			"csrf_token": true, "credential": true, "credential_tracker_kind": true, "credential_base_digest": true, "submit_action": true,
-		}) {
-			credential = ""
-		}
+		})
 		buffer := []byte(credential)
 		request.PostForm.Del("credential")
 		request.Form.Del("credential")
+		if malformed {
+			clear(buffer)
+			credential = ""
+			handler.renderSubmittedErrors(w, http.StatusUnprocessableEntity, request, service, mode, app.ConfigValues{}, "", "", []workflow.FieldError{{Field: "credential", Code: "invalid_payload", Message: "Reload the page before entering a credential."}}, nil, false)
+			return
+		}
 		err := service.ReplaceCredential(request.Context(), binding, buffer)
 		clear(buffer)
 		credential = ""

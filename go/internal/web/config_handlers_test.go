@@ -308,6 +308,46 @@ func TestCredentialMutationsRejectDisplayedBindingAfterProviderSwitch(t *testing
 	}
 }
 
+func TestCredentialReplaceRejectsMalformedBindingBeforeVault(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		mutate func(url.Values)
+	}{
+		{name: "absent tracker kind", mutate: func(values url.Values) { values.Del("credential_tracker_kind") }},
+		{name: "absent digest", mutate: func(values url.Values) { values.Del("credential_base_digest") }},
+		{name: "duplicate tracker kind", mutate: func(values url.Values) { values.Add("credential_tracker_kind", "linear") }},
+		{name: "duplicate digest", mutate: func(values url.Values) { values.Add("credential_base_digest", "duplicate-digest") }},
+		{name: "blank tracker kind", mutate: func(values url.Values) { values.Set("credential_tracker_kind", "") }},
+		{name: "blank digest", mutate: func(values url.Values) { values.Set("credential_base_digest", "") }},
+		{name: "unexpected binding field", mutate: func(values url.Values) { values.Set("credential_binding_extra", "binding-field-canary") }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, path, vault := configuredHTTPApp(t, validGitHubSource, secrets.Status{})
+			cookie := exchange(t, server)
+			values := credentialForm(csrfForCookie(t, server, cookie), "github", digestOf(validGitHubSource))
+			values.Set("credential", "malformed-credential-canary")
+			test.mutate(values)
+			response := postForm(t, server, cookie, "/api/v1/config/credential", values)
+			body := readResponse(t, response)
+			if response.StatusCode != http.StatusUnprocessableEntity {
+				t.Fatalf("malformed binding = %d, want 422", response.StatusCode)
+			}
+			if vault.putCalls != 0 || vault.deleteCalls != 0 {
+				t.Fatalf("malformed binding touched vault: put %d delete %d", vault.putCalls, vault.deleteCalls)
+			}
+			if mustReadFile(t, path) != validGitHubSource {
+				t.Fatal("malformed binding mutated workflow")
+			}
+			if strings.Contains(body, "malformed-credential-canary") || strings.Contains(body, "binding-field-canary") {
+				t.Fatal("malformed binding response disclosed submitted values")
+			}
+			assertContains(t, body, "Reload the page before entering a credential.")
+		})
+	}
+}
+
 func TestCredentialDeleteFailureKeepsLinkedSummaryInsideConfirmation(t *testing.T) {
 	t.Parallel()
 	server, _, vault := configuredHTTPApp(t, validGitHubSource, secrets.Status{Present: true})
