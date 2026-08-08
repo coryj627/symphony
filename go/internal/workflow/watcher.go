@@ -74,7 +74,27 @@ func (store *FileStore) reloadFromWatcher(ctx context.Context) {
 			return
 		}
 		digest := digestSource(source)
-		snapshot, validation, candidateErr := store.snapshotFromSource(source)
+		type validationOutcome struct {
+			snapshot   Snapshot
+			validation ValidationResult
+			err        error
+		}
+		result := make(chan validationOutcome, 1)
+		go func() {
+			snapshot, validation, candidateErr := store.snapshotFromSource(source)
+			result <- validationOutcome{snapshot, validation, candidateErr}
+		}()
+		var snapshot Snapshot
+		var validation ValidationResult
+		var candidateErr error
+		select {
+		case <-ctx.Done():
+			return
+		case <-store.stopping:
+			return
+		case outcome := <-result:
+			snapshot, validation, candidateErr = outcome.snapshot, outcome.validation, outcome.err
+		}
 		latest, err := os.ReadFile(store.path)
 		if err != nil || digestSource(latest) != digest {
 			continue
@@ -86,7 +106,9 @@ func (store *FileStore) reloadFromWatcher(ctx context.Context) {
 			store.publish(Change{Digest: digest, Validation: validation})
 			return
 		}
-		store.installSnapshot(snapshot, true)
+		if !store.installSnapshotIfOpen(snapshot, true) {
+			return
+		}
 		return
 	}
 }

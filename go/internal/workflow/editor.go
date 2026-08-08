@@ -164,7 +164,9 @@ func (store *FileStore) Save(ctx context.Context, command SaveCommand) (Snapshot
 		return Snapshot{}, ErrStoreClosed
 	default:
 	}
-	store.installSnapshot(snapshot, true)
+	if !store.installSnapshotIfOpen(snapshot, true) {
+		return snapshot, ErrStoreClosed
+	}
 	if replaceErr != nil {
 		return snapshot, replaceErr
 	}
@@ -386,6 +388,20 @@ func setStringSlicePointer(root *yaml.Node, path []string, value *[]string) {
 		}
 		child.Value = item
 		node.Content = append(node.Content, child)
+	}
+	for index, child := range old {
+		if !used[index] {
+			detachDroppedAnchors(root, child)
+		}
+	}
+}
+
+func detachDroppedAnchors(root, node *yaml.Node) {
+	if node.Anchor != "" {
+		deAliasConsumers(root, node, cloneYAMLNode(node))
+	}
+	for _, child := range node.Content {
+		detachDroppedAnchors(root, child)
 	}
 }
 

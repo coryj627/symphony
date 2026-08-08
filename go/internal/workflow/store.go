@@ -36,6 +36,7 @@ type FileStore struct {
 	pathMu           *pathGate
 	lookup           LookupEnv
 	providerValidate ProviderValidator
+	beforeInstall    func()
 	atomic           atomicOperations
 
 	stateMu  sync.RWMutex
@@ -224,7 +225,9 @@ func (store *FileStore) loadStableLocked(ctx context.Context) (Snapshot, error) 
 			return Snapshot{}, ErrStoreClosed
 		default:
 		}
-		store.installSnapshot(snapshot, false)
+		if !store.installSnapshotIfOpen(snapshot, false) {
+			return Snapshot{}, ErrStoreClosed
+		}
 		return snapshot, nil
 	}
 	return Snapshot{}, ErrSaveConflict
@@ -273,6 +276,19 @@ func (store *FileStore) installSnapshot(snapshot Snapshot, publish bool) {
 	if publish && changed {
 		store.publish(Change{Snapshot: cloneSnapshot(snapshot), Digest: snapshot.Digest, Validation: validResult(nil)})
 	}
+}
+
+func (store *FileStore) installSnapshotIfOpen(snapshot Snapshot, publish bool) bool {
+	if store.beforeInstall != nil {
+		store.beforeInstall()
+	}
+	store.lifecycleMu.Lock()
+	defer store.lifecycleMu.Unlock()
+	if store.closing {
+		return false
+	}
+	store.installSnapshot(snapshot, publish)
+	return true
 }
 
 func cloneSnapshot(snapshot Snapshot) Snapshot {
