@@ -410,12 +410,19 @@ func (s *sanitizer) sanitizeParsedURL(source *url.URL) (string, bool) {
 		copyURL.Opaque = s.snapshot.redactedMarker
 	}
 
-	if s.credentialInURLValue(copyURL.Host, false) {
+	hostContainsCredential, ok := s.credentialInURLValue(copyURL.Host)
+	if !ok {
+		return "", false
+	}
+	if hostContainsCredential {
 		return s.snapshot.redactedMarker, true
 	}
 	copyURL.Host = s.cleanURLComponent(copyURL.Host)
 	copyURL.Scheme = s.cleanURLComponent(copyURL.Scheme)
-	copyURL.Path = s.cleanURLPath(copyURL.Path)
+	copyURL.Path, ok = s.cleanURLPath(copyURL.Path)
+	if !ok {
+		return "", false
+	}
 	copyURL.RawPath = ""
 
 	if copyURL.RawQuery != "" {
@@ -426,7 +433,20 @@ func (s *sanitizer) sanitizeParsedURL(source *url.URL) (string, bool) {
 		cleanQuery := make(url.Values, len(query))
 		for key, values := range query {
 			cleanKey := s.cleanURLComponent(key)
-			if sensitiveURLKey(key) || sensitiveURLKey(cleanKey) {
+			keyContainsCredential := false
+			sensitive, valid := inspectURLDecodings(key, func(current string) bool {
+				if s.credentialInURLForm(current) {
+					keyContainsCredential = true
+				}
+				return keyContainsCredential || sensitiveURLKey(current)
+			})
+			if !valid {
+				return "", false
+			}
+			if keyContainsCredential {
+				cleanKey = s.snapshot.redactedMarker
+			}
+			if sensitive || sensitiveURLKey(cleanKey) {
 				count := max(1, len(values))
 				cleanQuery[cleanKey] = make([]string, count)
 				for index := range cleanQuery[cleanKey] {
@@ -436,7 +456,11 @@ func (s *sanitizer) sanitizeParsedURL(source *url.URL) (string, bool) {
 			}
 			cleanValues := make([]string, 0, len(values))
 			for _, value := range values {
-				if s.credentialInURLValue(value, true) {
+				containsCredential, valid := s.credentialInURLValue(value)
+				if !valid {
+					return "", false
+				}
+				if containsCredential {
 					cleanValues = append(cleanValues, s.snapshot.redactedMarker)
 				} else {
 					cleanValues = append(cleanValues, s.cleanURLComponent(value))
@@ -506,50 +530,56 @@ func (s *sanitizer) cleanURLComponent(value string) string {
 	return s.redactCredentialText(value)
 }
 
-func (s *sanitizer) cleanURLPath(value string) string {
-	current := value
-	for attempts := 0; attempts < 4; attempts++ {
-		redacted := s.redactCredentialText(current)
-		if redacted != current {
-			return s.cleanURLComponent(redacted)
-		}
-		next, err := url.PathUnescape(current)
-		if err != nil || next == current {
-			break
-		}
-		current = next
+func (s *sanitizer) cleanURLPath(value string) (string, bool) {
+	containsCredential, ok := s.credentialInURLValue(value)
+	if !ok {
+		return "", false
 	}
-	return s.cleanURLComponent(value)
+	if containsCredential {
+		return s.snapshot.redactedMarker, true
+	}
+	return s.cleanURLComponent(value), true
 }
 
-func (s *sanitizer) credentialInURLValue(value string, query bool) bool {
+func (s *sanitizer) credentialInURLValue(value string) (bool, bool) {
+	return inspectURLDecodings(value, s.credentialInURLForm)
+}
+
+func (s *sanitizer) credentialInURLForm(value string) bool {
+	value = stripANSIAndControls(value)
+	value = strings.ToValidUTF8(value, "�")
+	return s.redactCredentialText(value) != value
+}
+
+func inspectURLDecodings(value string, matches func(string) bool) (bool, bool) {
 	current := value
-	for attempts := 0; attempts < 4; attempts++ {
-		if s.redactCredentialText(current) != current {
-			return true
+	matched := false
+	// ParseQuery has already consumed form-encoded '+'. Every remaining
+	// percent-decoding step removes at least two bytes, and the final allowance
+	// proves the true fixpoint.
+	maxAttempts := len(value)/2 + 1
+	for attempts := 0; attempts < maxAttempts; attempts++ {
+		if matches(current) {
+			matched = true
 		}
-		var (
-			next string
-			err  error
-		)
-		if query {
-			next, err = url.QueryUnescape(current)
-		} else {
-			next, err = url.PathUnescape(current)
-		}
+		next, err := url.PathUnescape(current)
 		if err != nil {
-			return true
+			return false, false
 		}
 		if next == current {
-			return false
+			return matched, true
+		}
+		if len(next) >= len(current) {
+			return false, false
 		}
 		current = next
 	}
-	return s.redactCredentialText(current) != current
+	return false, false
 }
 
 func (s *sanitizer) riskyURLCandidate(candidate string) bool {
-	if strings.ContainsAny(candidate, "@?#%") || s.credentialInURLValue(candidate, false) {
+	containsCredential, valid := s.credentialInURLValue(candidate)
+	if strings.ContainsAny(candidate, "@?#%") || !valid || containsCredential {
 		return true
 	}
 	lower := strings.ToLower(candidate)
@@ -728,35 +758,33 @@ func stripANSIAndControls(value string) string {
 				continue
 			}
 		}
-		if value[index] == 0x9b {
-			index = skipANSISequenceCSI(value, index+1)
-			continue
-		}
-		if value[index] == 0x9d {
-			index = skipANSISequenceOSC(value, index+1)
-			continue
-		}
-		if value[index] == 0xc2 && index+1 < len(value) {
-			switch value[index+1] {
-			case 0x9b:
-				index = skipANSISequenceCSI(value, index+2)
-				continue
-			case 0x9d:
-				index = skipANSISequenceOSC(value, index+2)
-				continue
-			}
-		}
-		if value[index] >= 0x80 && value[index] <= 0x9f {
-			index++
-			continue
-		}
 		runeValue, size := utf8.DecodeRuneInString(value[index:])
 		if runeValue == utf8.RuneError && size == 1 {
+			switch value[index] {
+			case 0x9b:
+				index = skipANSISequenceCSI(value, index+1)
+				continue
+			case 0x9d:
+				index = skipANSISequenceOSC(value, index+1)
+				continue
+			}
+			if value[index] >= 0x80 && value[index] <= 0x9f {
+				index++
+				continue
+			}
 			builder.WriteRune(utf8.RuneError)
 			index++
 			continue
 		}
 		index += size
+		switch runeValue {
+		case 0x9b:
+			index = skipANSISequenceCSI(value, index)
+			continue
+		case 0x9d:
+			index = skipANSISequenceOSC(value, index)
+			continue
+		}
 		if runeValue == '\t' || runeValue == '\n' {
 			builder.WriteRune(runeValue)
 			continue
@@ -782,16 +810,21 @@ func skipANSISequenceCSI(value string, index int) int {
 
 func skipANSISequenceOSC(value string, index int) int {
 	for index < len(value) {
-		switch {
-		case value[index] == 0x07 || value[index] == 0x9c:
-			return index + 1
-		case value[index] == 0xc2 && index+1 < len(value) && value[index+1] == 0x9c:
+		if value[index] == 0x1b && index+1 < len(value) && value[index+1] == '\\' {
 			return index + 2
-		case value[index] == 0x1b && index+1 < len(value) && value[index+1] == '\\':
-			return index + 2
-		default:
-			index++
 		}
+		runeValue, size := utf8.DecodeRuneInString(value[index:])
+		if runeValue == utf8.RuneError && size == 1 {
+			if value[index] == 0x9c {
+				return index + 1
+			}
+			index++
+			continue
+		}
+		if runeValue == 0x07 || runeValue == 0x9c {
+			return index + size
+		}
+		index += size
 	}
 	return len(value)
 }

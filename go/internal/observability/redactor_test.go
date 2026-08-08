@@ -243,6 +243,167 @@ func TestRedactorSanitizesEncodedTypedURLWithoutMutatingCaller(t *testing.T) {
 	}
 }
 
+func TestRedactorSanitizesURLPercentEncodingToFixpoint(t *testing.T) {
+	t.Parallel()
+
+	redactor := NewRedactor(nil, nil)
+	redactor.RegisterSecret([]byte("ordinary/credential"))
+	tests := []struct {
+		name      string
+		input     string
+		forbidden string
+	}{
+		{
+			name:      "multiply encoded sensitive key",
+			input:     "https://example.test/docs?t%256Fken=short-secret&safe=yes",
+			forbidden: "short-secret",
+		},
+		{
+			name:      "whitespace and case normalized sensitive key",
+			input:     "https://example.test/docs?%2520ToKeN%2520=short-secret&safe=yes",
+			forbidden: "short-secret",
+		},
+		{
+			name:      "multiply encoded registered credential query value",
+			input:     "https://example.test/docs?next=ordinary%2525252525252Fcredential&safe=yes",
+			forbidden: "ordinary",
+		},
+		{
+			name:      "multiply encoded registered credential query key",
+			input:     "https://example.test/docs?ordinary%2525252525252Fcredential=safe&safe=yes",
+			forbidden: "ordinary",
+		},
+		{
+			name:      "multiply encoded registered credential path",
+			input:     "https://example.test/files/ordinary%2525252525252Fcredential?safe=yes",
+			forbidden: "ordinary",
+		},
+		{
+			name:      "percent decoded control reconstructs query credential",
+			input:     "https://example.test/docs?next=ordinary%251B%255B31m%252Fcredential&safe=yes",
+			forbidden: "ordinary",
+		},
+		{
+			name:      "percent decoded control reconstructs path credential",
+			input:     "https://example.test/files/ordinary%251B%255B31m%252Fcredential?safe=yes",
+			forbidden: "ordinary",
+		},
+		{
+			name:      "multiply encoded common credential",
+			input:     "https://example.test/docs?next=ghp%252525255Fabcdefghijklmnopqrstuvwxyz0123456789&safe=yes",
+			forbidden: "ghp",
+		},
+		{
+			name:      "embedded multiply encoded credential",
+			input:     "before https://example.test/docs?next=ordinary%2525252525252Fcredential&safe=yes after",
+			forbidden: "ordinary",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := safeSprint(redactor.Value(test.input))
+			if strings.Contains(got, test.forbidden) {
+				t.Fatal("multiply encoded URL credential survived sanitization")
+			}
+			if !strings.Contains(got, "safe=yes") {
+				t.Fatal("safe query diagnostic was removed")
+			}
+			if strings.HasPrefix(test.input, "before ") && (!strings.Contains(got, "before ") || !strings.Contains(got, " after")) {
+				t.Fatal("safe surrounding text was removed")
+			}
+		})
+	}
+}
+
+func TestRedactorSanitizesDeeplyEncodedTypedURLWithoutMutatingCaller(t *testing.T) {
+	t.Parallel()
+
+	typed, err := url.Parse("https://example.test/files/ordinary%2525252525252Fcredential?next=ordinary%2525252525252Fcredential&safe=yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := typed.String()
+	redactor := NewRedactor(nil, nil)
+	redactor.RegisterSecret([]byte("ordinary/credential"))
+	got := safeSprint(redactor.Value(typed))
+	if typed.String() != before {
+		t.Fatal("caller URL was mutated")
+	}
+	if strings.Contains(got, "ordinary") {
+		t.Fatal("deeply encoded typed URL credential survived sanitization")
+	}
+}
+
+func TestRedactorFailsClosedForMalformedTypedURLPathWithoutMutatingCaller(t *testing.T) {
+	t.Parallel()
+
+	typed := &url.URL{
+		Scheme:   "https",
+		Host:     "example.test",
+		Path:     "/%zz/ordinary%2Fcredential",
+		RawQuery: "safe=yes",
+	}
+	before := typed.String()
+	redactor := NewRedactor(nil, nil)
+	redactor.RegisterSecret([]byte("ordinary/credential"))
+	got := redactor.Value(typed)
+	if typed.String() != before {
+		t.Fatal("caller URL was mutated")
+	}
+	if got != redactedMarker {
+		t.Fatal("malformed typed URL path did not fail closed")
+	}
+}
+
+func TestRedactorFailsClosedAfterDeepURLDecodeError(t *testing.T) {
+	t.Parallel()
+
+	malformed := "%zz/safe"
+	for range 12 {
+		malformed = url.QueryEscape(malformed)
+	}
+	redactor := NewRedactor(nil, nil)
+	got := redactor.Value("https://example.test/docs?next=" + malformed)
+	if got != redactedMarker {
+		t.Fatal("deep URL decoding error did not fail closed")
+	}
+}
+
+func TestRedactorFailsClosedWhenSensitiveKeyPrecedesDecodeError(t *testing.T) {
+	t.Parallel()
+
+	redactor := NewRedactor(nil, nil)
+	got := redactor.Value("https://example.test/docs?token%2525zz=short-secret")
+	if got != redactedMarker {
+		t.Fatal("sensitive query key stopped decoding before a later error")
+	}
+}
+
+func TestRedactorPreservesDeeplyEncodedSafeURLText(t *testing.T) {
+	t.Parallel()
+
+	redactor := NewRedactor(nil, nil)
+	redactor.RegisterSecret([]byte("ordinary/credential"))
+	input := "before https://example.test/files/report%2525252Etxt?next=chapter%2525252Done&safe=yes after"
+	got := safeSprint(redactor.Value(input))
+	for _, safe := range []string{"before ", "example.test", "report", "chapter", "safe=yes", " after"} {
+		if !strings.Contains(got, safe) {
+			t.Fatal("safe URL diagnostic or surrounding text was removed")
+		}
+	}
+}
+
+func TestRedactorPreservesLiteralPlusIntroducedByQueryDecoding(t *testing.T) {
+	t.Parallel()
+
+	redactor := NewRedactor(nil, nil)
+	redactor.RegisterSecret([]byte("a b"))
+	got := safeSprint(redactor.Value("https://example.test/docs?q=a%2Bb&safe=yes"))
+	if !strings.Contains(got, "q=a%2Bb") || !strings.Contains(got, "safe=yes") {
+		t.Fatal("literal query plus was reinterpreted as a form-encoded space")
+	}
+}
+
 func TestRedactorDoesNotRevealSecretsWhenControlsAreRemoved(t *testing.T) {
 	t.Parallel()
 
@@ -285,6 +446,40 @@ func TestRedactorStripsComplete8BitC1ANSISequences(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := redactor.Value(test.input); got != test.want {
 				t.Fatal("C1 ANSI sequence payload survived or safe text was removed")
+			}
+		})
+	}
+}
+
+func TestRedactorDoesNotEndOSCOnUTF8ContinuationBytes(t *testing.T) {
+	t.Parallel()
+
+	redactor := NewRedactor(nil, nil)
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "exact U+201C continuation repro",
+			input: "\u009d0;title“PAYLOAD\x07safe",
+		},
+		{
+			name:  "nearby U+201B U+201C and U+201D continuation boundaries",
+			input: "\u009d0;left‛middle“PAYLOAD”right\u009csafe",
+		},
+		{
+			name:  "raw OSC and raw ST around multibyte payload",
+			input: string([]byte{0x9d}) + "0;left‛middle“PAYLOAD”right" + string([]byte{0x9c}) + "safe",
+		},
+		{
+			name:  "ESC OSC and ESC ST around multibyte payload",
+			input: "\x1b]0;left‛middle“PAYLOAD”right\x1b\\safe",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := redactor.Value(test.input); got != "safe" {
+				t.Fatal("UTF-8 continuation byte ended OSC before its real terminator")
 			}
 		})
 	}
