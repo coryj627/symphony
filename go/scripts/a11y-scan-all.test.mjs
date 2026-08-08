@@ -1,17 +1,26 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import * as realFS from 'node:fs';
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 import {run} from './a11y-scan-all.mjs';
 
-function withRepo(fn) {
+function withRepo(fn, {baseline = true} = {}) {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'symphony-a11y-scan-'));
   const baselinePath = path.join(repoRoot, '.a11y', 'web', 'baseline.json');
   mkdirSync(path.dirname(baselinePath), {recursive: true});
-  writeFileSync(baselinePath, '{"findings":[]}\n');
+  if (baseline) writeFileSync(baselinePath, '{"findings":[]}\n');
   try {
     fn({repoRoot, baselinePath});
   } finally {
@@ -74,5 +83,177 @@ test('restores the reviewed baseline and fails closed if the scanner mutates it'
     assert.equal(code, 2);
     assert.equal(digest(baselinePath), before);
     assert.match(errors.join('\n'), /baseline changed/i);
+  });
+});
+
+test('fails closed before scanning when the reviewed baseline cannot be read', () => {
+  withRepo(({repoRoot, baselinePath}) => {
+    let invoked = false;
+    const errors = [];
+    const fs = {
+      ...realFS,
+      readFileSync(filePath, ...args) {
+        if (filePath === baselinePath) throw new Error('snapshot unreadable');
+        return realFS.readFileSync(filePath, ...args);
+      },
+    };
+
+    const code = run({
+      repoRoot,
+      fs,
+      exec: () => {
+        invoked = true;
+        return 0;
+      },
+      error: (message) => errors.push(message),
+    });
+
+    assert.equal(code, 2);
+    assert.equal(invoked, false);
+    assert.equal(readFileSync(baselinePath, 'utf8'), '{"findings":[]}\n');
+    assert.match(errors.join('\n'), /snapshot.*unreadable/i);
+  });
+});
+
+test('accepts a missing baseline when the review-only scanner leaves it missing', () => {
+  withRepo(({repoRoot, baselinePath}) => {
+    const code = run({repoRoot, exec: () => 0});
+    assert.equal(code, 0);
+    assert.throws(() => lstatSync(baselinePath), {code: 'ENOENT'});
+  }, {baseline: false});
+});
+
+test('rejects a pre-existing symlink baseline before scanning without touching its target', () => {
+  withRepo(({repoRoot, baselinePath}) => {
+    const targetPath = path.join(repoRoot, 'outside-baseline.json');
+    rmSync(baselinePath);
+    writeFileSync(targetPath, 'target sentinel\n');
+    symlinkSync(targetPath, baselinePath);
+    let invoked = false;
+
+    const code = run({
+      repoRoot,
+      exec: () => {
+        invoked = true;
+        return 0;
+      },
+      error: () => {},
+    });
+
+    assert.equal(code, 2);
+    assert.equal(invoked, false);
+    assert.equal(readFileSync(targetPath, 'utf8'), 'target sentinel\n');
+    assert.equal(lstatSync(baselinePath).isSymbolicLink(), true);
+  });
+});
+
+test('safely replaces a scanner-created symlink without writing through to its target', () => {
+  withRepo(({repoRoot, baselinePath}) => {
+    const targetPath = path.join(repoRoot, 'symlink-target.json');
+    writeFileSync(targetPath, 'target sentinel\n');
+
+    const code = run({
+      repoRoot,
+      exec: () => {
+        rmSync(baselinePath);
+        symlinkSync(targetPath, baselinePath);
+        return 0;
+      },
+      error: () => {},
+    });
+
+    assert.equal(code, 2);
+    assert.equal(readFileSync(targetPath, 'utf8'), 'target sentinel\n');
+    assert.equal(lstatSync(baselinePath).isFile(), true);
+    assert.equal(lstatSync(baselinePath).isSymbolicLink(), false);
+    assert.equal(readFileSync(baselinePath, 'utf8'), '{"findings":[]}\n');
+  });
+});
+
+test('fails closed without overwriting a non-regular baseline replacement', () => {
+  withRepo(({repoRoot, baselinePath}) => {
+    const errors = [];
+    const code = run({
+      repoRoot,
+      exec: () => {
+        rmSync(baselinePath);
+        mkdirSync(baselinePath);
+        return 0;
+      },
+      error: (message) => errors.push(message),
+    });
+
+    assert.equal(code, 2);
+    assert.equal(lstatSync(baselinePath).isDirectory(), true);
+    assert.match(errors.join('\n'), /restoration failed/i);
+  });
+});
+
+test('treats a post-scan comparison read failure as exit 2 and restores the snapshot', () => {
+  withRepo(({repoRoot, baselinePath}) => {
+    let baselineReads = 0;
+    const errors = [];
+    const fs = {
+      ...realFS,
+      readFileSync(filePath, ...args) {
+        if (filePath === baselinePath && ++baselineReads === 2) {
+          throw new Error('comparison unreadable');
+        }
+        return realFS.readFileSync(filePath, ...args);
+      },
+    };
+
+    const code = run({repoRoot, fs, exec: () => 0, error: (message) => errors.push(message)});
+
+    assert.equal(code, 2);
+    assert.equal(readFileSync(baselinePath, 'utf8'), '{"findings":[]}\n');
+    assert.match(errors.join('\n'), /comparison.*unreadable/i);
+  });
+});
+
+test('treats a post-scan metadata read failure as exit 2 and attempts restoration', () => {
+  withRepo(({repoRoot, baselinePath}) => {
+    let stats = 0;
+    const errors = [];
+    const fs = {
+      ...realFS,
+      lstatSync(filePath, ...args) {
+        if (filePath === baselinePath && ++stats === 2) throw new Error('comparison stat failed');
+        return realFS.lstatSync(filePath, ...args);
+      },
+    };
+
+    const code = run({repoRoot, fs, exec: () => 0, error: (message) => errors.push(message)});
+
+    assert.equal(code, 2);
+    assert.equal(readFileSync(baselinePath, 'utf8'), '{"findings":[]}\n');
+    assert.match(errors.join('\n'), /comparison stat failed/i);
+  });
+});
+
+test('reports restoration failure and never claims the reviewed baseline was restored', () => {
+  withRepo(({repoRoot, baselinePath}) => {
+    const errors = [];
+    const fs = {
+      ...realFS,
+      renameSync() {
+        throw new Error('rename blocked');
+      },
+    };
+
+    const code = run({
+      repoRoot,
+      fs,
+      exec: () => {
+        writeFileSync(baselinePath, 'mutated\n');
+        return 0;
+      },
+      error: (message) => errors.push(message),
+    });
+
+    assert.equal(code, 2);
+    assert.equal(readFileSync(baselinePath, 'utf8'), 'mutated\n');
+    assert.match(errors.join('\n'), /restoration failed.*rename blocked/i);
+    assert.doesNotMatch(errors.join('\n'), /restored the reviewed baseline/);
   });
 });

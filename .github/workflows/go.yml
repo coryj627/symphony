@@ -59,7 +59,7 @@ jobs:
         run: npx playwright install chromium webkit
 
       - name: Test verification wrappers
-        run: node --test scripts/a11y-precommit.test.mjs scripts/a11y-scan-all.test.mjs scripts/go-tool.test.mjs scripts/verify.test.mjs
+        run: npm run test:wrappers
 
       - name: Validate rendered HTML
         run: npm run html:validate
@@ -85,26 +85,37 @@ jobs:
         with:
           node-version: 24.18.0
 
-      - name: Require a11y-check-web release token
-        shell: bash
-        env:
-          A11Y_RELEASE_READ_TOKEN: ${{ secrets.A11Y_RELEASE_READ_TOKEN }}
-        run: |
-          if [[ -z "${A11Y_RELEASE_READ_TOKEN:-}" ]]; then
-            echo "::error::A11Y_RELEASE_READ_TOKEN is required to download a11y-check-web v0.3.1"
-            exit 1
-          fi
-
-      - name: Install a11y-check-web v0.3.1
+      - name: Download a11y-check-web v0.3.1
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.A11Y_RELEASE_READ_TOKEN }}
         run: |
-          mkdir -p "$RUNNER_TEMP/a11y-check-web"
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::A11Y_RELEASE_READ_TOKEN is required to download a11y-check-web v0.3.1"
+            exit 1
+          fi
+          download_dir="$RUNNER_TEMP/a11y-check-web-download"
+          test ! -e "$download_dir"
+          mkdir "$download_dir"
           gh release download v0.3.1 --repo coryj627/a11y-check-web \
-            --pattern 'a11y-check-web-mcp-server-*.tgz' \
-            --dir "$RUNNER_TEMP/a11y-check-web"
-          npm install -g "$RUNNER_TEMP"/a11y-check-web/a11y-check-web-mcp-server-*.tgz
+            --pattern 'a11y-check-web-mcp-server-0.3.1.tgz' \
+            --dir "$download_dir"
+
+      - name: Install and verify a11y-check-web v0.3.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          download_dir="$RUNNER_TEMP/a11y-check-web-download"
+          expected_artifact="$download_dir/a11y-check-web-mcp-server-0.3.1.tgz"
+          regular_count="$(find "$download_dir" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
+          entry_count="$(find "$download_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d '[:space:]')"
+          test "$regular_count" = "1"
+          test "$entry_count" = "1"
+          test -f "$expected_artifact"
+          test ! -L "$expected_artifact"
+          npm install -g "$expected_artifact"
+          test "$(a11y-check-web --version)" = "0.3.1"
 
       - name: Scan source accessibility without updating the baseline
         env:

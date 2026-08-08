@@ -17,7 +17,12 @@ npm install -g ./a11y-check-web-mcp-server-0.3.1.tgz
 
 The GitHub Actions secret `A11Y_RELEASE_READ_TOKEN` must have contents-read
 access to that repository only. The source-accessibility job fails during its
-named setup step when the secret is absent.
+named download step when the secret is absent. That token exists only while
+`gh release download` runs. Installation and npm lifecycle scripts run in a
+separate step without the token. CI requests exactly
+`a11y-check-web-mcp-server-0.3.1.tgz`, rejects missing or extra directory
+entries and non-regular/symlink artifacts, and verifies that the installed CLI
+reports version `0.3.1` before scanning.
 
 ## Run the gates
 
@@ -37,7 +42,10 @@ npm run verify
 It runs wrapper tests, Go tests and vet, macOS race tests, a clean npm install,
 HTML validation, Chromium and WebKit accessibility tests, and the deterministic
 source scan. Windows executes the concurrency tests in `go test ./...`; the Go
-race detector is required only on macOS. No Linux support is claimed.
+race detector is required only on macOS. The launcher rejects any Node version
+other than `24.18.0` and any Go version other than `1.26.5`; an executable with
+the wrong or malformed version is not treated as available. No Linux support
+is claimed.
 
 The individual source scan is:
 
@@ -49,7 +57,10 @@ The wrapper resolves the absolute `go/` directory, sets `A11Y_ALLOWED_ROOTS`
 to exactly that path, and passes `--no-update-baseline`. It fails with the
 scanner's exit `1` for new findings and exit `2` for scanner or setup errors.
 It also detects and restores any unexpected baseline mutation before failing
-closed.
+closed. Baseline snapshot and comparison I/O errors are classified as exit `2`.
+The wrapper rejects a pre-scan baseline that is a symlink or non-regular file,
+and restoration uses an exclusive temporary regular file plus atomic rename so
+it replaces a hostile symlink itself rather than writing through to its target.
 
 ## Pre-commit source scan
 
