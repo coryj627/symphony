@@ -1,0 +1,16 @@
+[
+  {
+    "id": 9007199254740996,
+    "node_id": "I_kwDOExample43",
+    "number": 43,
+    "title": "A closed repository issue",
+    "body": null,
+    "state": "closed",
+    "state_reason": "completed",
+    "html_url": "https://github.com/coryj627/symphony/issues/43",
+    "labels": [{"name": "Done"}],
+    "assignees": [],
+    "created_at": null,
+    "updated_at": null
+  }
+]
