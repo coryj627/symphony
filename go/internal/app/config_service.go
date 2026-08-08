@@ -28,6 +28,7 @@ var (
 	ErrCredentialUnavailable        = errors.New("credential_unavailable")
 	ErrCredentialRequired           = errors.New("credential_required")
 	ErrEnvironmentManagedCredential = errors.New("environment_managed_credential")
+	ErrCredentialConflict           = errors.New("credential_conflict")
 )
 
 type ConfigServiceOptions struct {
@@ -116,6 +117,11 @@ type CredentialState struct {
 	Present            bool
 	EnvironmentManaged bool
 	TrackerKind        string
+}
+
+type CredentialBinding struct {
+	TrackerKind string
+	BaseDigest  string
 }
 
 func NewConfigService(options ConfigServiceOptions) *ConfigService {
@@ -280,12 +286,13 @@ func (service *ConfigService) CredentialStatus(ctx context.Context) (CredentialS
 	return state, nil
 }
 
-func (service *ConfigService) ReplaceCredential(ctx context.Context, value []byte) error {
+func (service *ConfigService) ReplaceCredential(ctx context.Context, binding CredentialBinding, value []byte) error {
 	defer clear(value)
-	selection, err := service.currentTracker(ctx)
+	view, err := service.CredentialView(ctx, binding)
 	if err != nil {
 		return err
 	}
+	selection := view.Tracker
 	if isEnvironmentReference(selection.CredentialReference) {
 		return ErrEnvironmentManagedCredential
 	}
@@ -298,11 +305,12 @@ func (service *ConfigService) ReplaceCredential(ctx context.Context, value []byt
 	return service.vault.Put(ctx, service.credentialRef(selection.Kind), value)
 }
 
-func (service *ConfigService) DeleteCredential(ctx context.Context) error {
-	selection, err := service.currentTracker(ctx)
+func (service *ConfigService) DeleteCredential(ctx context.Context, binding CredentialBinding) error {
+	view, err := service.CredentialView(ctx, binding)
 	if err != nil {
 		return err
 	}
+	selection := view.Tracker
 	if isEnvironmentReference(selection.CredentialReference) {
 		return ErrEnvironmentManagedCredential
 	}
@@ -314,6 +322,20 @@ func (service *ConfigService) DeleteCredential(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+func (service *ConfigService) CredentialView(ctx context.Context, binding CredentialBinding) (ConfigView, error) {
+	view, err := service.View(ctx)
+	if err != nil {
+		return ConfigView{}, err
+	}
+	if view.FileState != FileValid || view.Tracker.Kind == "" {
+		return ConfigView{}, ErrCredentialUnavailable
+	}
+	if binding.TrackerKind == "" || binding.BaseDigest == "" || binding.TrackerKind != view.Tracker.Kind || binding.BaseDigest != view.Digest {
+		return ConfigView{}, ErrCredentialConflict
+	}
+	return view, nil
 }
 
 func (service *ConfigService) currentTracker(ctx context.Context) (TrackerSelection, error) {

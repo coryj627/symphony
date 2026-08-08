@@ -152,6 +152,8 @@
   <form id="credential-form" method="post" action="/api/v1/config/credential">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <input type="hidden" name="submit_action" value="replace-credential">
+    <input type="hidden" name="credential_tracker_kind" value="{{.Content.View.Tracker.Kind}}">
+    <input type="hidden" name="credential_base_digest" value="{{.Content.View.Digest}}">
     <label for="credential">New {{if .Content.Credential.TrackerKind}}{{.Content.Credential.TrackerKind}}{{else}}tracker{{end}} credential</label>
     <p id="credential-description">Enter a replacement credential. The existing value is never retrieved for this page.</p>
     <input id="credential" name="credential" type="password" autocomplete="new-password" aria-describedby="credential-description{{with index .Content.Errors "credential"}} credential-error{{end}}"{{with index .Content.Errors "credential"}} aria-invalid="true"{{end}}{{if or .Content.Credential.EnvironmentManaged (not .Content.View.StructuredAvailable)}} disabled{{end}}>
@@ -166,9 +168,10 @@
 <dialog id="credential-delete-dialog" aria-labelledby="credential-delete-title" aria-describedby="credential-delete-description"{{if .Content.DeleteConfirmation}} open{{end}}>
   <h2 id="credential-delete-title">Delete credential?</h2>
   <p id="credential-delete-description">Delete the stored credential for the selected tracker? Symphony will not display or ask you to transcribe the secret.</p>
+  {{if .ErrorSummaryInDialog}}{{template "error-summary" .}}{{end}}
   {{with index .Content.Errors "delete-credential"}}<p class="field-error" id="delete-credential-error">{{.}}</p>{{end}}
   <div class="button-row">
-    <button id="credential-delete-cancel" type="button">Cancel</button>
+    <a class="button-link" id="credential-delete-cancel" href="/configuration#delete-credential" tabindex="0">Cancel</a>
     <button id="credential-delete-confirm" type="submit" form="credential-form" formaction="/api/v1/config/credential/delete" name="confirm_delete" value="Delete credential">Delete credential</button>
   </div>
 </dialog>

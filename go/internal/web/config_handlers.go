@@ -44,7 +44,8 @@ var configurationControlIDs = map[string]string{
 	"server.operator_response_timeout_ms": "server-operator-response-timeout-ms",
 	"raw_source":                          "raw-source",
 	"credential":                          "credential",
-	"confirm_delete":                      "delete-credential",
+	"request_delete":                      "delete-credential",
+	"confirm_delete":                      "credential-delete-confirm",
 }
 
 var structuredFormFields = map[string]string{
@@ -101,7 +102,9 @@ func (handler *PageHandler) configurationValidate(service *app.ConfigService, mo
 			return
 		}
 		raw, ok := exactFormValue(request.PostForm, "raw_source")
-		if !ok || hasUnexpectedFields(request.PostForm, map[string]bool{"csrf_token": true, "raw_source": true, "submit_action": true}) {
+		if !ok || hasUnexpectedFields(request.PostForm, map[string]bool{
+			"csrf_token": true, "mode": true, "base_digest": true, "raw_source": true, "submit_action": true,
+		}) {
 			handler.renderSubmittedErrors(w, http.StatusUnprocessableEntity, request, service, mode, app.ConfigValues{}, raw, raw, []workflow.FieldError{{Field: "raw_source", Code: "invalid_payload", Message: "Submit only the complete workflow source for validation."}}, nil, false)
 			return
 		}
@@ -116,6 +119,9 @@ func (handler *PageHandler) configurationValidate(service *app.ConfigService, mo
 			return
 		}
 		page := configurationPage(request, mode, view)
+		content := page.Content.(configurationContent)
+		content.RawSource = raw
+		page.Content = content
 		page.Flash = "Workflow source is valid. No changes were saved."
 		page.FocusTarget = normalizedFocus("validate-raw")
 		handler.renderConfiguration(request.Context(), w, http.StatusOK, page)
@@ -207,16 +213,23 @@ func (handler *PageHandler) credentialReplace(service *app.ConfigService, mode s
 			return
 		}
 		credential, ok := exactFormValue(request.PostForm, "credential")
-		if !ok || hasUnexpectedFields(request.PostForm, map[string]bool{"csrf_token": true, "credential": true, "submit_action": true}) {
+		binding, bindingOK := credentialBinding(request.PostForm)
+		if !ok || !bindingOK || hasUnexpectedFields(request.PostForm, map[string]bool{
+			"csrf_token": true, "credential": true, "credential_tracker_kind": true, "credential_base_digest": true, "submit_action": true,
+		}) {
 			credential = ""
 		}
 		buffer := []byte(credential)
 		request.PostForm.Del("credential")
 		request.Form.Del("credential")
-		err := service.ReplaceCredential(request.Context(), buffer)
+		err := service.ReplaceCredential(request.Context(), binding, buffer)
 		clear(buffer)
 		credential = ""
 		if err != nil {
+			if errors.Is(err, app.ErrCredentialConflict) {
+				handler.renderSubmittedErrors(w, http.StatusConflict, request, service, mode, app.ConfigValues{}, "", "", []workflow.FieldError{{Field: "credential", Code: "credential_conflict", Message: "The workflow changed on disk. Review the selected tracker before entering the credential again."}}, nil, false)
+				return
+			}
 			message := "Credential could not be stored. Enter a new credential and try again."
 			if errors.Is(err, app.ErrCredentialRequired) {
 				message = "Enter a credential to store."
@@ -237,10 +250,24 @@ func (handler *PageHandler) credentialDelete(service *app.ConfigService, mode st
 			handler.RespondError(w, http.StatusUnsupportedMediaType)
 			return
 		}
+		request.PostForm.Del("credential")
+		request.Form.Del("credential")
+		binding, bindingOK := credentialBinding(request.PostForm)
+		if !bindingOK || hasUnexpectedFields(request.PostForm, map[string]bool{
+			"csrf_token": true, "credential_tracker_kind": true, "credential_base_digest": true, "submit_action": true,
+			"request_delete": true, "confirm_delete": true,
+		}) {
+			handler.renderSubmittedErrors(w, http.StatusUnprocessableEntity, request, service, mode, app.ConfigValues{}, "", "", []workflow.FieldError{{Field: "request_delete", Code: "invalid_payload", Message: "Reload the page before managing this credential."}}, nil, false)
+			return
+		}
 		confirmation, confirmed := exactFormValue(request.PostForm, "confirm_delete")
 		if !confirmed || confirmation != "Delete credential" {
-			view, err := service.View(request.Context())
+			view, err := service.CredentialView(request.Context(), binding)
 			if err != nil {
+				if errors.Is(err, app.ErrCredentialConflict) {
+					handler.renderSubmittedErrors(w, http.StatusConflict, request, service, mode, app.ConfigValues{}, "", "", []workflow.FieldError{{Field: "request_delete", Code: "credential_conflict", Message: "The workflow changed on disk. Review the selected tracker before requesting deletion again."}}, nil, false)
+					return
+				}
 				handler.RespondError(w, http.StatusInternalServerError)
 				return
 			}
@@ -252,7 +279,11 @@ func (handler *PageHandler) credentialDelete(service *app.ConfigService, mode st
 			handler.renderConfiguration(request.Context(), w, http.StatusOK, page)
 			return
 		}
-		if err := service.DeleteCredential(request.Context()); err != nil {
+		if err := service.DeleteCredential(request.Context(), binding); err != nil {
+			if errors.Is(err, app.ErrCredentialConflict) {
+				handler.renderSubmittedErrors(w, http.StatusConflict, request, service, mode, app.ConfigValues{}, "", "", []workflow.FieldError{{Field: "request_delete", Code: "credential_conflict", Message: "The workflow changed on disk. Review the selected tracker and request deletion again."}}, nil, false)
+				return
+			}
 			message := "Credential could not be deleted. No secret value was read or displayed."
 			if errors.Is(err, app.ErrEnvironmentManagedCredential) {
 				message = "This credential is environment managed and cannot be deleted here."
@@ -296,6 +327,7 @@ func (handler *PageHandler) renderSubmittedErrors(w http.ResponseWriter, status 
 	content.CurrentSource = currentSource
 	content.DeleteConfirmation = deleteConfirmation
 	content.Errors, page.ErrorSummary = pageErrors(fieldErrors, globalErrors)
+	page.ErrorSummaryInDialog = deleteConfirmation && len(page.ErrorSummary) > 0
 	page.Content = content
 	page.FocusTarget = "error-summary"
 	handler.renderConfiguration(request.Context(), w, status, page)
@@ -446,6 +478,12 @@ func hasUnexpectedFields(form url.Values, allowed map[string]bool) bool {
 func exactFormValue(form url.Values, key string) (string, bool) {
 	values, ok := form[key]
 	return firstValue(values), ok && len(values) == 1
+}
+
+func credentialBinding(form url.Values) (app.CredentialBinding, bool) {
+	trackerKind, trackerOK := exactFormValue(form, "credential_tracker_kind")
+	baseDigest, digestOK := exactFormValue(form, "credential_base_digest")
+	return app.CredentialBinding{TrackerKind: trackerKind, BaseDigest: baseDigest}, trackerOK && digestOK && trackerKind != "" && baseDigest != ""
 }
 
 func firstValue(values []string) string {

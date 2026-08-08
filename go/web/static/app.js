@@ -39,18 +39,22 @@ function restoreDeleteFocus() {
   }
 }
 
-function openDeleteDialog() {
+function focusDeleteDialogTarget(target) {
+  if (target instanceof HTMLElement) target.focus();
+}
+
+function openDeleteDialog(target = deleteCancel) {
   if (!(deleteDialog instanceof HTMLDialogElement)) return;
   if (deleteDialog.open) deleteDialog.close();
   deleteDialog.showModal();
-  if (deleteCancel instanceof HTMLButtonElement) deleteCancel.focus();
+  focusDeleteDialogTarget(target);
 }
 
 if (deleteButton instanceof HTMLButtonElement && deleteDialog instanceof HTMLDialogElement) {
   deleteButton.addEventListener('click', event => {
     if (deleteButton.disabled) return;
     event.preventDefault();
-    openDeleteDialog();
+    openDeleteDialog(deleteCancel);
   });
 
   deleteDialog.addEventListener('cancel', event => {
@@ -59,12 +63,31 @@ if (deleteButton instanceof HTMLButtonElement && deleteDialog instanceof HTMLDia
     restoreDeleteFocus();
   });
 
-  if (deleteCancel instanceof HTMLButtonElement) {
-    deleteCancel.addEventListener('click', () => {
+  deleteDialog.addEventListener('keydown', event => {
+    if (event.key !== 'Tab') return;
+    const focusable = [...deleteDialog.querySelectorAll('a[href], button:not(:disabled)')]
+      .filter(element => element instanceof HTMLElement && element.getClientRects().length > 0);
+    if (focusable.length === 0) return;
+    const currentIndex = focusable.indexOf(document.activeElement);
+    const nextIndex = event.shiftKey
+      ? (currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1)
+      : (currentIndex < 0 || currentIndex === focusable.length - 1 ? 0 : currentIndex + 1);
+    event.preventDefault();
+    focusable[nextIndex].focus();
+  });
+
+  if (deleteCancel instanceof HTMLAnchorElement) {
+    deleteCancel.addEventListener('click', event => {
+      event.preventDefault();
       deleteDialog.close();
       restoreDeleteFocus();
     });
   }
 
-  if (deleteDialog.open) openDeleteDialog();
+  if (deleteDialog.open) {
+    const initialTarget = focusTarget === 'error-summary'
+      ? document.getElementById('error-summary')
+      : deleteCancel;
+    openDeleteDialog(initialTarget);
+  }
 }

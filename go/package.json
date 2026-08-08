@@ -4,6 +4,7 @@
     "node": "24.18.0"
   },
   "scripts": {
+    "start:e2e": "mise exec -- go run -tags=e2e ./cmd/symphony configure ./testdata/manual/WORKFLOW.md --port 43127",
     "test:a11y": "playwright test",
     "html:validate": "playwright test tests/accessibility/html-validity.spec.mjs"
   },

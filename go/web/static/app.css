@@ -277,6 +277,7 @@ label {
 }
 
 button,
+.button-link,
 input:not([type="hidden"]),
 select,
 textarea {
@@ -317,13 +318,18 @@ textarea {
   resize: vertical;
 }
 
-button {
+button,
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   inline-size: fit-content;
   padding: 0.6rem 1rem;
   background: var(--color-surface-3);
   color: var(--color-text);
   font-weight: 750;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .button-row {
@@ -341,7 +347,8 @@ dialog::backdrop {
   background: rgb(0 0 0 / 72%);
 }
 
-button:hover:not(:disabled) {
+button:hover:not(:disabled),
+.button-link:hover {
   border-color: var(--color-muted);
   background: var(--color-surface-2);
 }
@@ -498,6 +505,7 @@ pre {
 
   nav a[aria-current="page"],
   button,
+  .button-link,
   input:not([type="hidden"]),
   select,
   textarea,

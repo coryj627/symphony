@@ -27,6 +27,23 @@ Work on {{ issue.identifier }}.
 
 export const environmentManagedWorkflow = validGitHubWorkflow.replace('credential_ref: os-vault', 'credential_ref: $GITHUB_TOKEN');
 
+export const validLinearWorkflow = `---
+tracker:
+  kind: linear
+  provider:
+    project_slug: symphony-project
+    credential_ref: os-vault
+  required_labels: [symphony]
+  active_states: [Todo]
+  terminal_states: [Done]
+workspace:
+  root: .symphony/workspaces
+server:
+  port: 43127
+---
+Work on {{ issue.identifier }}.
+`;
+
 export async function resetWorkflow() {
   await writeFile(manualWorkflowPath, validGitHubWorkflow, {mode: 0o600});
 }

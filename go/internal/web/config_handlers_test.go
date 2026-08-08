@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,6 +44,8 @@ func TestConfigurationRendersGitHubAndLinearStructuredState(t *testing.T) {
 			assertContains(t, body, `<textarea id="raw-source" name="raw_source"`)
 			assertContains(t, body, `spellcheck="false"`)
 			assertContains(t, body, `type="password"`)
+			assertContains(t, body, `name="credential_tracker_kind" value="`+test.name+`"`)
+			assertContains(t, body, `name="credential_base_digest" value="`+digestOf(test.source)+`"`)
 			if strings.Contains(body, `name="credential" value=`) {
 				t.Fatal("credential input rendered a value")
 			}
@@ -171,6 +174,26 @@ func TestRawSavePreservesExactBytesAndUsesPRG(t *testing.T) {
 	}
 }
 
+func TestSuccessfulValidationRetainsUnsavedRawSourceWithoutMutation(t *testing.T) {
+	t.Parallel()
+	server, path, _ := configuredHTTPApp(t, validGitHubSource, secrets.Status{})
+	cookie := exchange(t, server)
+	csrf := csrfForCookie(t, server, cookie)
+	unsaved := strings.Replace(validGitHubSource, "repository: symphony", "repository: validated-unsaved", 1)
+	response := postForm(t, server, cookie, "/api/v1/config/validate", url.Values{
+		"csrf_token": {csrf}, "mode": {"raw"}, "base_digest": {digestOf(validGitHubSource)},
+		"raw_source": {unsaved}, "submit_action": {"validate-raw"},
+	})
+	body := readResponse(t, response)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("validate = %d, body %s", response.StatusCode, body)
+	}
+	assertContains(t, body, "validated-unsaved")
+	if got := mustReadFile(t, path); got != validGitHubSource {
+		t.Fatal("successful validation mutated workflow")
+	}
+}
+
 func TestSaveConflictReturns409FreshSourceAndUnsavedValues(t *testing.T) {
 	t.Parallel()
 	server, path, _ := configuredHTTPApp(t, validGitHubSource, secrets.Status{})
@@ -202,9 +225,9 @@ func TestCredentialReplaceDeleteAndNamedConfirmationNeverExposeValue(t *testing.
 	cookie := exchange(t, server)
 	csrf := csrfForCookie(t, server, cookie)
 	canary := "credential-http-canary"
-	replace := postForm(t, server, cookie, "/api/v1/config/credential", url.Values{
-		"csrf_token": {csrf}, "credential": {canary}, "submit_action": {"replace-credential"},
-	})
+	replaceValues := credentialForm(csrf, "github", digestOf(validGitHubSource))
+	replaceValues.Set("credential", canary)
+	replace := postForm(t, server, cookie, "/api/v1/config/credential", replaceValues)
 	if replace.StatusCode != http.StatusSeeOther || strings.Contains(replace.Header.Get("Location"), canary) {
 		t.Fatalf("replace response = %d/%q", replace.StatusCode, replace.Header.Get("Location"))
 	}
@@ -212,9 +235,9 @@ func TestCredentialReplaceDeleteAndNamedConfirmationNeverExposeValue(t *testing.
 		t.Fatal("vault did not receive credential")
 	}
 
-	confirm := postForm(t, server, cookie, "/api/v1/config/credential/delete", url.Values{
-		"csrf_token": {csrf}, "request_delete": {"1"}, "submit_action": {"delete-credential"},
-	})
+	confirmValues := credentialForm(csrf, "github", digestOf(validGitHubSource))
+	confirmValues.Set("request_delete", "1")
+	confirm := postForm(t, server, cookie, "/api/v1/config/credential/delete", confirmValues)
 	body := readResponse(t, confirm)
 	if confirm.StatusCode != http.StatusOK || vault.deleteCalls != 0 {
 		t.Fatalf("confirmation response = %d or deleted early", confirm.StatusCode)
@@ -226,11 +249,90 @@ func TestCredentialReplaceDeleteAndNamedConfirmationNeverExposeValue(t *testing.
 		t.Fatal("credential leaked in confirmation body")
 	}
 
-	deleted := postForm(t, server, cookie, "/api/v1/config/credential/delete", url.Values{
-		"csrf_token": {csrf}, "confirm_delete": {"Delete credential"}, "submit_action": {"confirm-delete-credential"},
-	})
+	deleteValues := credentialForm(csrf, "github", digestOf(validGitHubSource))
+	deleteValues.Set("confirm_delete", "Delete credential")
+	deleted := postForm(t, server, cookie, "/api/v1/config/credential/delete", deleteValues)
 	if deleted.StatusCode != http.StatusSeeOther || vault.deleteCalls != 1 {
 		t.Fatalf("confirmed delete = %d, calls %d", deleted.StatusCode, vault.deleteCalls)
+	}
+}
+
+func TestCredentialMutationsRejectDisplayedBindingAfterProviderSwitch(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		initial       string
+		external      string
+		kind          string
+		path          string
+		confirmation  bool
+		finalDeletion bool
+	}{
+		{name: "replace GitHub page after Linear switch", initial: validGitHubSource, external: validLinearSource, kind: "github", path: "/api/v1/config/credential"},
+		{name: "replace Linear page after GitHub switch", initial: validLinearSource, external: validGitHubSource, kind: "linear", path: "/api/v1/config/credential"},
+		{name: "initial delete GitHub page after Linear switch", initial: validGitHubSource, external: validLinearSource, kind: "github", path: "/api/v1/config/credential/delete", confirmation: true},
+		{name: "initial delete Linear page after GitHub switch", initial: validLinearSource, external: validGitHubSource, kind: "linear", path: "/api/v1/config/credential/delete", confirmation: true},
+		{name: "confirmed delete after GitHub to Linear switch", initial: validGitHubSource, external: validLinearSource, kind: "github", path: "/api/v1/config/credential/delete", finalDeletion: true},
+		{name: "confirmed delete after Linear to GitHub switch", initial: validLinearSource, external: validGitHubSource, kind: "linear", path: "/api/v1/config/credential/delete", finalDeletion: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, path, vault := configuredHTTPApp(t, test.initial, secrets.Status{Present: true})
+			cookie := exchange(t, server)
+			csrf := csrfForCookie(t, server, cookie)
+			binding := credentialForm(csrf, test.kind, digestOf(test.initial))
+			if test.finalDeletion {
+				binding.Set("request_delete", "1")
+				response := postForm(t, server, cookie, test.path, binding)
+				if response.StatusCode != http.StatusOK {
+					t.Fatalf("open confirmation = %d", response.StatusCode)
+				}
+				binding.Del("request_delete")
+				binding.Set("confirm_delete", "Delete credential")
+			} else if test.confirmation {
+				binding.Set("request_delete", "1")
+			} else {
+				binding.Set("credential", "must-not-be-stored")
+			}
+			if err := os.WriteFile(path, []byte(test.external), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			response := postForm(t, server, cookie, test.path, binding)
+			if response.StatusCode != http.StatusConflict {
+				t.Fatalf("stale credential mutation = %d, want 409", response.StatusCode)
+			}
+			if vault.putCalls != 0 || vault.deleteCalls != 0 {
+				t.Fatalf("stale credential mutation touched vault: put %d delete %d", vault.putCalls, vault.deleteCalls)
+			}
+		})
+	}
+}
+
+func TestCredentialDeleteFailureKeepsLinkedSummaryInsideConfirmation(t *testing.T) {
+	t.Parallel()
+	server, _, vault := configuredHTTPApp(t, validGitHubSource, secrets.Status{Present: true})
+	vault.deleteErr = errors.New("delete canary must not be rendered")
+	cookie := exchange(t, server)
+	csrf := csrfForCookie(t, server, cookie)
+	values := credentialForm(csrf, "github", digestOf(validGitHubSource))
+	values.Set("confirm_delete", "Delete credential")
+	response := postForm(t, server, cookie, "/api/v1/config/credential/delete", values)
+	body := readResponse(t, response)
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("delete failure = %d, body %s", response.StatusCode, body)
+	}
+	dialogStart := strings.Index(body, `<dialog id="credential-delete-dialog"`)
+	summaryStart := strings.Index(body, `id="error-summary"`)
+	dialogEnd := strings.Index(body[dialogStart:], `</dialog>`)
+	if dialogStart < 0 || summaryStart < dialogStart || dialogEnd < 0 || summaryStart > dialogStart+dialogEnd {
+		t.Fatal("delete error summary is not inside the open confirmation dialog")
+	}
+	assertContainsOnce(t, body, `id="error-summary"`)
+	assertContains(t, body, `href="#credential-delete-confirm"`)
+	assertContains(t, body, `data-focus-target="error-summary"`)
+	assertContains(t, body, `id="credential-delete-cancel" href="/configuration#delete-credential"`)
+	if strings.Contains(body, "delete canary") {
+		t.Fatal("delete cause leaked into response")
 	}
 }
 
@@ -409,11 +511,19 @@ func completeStructuredForm(csrf, digest string, overrides map[string]string) ur
 	return values
 }
 
+func credentialForm(csrf, trackerKind, digest string) url.Values {
+	return url.Values{
+		"csrf_token": {csrf}, "credential_tracker_kind": {trackerKind}, "credential_base_digest": {digest},
+		"submit_action": {"replace-credential"},
+	}
+}
+
 type httpVault struct {
 	status      secrets.Status
 	value       []byte
 	putCalls    int
 	deleteCalls int
+	deleteErr   error
 }
 
 func (vault *httpVault) Put(_ context.Context, _ secrets.Ref, value []byte) error {
@@ -424,6 +534,9 @@ func (vault *httpVault) Put(_ context.Context, _ secrets.Ref, value []byte) erro
 func (*httpVault) Get(context.Context, secrets.Ref) ([]byte, error) { panic("Get must not be called") }
 func (vault *httpVault) Delete(context.Context, secrets.Ref) error {
 	vault.deleteCalls++
+	if vault.deleteErr != nil {
+		return vault.deleteErr
+	}
 	vault.value = nil
 	return nil
 }

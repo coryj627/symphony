@@ -4,6 +4,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"os"
 	"sync"
 
 	"github.com/coryj627/symphony/go/internal/secrets"
@@ -45,6 +47,9 @@ func (vault *e2eVault) Get(ctx context.Context, ref secrets.Ref) ([]byte, error)
 func (vault *e2eVault) Delete(ctx context.Context, ref secrets.Ref) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if ref.TrackerKind == os.Getenv("SYMPHONY_E2E_FAIL_DELETE_TRACKER") {
+		return errors.New("e2e_delete_failed")
 	}
 	vault.mu.Lock()
 	defer vault.mu.Unlock()

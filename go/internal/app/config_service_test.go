@@ -264,7 +264,8 @@ func TestCredentialReplaceClearsCallerBufferAndDeleteUsesCurrentKind(t *testing.
 		Path: path, Store: newTestWorkflowStore(t, ctx, path), Vault: vault, WorkflowID: "stable-workflow-id", Platform: "darwin",
 	})
 	credential := []byte("credential-canary")
-	if err := service.ReplaceCredential(ctx, credential); err != nil {
+	binding := CredentialBinding{TrackerKind: "linear", BaseDigest: sourceDigest([]byte(validLinearWorkflow))}
+	if err := service.ReplaceCredential(ctx, binding, credential); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Trim(string(credential), "\x00") != "" {
@@ -273,15 +274,62 @@ func TestCredentialReplaceClearsCallerBufferAndDeleteUsesCurrentKind(t *testing.
 	if string(vault.putCopy) != "credential-canary" || vault.lastRef.TrackerKind != "linear" || vault.lastRef.WorkflowID != "stable-workflow-id" {
 		t.Fatalf("vault put = %q at %#v", vault.putCopy, vault.lastRef)
 	}
-	if err := service.DeleteCredential(ctx); err != nil {
+	if err := service.DeleteCredential(ctx, binding); err != nil {
 		t.Fatal(err)
 	}
 	if vault.deleteCalls != 1 || vault.lastRef.TrackerKind != "linear" {
 		t.Fatalf("vault delete calls/ref = %d/%#v", vault.deleteCalls, vault.lastRef)
 	}
 	vault.deleteErr = secrets.ErrNotFound
-	if err := service.DeleteCredential(ctx); err != nil {
+	if err := service.DeleteCredential(ctx, binding); err != nil {
 		t.Fatalf("not-found delete should be safe: %v", err)
+	}
+}
+
+func TestCredentialMutationsRejectChangedDisplayedTrackerBinding(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		initial  string
+		external string
+		kind     string
+		mutate   func(context.Context, *ConfigService, CredentialBinding) error
+	}{
+		{
+			name: "replace GitHub page after Linear switch", initial: validGitHubWorkflow, external: validLinearWorkflow, kind: "github",
+			mutate: func(ctx context.Context, service *ConfigService, binding CredentialBinding) error {
+				return service.ReplaceCredential(ctx, binding, []byte("must-not-be-stored"))
+			},
+		},
+		{
+			name: "delete Linear page after GitHub switch", initial: validLinearWorkflow, external: validGitHubWorkflow, kind: "linear",
+			mutate: func(ctx context.Context, service *ConfigService, binding CredentialBinding) error {
+				return service.DeleteCredential(ctx, binding)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+			if err := os.WriteFile(path, []byte(test.initial), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			vault := &recordingVault{}
+			service := NewConfigService(ConfigServiceOptions{
+				Path: path, Store: newTestWorkflowStore(t, ctx, path), Vault: vault, WorkflowID: "stable-workflow-id",
+			})
+			if err := os.WriteFile(path, []byte(test.external), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			binding := CredentialBinding{TrackerKind: test.kind, BaseDigest: sourceDigest([]byte(test.initial))}
+			if err := test.mutate(ctx, service, binding); !errors.Is(err, ErrCredentialConflict) {
+				t.Fatalf("mutation error = %v, want credential conflict", err)
+			}
+			if vault.putCalls != 0 || vault.deleteCalls != 0 {
+				t.Fatalf("stale binding touched vault: put %d delete %d", vault.putCalls, vault.deleteCalls)
+			}
+		})
 	}
 }
 
@@ -296,13 +344,14 @@ func TestEnvironmentManagedCredentialRejectsVaultMutationAndStillClearsBuffer(t 
 	vault := &recordingVault{}
 	service := NewConfigService(ConfigServiceOptions{Path: path, Store: newTestWorkflowStore(t, ctx, path), Vault: vault, WorkflowID: "workflow-id"})
 	credential := []byte("environment-canary")
-	if !errors.Is(service.ReplaceCredential(ctx, credential), ErrEnvironmentManagedCredential) {
+	binding := CredentialBinding{TrackerKind: "github", BaseDigest: sourceDigest([]byte(source))}
+	if !errors.Is(service.ReplaceCredential(ctx, binding, credential), ErrEnvironmentManagedCredential) {
 		t.Fatal("environment-managed replace did not fail safely")
 	}
 	if strings.Trim(string(credential), "\x00") != "" || vault.putCalls != 0 {
 		t.Fatal("environment-managed replace retained bytes or touched vault")
 	}
-	if !errors.Is(service.DeleteCredential(ctx), ErrEnvironmentManagedCredential) || vault.deleteCalls != 0 {
+	if !errors.Is(service.DeleteCredential(ctx, binding), ErrEnvironmentManagedCredential) || vault.deleteCalls != 0 {
 		t.Fatal("environment-managed delete touched vault")
 	}
 }

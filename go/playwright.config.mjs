@@ -17,13 +17,14 @@ export default defineConfig({
     {name: 'webkit', use: {browserName: 'webkit'}},
   ],
   webServer: {
-    command: '/Users/coryj/.local/share/mise/installs/go/1.26.5/bin/go run -tags=e2e ./cmd/symphony configure ./testdata/manual/WORKFLOW.md --port 43127',
+    command: 'npm run start:e2e',
     url: 'http://127.0.0.1:43127/',
     reuseExistingServer: false,
     timeout: 120000,
     env: {
       ...process.env,
       SYMPHONY_E2E_BOOTSTRAP_TOKEN: bootstrapToken,
+      SYMPHONY_E2E_FAIL_DELETE_TRACKER: 'linear',
     },
   },
 });

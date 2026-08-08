@@ -19,10 +19,7 @@
       <h1>{{.Heading}}</h1>
     </div>
     {{template "flash" .}}
-    {{if .ErrorSummary}}<div id="error-summary" role="alert" tabindex="-1">
-      <h2>There is a problem</h2>
-      <ul>{{range .ErrorSummary}}<li><a href="#{{.ControlID}}">{{.Message}}</a></li>{{end}}</ul>
-    </div>{{end}}
+    {{if and .ErrorSummary (not .ErrorSummaryInDialog)}}{{template "error-summary" .}}{{end}}
     {{template "content" .}}
   </main>
   <footer>
