@@ -50,19 +50,21 @@ type Server struct {
 
 	boundPort atomic.Int64
 
-	mu              sync.Mutex
-	started         bool
-	shutdownStarted bool
-	shutdownDone    chan struct{}
-	shutdownErr     error
-	serveErr        error
-	listeners       []net.Listener
-	httpServers     []*http.Server
-	serveWG         sync.WaitGroup
-	stopCh          chan struct{}
-	stopOnce        sync.Once
-	done            chan error
-	doneOnce        sync.Once
+	mu               sync.Mutex
+	started          bool
+	shutdownStarted  bool
+	shutdownDone     chan struct{}
+	shutdownErr      error
+	serveErr         error
+	listeners        []net.Listener
+	httpServers      []*http.Server
+	serveBaseContext context.Context
+	serveBaseCancel  context.CancelFunc
+	serveWG          sync.WaitGroup
+	stopCh           chan struct{}
+	stopOnce         sync.Once
+	done             chan error
+	doneOnce         sync.Once
 }
 
 // NewServer constructs a protected server without opening listeners.
@@ -145,11 +147,15 @@ func (s *Server) Start(ctx context.Context) (Bound, error) {
 	s.boundPort.Store(int64(selectedPort))
 	s.listeners = listeners
 	s.started = true
+	serveBaseContext, serveBaseCancel := context.WithCancel(ctx)
+	s.serveBaseContext = serveBaseContext
+	s.serveBaseCancel = serveBaseCancel
 	protected := s.protectedHandler()
 	for _, listener := range listeners {
 		httpServer := &http.Server{
-			Handler:  protected,
-			ErrorLog: log.New(fixedLogWriter{logger: s.logger}, "", 0),
+			Handler:     protected,
+			ErrorLog:    log.New(fixedLogWriter{logger: s.logger}, "", 0),
+			BaseContext: func(net.Listener) context.Context { return serveBaseContext },
 		}
 		s.httpServers = append(s.httpServers, httpServer)
 		s.serveWG.Add(1)
@@ -222,9 +228,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.shutdownStarted = true
 	s.stopOnce.Do(func() { close(s.stopCh) })
 	servers := append([]*http.Server(nil), s.httpServers...)
+	serveBaseCancel := s.serveBaseCancel
 	s.mu.Unlock()
 
 	var shutdownErr error
+	if serveBaseCancel != nil {
+		serveBaseCancel()
+	}
 	for _, server := range servers {
 		if err := server.Shutdown(ctx); err != nil {
 			shutdownErr = errors.Join(shutdownErr, err)

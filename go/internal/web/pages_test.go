@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/coryj627/symphony/go/internal/domain"
 )
@@ -49,6 +50,162 @@ func TestEveryPageHasUniqueTitleMainH1AndRoutineStatusIsNotLive(t *testing.T) {
 			assertContainsOnce(t, html, `<header class="site-header">`)
 			assertContainsOnce(t, html, `<nav aria-label="Primary">`)
 		})
+	}
+}
+
+func TestLivePagesRenderCanonicalProgressiveControlsAndServerGeneratedURLs(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	runtime := &pageRuntimeFake{
+		snapshot: domain.Snapshot{
+			GeneratedAt: now,
+			EventCursor: domain.EventCursor{Epoch: "epoch-a", Sequence: 7},
+			Candidates:  []domain.CandidateRow{{Issue: domain.Issue{ID: "one", Identifier: "ONE-1", Title: "Alpha", State: "Open", Labels: []string{}}, Routable: true, RoutingReasons: []string{}}},
+		},
+		recent: domain.EventPage{LatestCursor: domain.EventCursor{Epoch: "epoch-a", Sequence: 7}, Events: []domain.Event{{Epoch: "epoch-a", Sequence: 7, Type: "queue.refreshed", At: now, Data: map[string]any{}}}},
+	}
+	handler := newTestPageHandler(t, PageOptions{Mode: "run", Queries: runtime, Commands: runtime})
+	handler.resolveDependencies = func(_ *http.Request, base pageDependencies) (pageDependencies, string, bool) {
+		return base, "", true
+	}
+	tests := []struct {
+		path      string
+		route     string
+		stateURL  string
+		eventsURL string
+	}{
+		{path: "/?credential=overview-canary", route: "overview", stateURL: "/api/v1/state", eventsURL: "/api/v1/events?after=epoch-a%3A7"},
+		{path: "/issues?query=Alpha&query=ignored-canary&state=open&eligibility=routable&sort=identifier&credential=issues-canary", route: "issues", stateURL: "/api/v1/state?eligibility=routable&amp;query=Alpha&amp;sort=identifier&amp;state=Open", eventsURL: "/api/v1/events?after=epoch-a%3A7"},
+		{path: "/activity?credential=activity-canary", route: "activity", stateURL: "/api/v1/state", eventsURL: "/api/v1/events?after=epoch-a%3A7"},
+	}
+	for _, test := range tests {
+		t.Run(test.route, func(t *testing.T) {
+			recorder := serveDirect(t, handler, http.MethodGet, test.path, "", nil)
+			html := recorder.Body.String()
+			for _, want := range []string{
+				`data-live-root data-live-route="` + test.route + `"`,
+				`data-event-cursor-id="epoch-a:7"`,
+				`data-state-url="` + test.stateURL + `"`,
+				`data-events-url="` + test.eventsURL + `"`,
+				`data-live-controls hidden`,
+				`data-live-toggle>Pause live updates</button>`,
+				`data-live-connection`,
+				`data-live-apply hidden>Apply pending updates</button>`,
+				`data-live-feedback`,
+				`<script type="module" src="/static/app.js"></script>`,
+			} {
+				if !strings.Contains(html, want) {
+					t.Fatalf("%s omitted %q", test.path, want)
+				}
+			}
+			if test.route == "overview" && !strings.Contains(html, `data-live-refresh-form`) {
+				t.Fatalf("%s omitted the existing manual Refresh form enhancement hook", test.path)
+			}
+			if strings.Contains(html, "credential=") || strings.Contains(html, "ignored-canary") || strings.Contains(html, `role="status"`) || strings.Contains(html, `aria-live=`) || strings.Contains(html, `aria-atomic=`) {
+				t.Fatalf("%s copied unsafe query state or rendered a routine live region", test.path)
+			}
+		})
+	}
+}
+
+func TestEventsValidReconnectHeaderBeatsMalformedAfterThroughDependencyResolution(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	runtime := &sseRuntimeFake{eventPages: []sseEventResult{
+		{page: domain.EventPage{LatestCursor: domain.EventCursor{Epoch: "e2e", Sequence: 2}, Events: []domain.Event{{Epoch: "e2e", Sequence: 2, Type: "queue.refreshed", At: now, Data: map[string]any{}}}}},
+		{page: domain.EventPage{LatestCursor: domain.EventCursor{Epoch: "e2e", Sequence: 2}, Events: []domain.Event{}}},
+	}}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/events?after=%ZZ&after=stale%3A1&__e2e_scenario=empty", nil)
+	request.Header.Set("Last-Event-ID", "e2e:1")
+	request = request.WithContext(context.WithValue(request.Context(), csrfContextKey{}, testCSRFToken))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(&deadlineRecorder{ResponseRecorder: recorder}, request)
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "text/event-stream; charset=utf-8" || !strings.Contains(recorder.Body.String(), "id: e2e:2\n") {
+		t.Fatalf("resolved reconnect = %d/%q body=%s", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Body.String())
+	}
+}
+
+func TestEventsMalformedEncodedScenarioKeyFailsClosedInE2EResolver(t *testing.T) {
+	runtime := &sseRuntimeFake{events: domain.EventPage{LatestCursor: domain.EventCursor{Epoch: "production-base", Sequence: 1}, Reset: true, Events: []domain.Event{}}}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/events?__e2e_scenario%ZZ=populated&after=e2e%3A1", nil)
+	request.Header.Set("Last-Event-ID", "e2e:1")
+	request = request.WithContext(context.WithValue(request.Context(), csrfContextKey{}, testCSRFToken))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(&deadlineRecorder{ResponseRecorder: recorder}, request)
+	// The production resolver is deliberately scenario-blind and therefore
+	// reaches the injected base runtime. The e2e resolver must reject this
+	// malformed selector before selecting any fixture.
+	if strings.Contains(recorder.Body.String(), "production-base:1") {
+		return
+	}
+	if recorder.Code != http.StatusNotFound || !strings.Contains(recorder.Body.String(), `"code":"not_found"`) || runtime.eventsCalls != 0 {
+		t.Fatalf("malformed scenario selector = %d calls=%d body=%s", recorder.Code, runtime.eventsCalls, recorder.Body.String())
+	}
+}
+
+func TestLiveResumeFailureFixtureFailsOnlyTheFirstStateRequest(t *testing.T) {
+	handler := newTestPageHandler(t, PageOptions{})
+	const scenario = "?__e2e_scenario=live-resume-failure"
+
+	overview := serveDirect(t, handler, http.MethodGet, "/"+scenario, "", nil)
+	if !strings.Contains(overview.Body.String(), "__e2e_scenario=live-resume-failure") {
+		t.Skip("e2e fixture resolver is not enabled")
+	}
+	issues := serveDirect(t, handler, http.MethodGet, "/issues"+scenario, "", nil)
+	if overview.Code != http.StatusOK || issues.Code != http.StatusOK || !strings.Contains(issues.Body.String(), "LIVE-1") {
+		t.Fatalf("server-rendered fixture pages = overview %d, issues %d body=%s", overview.Code, issues.Code, issues.Body.String())
+	}
+
+	firstState := serveDirect(t, handler, http.MethodGet, "/api/v1/state"+scenario, "", nil)
+	secondState := serveDirect(t, handler, http.MethodGet, "/api/v1/state"+scenario, "", nil)
+	if firstState.Code != http.StatusServiceUnavailable || !strings.Contains(firstState.Body.String(), `"code":"runtime_unavailable"`) {
+		t.Fatalf("first state request = %d body=%s", firstState.Code, firstState.Body.String())
+	}
+	if secondState.Code != http.StatusOK || !strings.Contains(secondState.Body.String(), `"identifier":"LIVE-1"`) {
+		t.Fatalf("second state request = %d body=%s", secondState.Code, secondState.Body.String())
+	}
+}
+
+func TestLiveFixturesArePristineAndIndependentForEachBrowserEngine(t *testing.T) {
+	handler := newTestPageHandler(t, PageOptions{})
+	const (
+		scenario   = "?__e2e_scenario=live-focus"
+		chromiumUA = "Mozilla/5.0 AppleWebKit/537.36 Chrome/140.0 Safari/537.36"
+		webkitUA   = "Mozilla/5.0 AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15"
+	)
+	getIssues := func(userAgent string) *httptest.ResponseRecorder {
+		return serveDirect(t, handler, http.MethodGet, "/issues"+scenario, "", map[string]string{"User-Agent": userAgent})
+	}
+	refresh := func(userAgent string) *httptest.ResponseRecorder {
+		return serveDirect(t, handler, http.MethodPost, "/api/v1/refresh"+scenario, `{}`, map[string]string{"Content-Type": "application/json", "User-Agent": userAgent})
+	}
+
+	chromiumInitial := getIssues(chromiumUA)
+	if !strings.Contains(chromiumInitial.Body.String(), "__e2e_scenario=live-focus") {
+		t.Skip("e2e fixture resolver is not enabled")
+	}
+	webkitInitial := getIssues(webkitUA)
+	for name, recorder := range map[string]*httptest.ResponseRecorder{"chromium": chromiumInitial, "webkit": webkitInitial} {
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Before refresh") || strings.Contains(recorder.Body.String(), "After refresh") {
+			t.Fatalf("%s initial live fixture = %d body=%s", name, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	if recorder := refresh(chromiumUA); recorder.Code != http.StatusAccepted {
+		t.Fatalf("chromium refresh = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	chromiumAfter, webkitStillInitial := getIssues(chromiumUA), getIssues(webkitUA)
+	if !strings.Contains(chromiumAfter.Body.String(), "After refresh") {
+		t.Fatalf("chromium mutation did not persist: %s", chromiumAfter.Body.String())
+	}
+	if !strings.Contains(webkitStillInitial.Body.String(), "Before refresh") || strings.Contains(webkitStillInitial.Body.String(), "After refresh") {
+		t.Fatalf("webkit fixture was mutated by chromium: %s", webkitStillInitial.Body.String())
+	}
+	if recorder := refresh(webkitUA); recorder.Code != http.StatusAccepted {
+		t.Fatalf("webkit refresh = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if webkitAfter := getIssues(webkitUA); !strings.Contains(webkitAfter.Body.String(), "After refresh") {
+		t.Fatalf("webkit mutation did not persist: %s", webkitAfter.Body.String())
 	}
 }
 

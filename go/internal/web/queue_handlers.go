@@ -46,27 +46,19 @@ func (handler *PageHandler) overviewHTML(w http.ResponseWriter, request *http.Re
 	}
 	configCode := cleanCode(snapshot.Config.ErrorCode)
 	trackerCode := cleanCode(snapshot.Tracker.ErrorCode)
-	trackerScope := cleanDisplayValue(snapshot.Tracker.Scope, maximumDisplayBytes)
-	if trackerScope == "" && handler.configService != nil {
-		if view, viewErr := handler.configService.View(request.Context()); viewErr == nil && view.StructuredAvailable {
-			trackerScope = cleanDisplayValue(view.Tracker.Scope, maximumDisplayBytes)
-		}
-	}
-	if trackerScope == "" {
-		trackerScope = "Tracker scope not selected"
-	}
+	trackerScope := handler.presentationTrackerScope(request, snapshot)
 	content := overviewContent{
 		TrackerScope: trackerScope, Mode: handler.mode,
 		Scheduler:      schedulerResponse{Available: snapshot.Scheduler.Available, Enabled: snapshot.Scheduler.Enabled, State: cleanDisplayValue(snapshot.Scheduler.State, maximumShortTextBytes), Message: cleanDisplayValue(snapshot.Scheduler.Message, maximumDisplayBytes)},
 		CandidateCount: len(snapshot.Candidates), RoutableCount: routable, RunningCount: len(snapshot.Running), RetryingCount: len(snapshot.Retrying), RequestCount: len(snapshot.Requests),
 		Tracker: trackerStatusResponse{
 			Kind: cleanDisplayValue(snapshot.Tracker.Kind, maximumShortTextBytes), Scope: trackerScope, State: cleanDisplayValue(snapshot.Tracker.State, maximumShortTextBytes), Stale: snapshot.Tracker.Stale,
-			Retryable: snapshot.Tracker.Retryable, LastAttemptAt: cloneTimePointer(snapshot.Tracker.LastAttemptAt), LastSuccessAt: cloneTimePointer(snapshot.Tracker.LastSuccessAt), RetryAt: cloneTimePointer(snapshot.Tracker.RetryAt),
+			Retryable: snapshot.Tracker.Retryable, HasError: snapshot.Tracker.ErrorCode != "", LastAttemptAt: cloneTimePointer(snapshot.Tracker.LastAttemptAt), LastSuccessAt: cloneTimePointer(snapshot.Tracker.LastSuccessAt), RetryAt: cloneTimePointer(snapshot.Tracker.RetryAt),
 			ErrorCode: trackerCode, Message: safeStatusMessage(snapshot.Tracker.Message, snapshot.Tracker.ErrorCode != "", trackerCode, "Tracker status needs attention."),
 		},
 		Config: configStatusResponse{
 			State: cleanDisplayValue(snapshot.Config.State, maximumShortTextBytes), Digest: cleanMachine(snapshot.Config.Digest, maximumDisplayBytes), ActiveDigest: cleanMachine(snapshot.Config.ActiveDigest, maximumDisplayBytes),
-			UsingLastGood: snapshot.Config.UsingLastGood, ErrorCode: configCode, Message: safeStatusMessage(snapshot.Config.Message, snapshot.Config.ErrorCode != "", configCode, "Configuration status needs attention."), ChangedAt: snapshot.Config.ChangedAt,
+			UsingLastGood: snapshot.Config.UsingLastGood, HasError: snapshot.Config.ErrorCode != "", ErrorCode: configCode, Message: safeStatusMessage(snapshot.Config.Message, snapshot.Config.ErrorCode != "", configCode, "Configuration status needs attention."), ChangedAt: snapshot.Config.ChangedAt,
 		},
 		ConfigError: snapshot.Config.ErrorCode != "", TrackerError: snapshot.Tracker.ErrorCode != "",
 	}
@@ -83,8 +75,9 @@ func (handler *PageHandler) overviewHTML(w http.ResponseWriter, request *http.Re
 		status = "No scheduler is running. Current tracker work is shown."
 	}
 	page := Page{Title: "Overview — Symphony", Route: "/", Heading: "Overview", Mode: handler.mode, Status: status, CSRFToken: csrf, Scenario: dependencies.scenario, Content: content}
+	configureLivePage(&page, "overview", snapshot.EventCursor, nil)
 	if firstQueryValue(request.URL.Query(), "result") == "refresh-requested" {
-		page.Flash = "Refresh requested"
+		page.Flash = "Refresh requested."
 		if firstQueryValue(request.URL.Query(), "focus") == "refresh" {
 			page.FocusTarget = "refresh"
 		}
@@ -92,6 +85,19 @@ func (handler *PageHandler) overviewHTML(w http.ResponseWriter, request *http.Re
 	if err := handler.renderHTML(w, "overview", page); err != nil {
 		handler.respondHTMLRequestError(w, request, http.StatusInternalServerError)
 	}
+}
+
+func (handler *PageHandler) presentationTrackerScope(request *http.Request, snapshot domain.Snapshot) string {
+	trackerScope := cleanDisplayValue(snapshot.Tracker.Scope, maximumDisplayBytes)
+	if trackerScope == "" && handler.configService != nil {
+		if view, err := handler.configService.View(request.Context()); err == nil && view.StructuredAvailable {
+			trackerScope = cleanDisplayValue(view.Tracker.Scope, maximumDisplayBytes)
+		}
+	}
+	if trackerScope == "" {
+		return "Tracker scope not selected"
+	}
+	return trackerScope
 }
 
 func (handler *PageHandler) issuesHTML(w http.ResponseWriter, request *http.Request) {
@@ -112,7 +118,9 @@ func (handler *PageHandler) issuesHTML(w http.ResponseWriter, request *http.Requ
 	} else if len(rows) == 1 {
 		status = "1 tracker work candidate is shown."
 	}
-	page := Page{Title: "Issues — Symphony", Route: "/issues", Heading: "Issues", Mode: handler.mode, Status: status, Scenario: dependencies.scenario, Content: issuesContent{Filters: filters, Rows: rows, States: states}}
+	csrf, _ := CSRFToken(request.Context())
+	page := Page{Title: "Issues — Symphony", Route: "/issues", Heading: "Issues", Mode: handler.mode, Status: status, CSRFToken: csrf, Scenario: dependencies.scenario, Content: issuesContent{Filters: filters, Rows: rows, States: states}}
+	configureLivePage(&page, "issues", snapshot.EventCursor, issueFilterValues(filters))
 	if err := handler.renderHTML(w, "issues", page); err != nil {
 		handler.respondHTMLRequestError(w, request, http.StatusInternalServerError)
 	}
@@ -120,22 +128,26 @@ func (handler *PageHandler) issuesHTML(w http.ResponseWriter, request *http.Requ
 
 func (handler *PageHandler) activityHTML(w http.ResponseWriter, request *http.Request) {
 	dependencies := handler.dependencies(request)
+	snapshot, err := dependencies.queries.Snapshot(request.Context())
+	if err != nil {
+		handler.respondHTMLRequestError(w, request, http.StatusServiceUnavailable)
+		return
+	}
 	tail, err := dependencies.queries.RecentEvents(request.Context(), 100)
 	if err != nil {
 		handler.respondHTMLRequestError(w, request, http.StatusServiceUnavailable)
 		return
 	}
-	events := make([]eventSummaryResponse, 0, len(tail.Events))
-	for _, event := range tail.Events {
-		events = append(events, eventSummary(event))
-	}
+	events, _, reset, _ := coherentEventViews(snapshot.EventCursor, tail)
 	status := strconv.Itoa(len(events)) + " recent activity items are shown."
 	if len(events) == 0 {
 		status = "No activity has been recorded."
 	} else if len(events) == 1 {
 		status = "1 recent activity item is shown."
 	}
-	page := Page{Title: "Activity — Symphony", Route: "/activity", Heading: "Activity", Mode: handler.mode, Status: status, Scenario: dependencies.scenario, Content: activityContent{Events: events, Reset: tail.Reset}}
+	csrf, _ := CSRFToken(request.Context())
+	page := Page{Title: "Activity — Symphony", Route: "/activity", Heading: "Activity", Mode: handler.mode, Status: status, CSRFToken: csrf, Scenario: dependencies.scenario, Content: activityContent{Events: events, Reset: reset}}
+	configureLivePage(&page, "activity", snapshot.EventCursor, nil)
 	if err := handler.renderHTML(w, "activity", page); err != nil {
 		handler.respondHTMLRequestError(w, request, http.StatusInternalServerError)
 	}
@@ -174,13 +186,13 @@ func (handler *PageHandler) stateAPI(w http.ResponseWriter, request *http.Reques
 		handler.writeAPIError(w, "runtime_unavailable")
 		return
 	}
-	tail, err := dependencies.queries.RecentEvents(request.Context(), 20)
+	tail, err := dependencies.queries.RecentEvents(request.Context(), 100)
 	if err != nil {
 		handler.writeAPIError(w, "runtime_unavailable")
 		return
 	}
 	candidates, _ := filteredCandidateResponses(snapshot.Candidates, snapshot.Tracker.Stale, request.URL.Query())
-	events, reset := coherentEventSummaries(snapshot.EventCursor, tail)
+	activityEvents, recentEvents, activityReset, recentReset := coherentEventViews(snapshot.EventCursor, tail)
 
 	running := make([]runningResponse, 0, len(snapshot.Running))
 	for _, row := range snapshot.Running {
@@ -191,10 +203,10 @@ func (handler *PageHandler) stateAPI(w http.ResponseWriter, request *http.Reques
 		retrying = append(retrying, retryResponseFrom(row))
 	}
 	requests := operatorRequestResponses(snapshot.Requests)
-	routable := 0
-	for _, candidate := range candidates {
+	routableTotal := 0
+	for _, candidate := range snapshot.Candidates {
 		if candidate.Routable {
-			routable++
+			routableTotal++
 		}
 	}
 	errorsCount := 0
@@ -206,24 +218,26 @@ func (handler *PageHandler) stateAPI(w http.ResponseWriter, request *http.Reques
 	}
 	configCode := cleanCode(snapshot.Config.ErrorCode)
 	trackerCode := cleanCode(snapshot.Tracker.ErrorCode)
+	trackerScope := handler.presentationTrackerScope(request, snapshot)
 	response := stateResponse{
 		GeneratedAt: snapshot.GeneratedAt,
 		Counts: stateCountsResponse{
-			Running: len(running), Retrying: len(retrying), Candidates: len(candidates), Routable: routable,
-			NeedsAttention: len(candidates) - routable, Requests: len(requests), Errors: errorsCount,
+			Running: len(running), Retrying: len(retrying), Candidates: len(snapshot.Candidates), Routable: routableTotal,
+			NeedsAttention: len(snapshot.Candidates) - routableTotal, Requests: len(requests), Errors: errorsCount,
 		},
 		Running: running, Retrying: retrying, CodexTotals: tokenTotalsResponseFrom(snapshot.CodexTotals), RateLimits: nil,
-		EventCursor: eventCursorString(snapshot.EventCursor), Candidates: candidates, RecentEvents: events, RecentEventsReset: reset,
+		EventCursor: eventCursorString(snapshot.EventCursor), Candidates: candidates,
+		RecentEvents: recentEvents, RecentEventsReset: recentReset, ActivityEvents: activityEvents, ActivityEventsReset: activityReset,
 		Scheduler: schedulerResponse{
 			Available: snapshot.Scheduler.Available, Enabled: snapshot.Scheduler.Enabled, State: cleanDisplayValue(snapshot.Scheduler.State, maximumShortTextBytes), Message: cleanDisplayValue(snapshot.Scheduler.Message, maximumDisplayBytes),
 		},
 		Config: configStatusResponse{
 			State: cleanDisplayValue(snapshot.Config.State, maximumShortTextBytes), Digest: cleanMachine(snapshot.Config.Digest, maximumDisplayBytes), ActiveDigest: cleanMachine(snapshot.Config.ActiveDigest, maximumDisplayBytes),
-			UsingLastGood: snapshot.Config.UsingLastGood, ErrorCode: configCode, Message: safeAPIStatusMessage(snapshot.Config.Message, snapshot.Config.ErrorCode != "", configCode, "Configuration status needs attention."), ChangedAt: snapshot.Config.ChangedAt,
+			UsingLastGood: snapshot.Config.UsingLastGood, HasError: snapshot.Config.ErrorCode != "", ErrorCode: configCode, Message: safeAPIStatusMessage(snapshot.Config.Message, snapshot.Config.ErrorCode != "", configCode, "Configuration status needs attention."), ChangedAt: snapshot.Config.ChangedAt,
 		},
 		Tracker: trackerStatusResponse{
-			Kind: cleanDisplayValue(snapshot.Tracker.Kind, maximumShortTextBytes), Scope: cleanDisplayValue(snapshot.Tracker.Scope, maximumDisplayBytes), State: cleanDisplayValue(snapshot.Tracker.State, maximumShortTextBytes),
-			Stale: snapshot.Tracker.Stale, Retryable: snapshot.Tracker.Retryable, LastAttemptAt: cloneTimePointer(snapshot.Tracker.LastAttemptAt), LastSuccessAt: cloneTimePointer(snapshot.Tracker.LastSuccessAt), RetryAt: cloneTimePointer(snapshot.Tracker.RetryAt),
+			Kind: cleanDisplayValue(snapshot.Tracker.Kind, maximumShortTextBytes), Scope: trackerScope, State: cleanDisplayValue(snapshot.Tracker.State, maximumShortTextBytes),
+			Stale: snapshot.Tracker.Stale, HasError: snapshot.Tracker.ErrorCode != "", Retryable: snapshot.Tracker.Retryable, LastAttemptAt: cloneTimePointer(snapshot.Tracker.LastAttemptAt), LastSuccessAt: cloneTimePointer(snapshot.Tracker.LastSuccessAt), RetryAt: cloneTimePointer(snapshot.Tracker.RetryAt),
 			ErrorCode: trackerCode, Message: safeAPIStatusMessage(snapshot.Tracker.Message, snapshot.Tracker.ErrorCode != "", trackerCode, "Tracker status needs attention."),
 		},
 		Requests: requests,
@@ -580,22 +594,28 @@ func issueDetailURL(identifier string, filters issueFilters) string {
 	return target
 }
 
-func coherentEventSummaries(cursor domain.EventCursor, tail domain.EventPage) ([]eventSummaryResponse, bool) {
-	result := []eventSummaryResponse{}
+func coherentEventViews(cursor domain.EventCursor, tail domain.EventPage) ([]eventSummaryResponse, []eventSummaryResponse, bool, bool) {
+	activity := []eventSummaryResponse{}
 	if cursor.Epoch == "" || tail.LatestCursor.Epoch != cursor.Epoch {
-		return result, true
+		return activity, []eventSummaryResponse{}, true, true
 	}
 	for _, event := range tail.Events {
 		if event.Epoch == cursor.Epoch && event.Sequence <= cursor.Sequence {
-			result = append(result, eventSummary(event))
+			activity = append(activity, eventSummary(event))
 		}
 	}
 	if cursor.Sequence != 0 {
-		if len(result) == 0 || tail.Events[len(tail.Events)-1].Epoch != cursor.Epoch || result[len(result)-1].EventCursor != eventCursorString(cursor) {
-			return []eventSummaryResponse{}, true
+		if len(activity) == 0 || activity[len(activity)-1].EventCursor != eventCursorString(cursor) {
+			return []eventSummaryResponse{}, []eventSummaryResponse{}, true, true
 		}
 	}
-	return result, tail.Reset
+	if len(activity) > 100 {
+		activity = activity[len(activity)-100:]
+	}
+	recentStart := max(0, len(activity)-20)
+	recent := make([]eventSummaryResponse, len(activity)-recentStart)
+	copy(recent, activity[recentStart:])
+	return activity, recent, tail.Reset, tail.Reset
 }
 
 func operatorRequestResponses(source []domain.OperatorRequest) []operatorRequestResponse {

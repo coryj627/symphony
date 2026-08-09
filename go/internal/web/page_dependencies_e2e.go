@@ -4,9 +4,12 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coryj627/symphony/go/internal/app"
@@ -17,27 +20,165 @@ import (
 var e2eScenarioManifest = map[string]struct{}{
 	"empty": {}, "populated": {}, "stale-error": {}, "filtered-empty": {},
 	"issue-not-found": {}, "malicious-text": {}, "encoded-identifier": {},
-	"degraded-log": {}, "long-log": {},
+	"degraded-log": {}, "long-log": {}, "live-focus": {}, "live-structural": {},
+	"live-pause": {}, "live-resume-failure": {},
 }
 
-func resolvePageDependencies(request *http.Request, _ pageDependencies) (pageDependencies, string, bool) {
-	query, err := url.ParseQuery(request.URL.RawQuery)
-	if err != nil {
-		return pageDependencies{}, "", false
+const maximumE2ELiveClients = 64
+
+var e2eLiveScenarios = [...]string{
+	"live-focus",
+	"live-structural",
+	"live-pause",
+	"live-resume-failure",
+}
+
+func newPageDependencyResolver() pageDependencyResolver {
+	fixtures := make(map[string]pageDependencies, len(e2eScenarioManifest))
+	for scenario := range e2eScenarioManifest {
+		if !strings.HasPrefix(scenario, "live-") {
+			fixtures[scenario] = newE2EPageDependencies(scenario)
+		}
 	}
-	values, present := query["__e2e_scenario"]
-	scenario := "empty"
-	if present {
-		if len(values) != 1 || !validE2EScenarioValue(values[0]) {
+	var liveMu sync.Mutex
+	liveFixtures := make(map[[sha256.Size]byte]*e2eLiveFixtureSet)
+	return func(request *http.Request, _ pageDependencies) (pageDependencies, string, bool) {
+		values, present, ok := e2eScenarioValues(request)
+		if !ok {
 			return pageDependencies{}, "", false
 		}
-		scenario = values[0]
+		scenario := "empty"
+		if present {
+			if len(values) != 1 || !validE2EScenarioValue(values[0]) {
+				return pageDependencies{}, "", false
+			}
+			scenario = values[0]
+		}
+		if _, known := e2eScenarioManifest[scenario]; !known {
+			return pageDependencies{}, "", false
+		}
+		if !strings.HasPrefix(scenario, "live-") {
+			return fixtures[scenario], scenario, true
+		}
+		client := e2eClientIdentity(request)
+		liveMu.Lock()
+		fixtureSet := liveFixtures[client]
+		if fixtureSet == nil {
+			if len(liveFixtures) >= maximumE2ELiveClients {
+				liveMu.Unlock()
+				return pageDependencies{}, "", false
+			}
+			fixtureSet = newE2ELiveFixtureSet()
+			liveFixtures[client] = fixtureSet
+		}
+		fixture := fixtureSet.fixtures[scenario]
+		liveMu.Unlock()
+		if fixture == nil {
+			return pageDependencies{}, "", false
+		}
+		if request.URL.EscapedPath() == "/api/v1/state" {
+			return fixture.state, scenario, true
+		}
+		return fixture.page, scenario, true
 	}
-	if _, known := e2eScenarioManifest[scenario]; !known {
-		return pageDependencies{}, "", false
+}
+
+type e2eLiveFixtureSet struct {
+	fixtures map[string]*e2eLiveFixture
+}
+
+func newE2ELiveFixtureSet() *e2eLiveFixtureSet {
+	fixtures := make(map[string]*e2eLiveFixture, len(e2eLiveScenarios))
+	for _, scenario := range e2eLiveScenarios {
+		fixtures[scenario] = newE2ELiveFixture(scenario)
 	}
-	runtime, logs := newE2EPageFixture(scenario)
-	return pageDependencies{queries: runtime, commands: runtime, logs: logs}, scenario, true
+	return &e2eLiveFixtureSet{fixtures: fixtures}
+}
+
+func e2eClientIdentity(request *http.Request) [sha256.Size]byte {
+	csrf, _ := CSRFToken(request.Context())
+	engine := "direct"
+	userAgent := strings.ToLower(request.UserAgent())
+	switch {
+	case strings.Contains(userAgent, "chrome"), strings.Contains(userAgent, "chromium"), strings.Contains(userAgent, "crios"), strings.Contains(userAgent, "edg/"):
+		engine = "chromium"
+	case strings.Contains(userAgent, "applewebkit") && strings.Contains(userAgent, "safari"):
+		engine = "webkit"
+	}
+	return sha256.Sum256([]byte(csrf + "\x00" + engine))
+}
+
+type e2eLiveFixture struct {
+	page  pageDependencies
+	state pageDependencies
+}
+
+func newE2ELiveFixture(scenario string) *e2eLiveFixture {
+	runtime := newLiveE2ERuntime(scenario)
+	page := pageDependencies{queries: runtime, commands: runtime, logs: &e2eLogQueries{page: observability.LogPage{Records: []observability.LogRecord{}}}}
+	state := page
+	if scenario == "live-resume-failure" {
+		state.queries = &e2eOneShotStateFailure{RuntimeQueries: runtime}
+	}
+	return &e2eLiveFixture{page: page, state: state}
+}
+
+type e2eOneShotStateFailure struct {
+	app.RuntimeQueries
+	mu       sync.Mutex
+	returned bool
+}
+
+func (queries *e2eOneShotStateFailure) Snapshot(ctx context.Context) (domain.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.Snapshot{}, err
+	}
+	queries.mu.Lock()
+	defer queries.mu.Unlock()
+	if !queries.returned {
+		queries.returned = true
+		return domain.Snapshot{}, errors.New("fixture_runtime_unavailable")
+	}
+	return queries.RuntimeQueries.Snapshot(ctx)
+}
+
+func e2eScenarioValues(request *http.Request) ([]string, bool, bool) {
+	if request.URL.EscapedPath() != "/api/v1/events" {
+		query, err := url.ParseQuery(request.URL.RawQuery)
+		if err != nil {
+			return nil, false, false
+		}
+		values, present := query["__e2e_scenario"]
+		return values, present, true
+	}
+	var values []string
+	present := false
+	for _, part := range strings.Split(request.URL.RawQuery, "&") {
+		if part == "" {
+			continue
+		}
+		rawKey, rawValue, _ := strings.Cut(part, "=")
+		key, err := url.QueryUnescape(rawKey)
+		if err != nil {
+			return nil, false, false
+		}
+		if key == "after" {
+			continue
+		}
+		if key != "__e2e_scenario" {
+			if _, err := url.QueryUnescape(rawValue); err != nil {
+				return nil, false, false
+			}
+			continue
+		}
+		present = true
+		value, err := url.QueryUnescape(rawValue)
+		if err != nil {
+			return nil, true, false
+		}
+		values = append(values, value)
+	}
+	return values, present, true
 }
 
 func validE2EScenarioValue(value string) bool {
@@ -76,8 +217,25 @@ func (runtime *e2ePageRuntime) Issue(ctx context.Context, identifier string) (do
 	return detail.Clone()
 }
 
-func (runtime *e2ePageRuntime) EventsAfter(context.Context, domain.EventCursor) (domain.EventPage, error) {
-	return domain.EventPage{Events: []domain.Event{}}, nil
+func (runtime *e2ePageRuntime) EventsAfter(ctx context.Context, cursor domain.EventCursor) (domain.EventPage, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.EventPage{}, err
+	}
+	page := domain.EventPage{LatestCursor: runtime.recent.LatestCursor, Events: []domain.Event{}}
+	if cursor.Epoch == "" || cursor.Epoch != page.LatestCursor.Epoch || cursor.Sequence > page.LatestCursor.Sequence {
+		page.Reset = true
+		return page, nil
+	}
+	if len(runtime.recent.Events) > 0 && cursor.Sequence != ^uint64(0) && runtime.recent.Events[0].Sequence > cursor.Sequence+1 {
+		page.Reset = true
+		return page, nil
+	}
+	for _, event := range runtime.recent.Events {
+		if event.Epoch == cursor.Epoch && event.Sequence > cursor.Sequence {
+			page.Events = append(page.Events, event)
+		}
+	}
+	return page, nil
 }
 
 func (runtime *e2ePageRuntime) RecentEvents(ctx context.Context, limit int) (domain.EventPage, error) {
@@ -174,6 +332,145 @@ func cloneE2ELogRecord(record observability.LogRecord) observability.LogRecord {
 }
 
 var e2eNow = time.Date(2026, 8, 8, 16, 0, 0, 0, time.UTC)
+
+func newE2EPageDependencies(scenario string) pageDependencies {
+	runtime, logs := newE2EPageFixture(scenario)
+	return pageDependencies{queries: runtime, commands: runtime, logs: logs}
+}
+
+type liveE2ERuntime struct {
+	mu        sync.Mutex
+	scenario  string
+	snapshot  domain.Snapshot
+	details   map[string]domain.IssueDetail
+	journal   *observability.Journal
+	refreshes int
+}
+
+func newLiveE2ERuntime(scenario string) *liveE2ERuntime {
+	journal := observability.NewJournal(observability.JournalOptions{})
+	snapshot := domain.EmptySnapshot()
+	snapshot.GeneratedAt = e2eNow
+	snapshot.EventCursor = journal.Cursor()
+	snapshot.Scheduler = domain.SchedulerStatus{Available: true, Enabled: false, State: "paused", Message: "Scheduler is paused."}
+	snapshot.Config = domain.ConfigStatus{State: "valid", Digest: "e2e", ActiveDigest: "e2e", ChangedAt: e2eNow}
+	snapshot.Tracker = domain.TrackerStatus{Kind: "fixture", Scope: "fixture/live", State: "ready", LastAttemptAt: &e2eNow, LastSuccessAt: &e2eNow}
+	runtime := &liveE2ERuntime{scenario: scenario, snapshot: snapshot, details: make(map[string]domain.IssueDetail), journal: journal}
+	switch scenario {
+	case "live-focus":
+		runtime.replaceCandidatesLocked(liveE2ECandidate("LIVE-1", "Before refresh"))
+	case "live-structural":
+		runtime.replaceCandidatesLocked(
+			liveE2ECandidateWithID("live-one", "LIVE-1", "First issue"),
+			liveE2ECandidateWithID("live-two", "LIVE-2", "Second issue"),
+		)
+	case "live-pause":
+		runtime.replaceCandidatesLocked(liveE2ECandidate("LIVE-1", "Before pause"))
+	case "live-resume-failure":
+		runtime.replaceCandidatesLocked(liveE2ECandidate("LIVE-1", "Before resume"))
+	}
+	return runtime
+}
+
+func liveE2ECandidate(identifier, title string) domain.CandidateRow {
+	return liveE2ECandidateWithID(strings.ToLower(identifier), identifier, title)
+}
+
+func liveE2ECandidateWithID(issueID, identifier, title string) domain.CandidateRow {
+	return domain.CandidateRow{Issue: domain.Issue{ID: issueID, Identifier: identifier, Title: title, State: "Open", Labels: []string{}}, Routable: true, RoutingReasons: []string{}}
+}
+
+func (runtime *liveE2ERuntime) replaceCandidatesLocked(candidates ...domain.CandidateRow) {
+	runtime.snapshot.Candidates = append([]domain.CandidateRow(nil), candidates...)
+	runtime.details = make(map[string]domain.IssueDetail, len(candidates))
+	for _, candidate := range candidates {
+		runtime.details[candidate.Issue.Identifier] = domain.IssueDetail{Issue: candidate.Issue, Status: "candidate", Routable: candidate.Routable, RoutingReasons: append([]string(nil), candidate.RoutingReasons...)}
+	}
+}
+
+func (runtime *liveE2ERuntime) Snapshot(ctx context.Context) (domain.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.Snapshot{}, err
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.snapshot.Clone()
+}
+
+func (runtime *liveE2ERuntime) Issue(ctx context.Context, identifier string) (domain.IssueDetail, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.IssueDetail{}, err
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	detail, found := runtime.details[identifier]
+	if !found {
+		return domain.IssueDetail{}, app.ErrIssueNotFound
+	}
+	return detail.Clone()
+}
+
+func (runtime *liveE2ERuntime) EventsAfter(ctx context.Context, cursor domain.EventCursor) (domain.EventPage, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.EventPage{}, err
+	}
+	return runtime.journal.After(cursor), nil
+}
+
+func (runtime *liveE2ERuntime) RecentEvents(ctx context.Context, limit int) (domain.EventPage, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.EventPage{}, err
+	}
+	return runtime.journal.Recent(limit), nil
+}
+
+func (runtime *liveE2ERuntime) SubscribeEvents(cursor domain.EventCursor) <-chan struct{} {
+	return runtime.journal.Subscribe(cursor)
+}
+
+func (runtime *liveE2ERuntime) Refresh(ctx context.Context) (domain.RefreshReceipt, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.RefreshReceipt{}, err
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.refreshes++
+	switch runtime.scenario {
+	case "live-focus":
+		if runtime.refreshes == 1 {
+			runtime.replaceCandidatesLocked(liveE2ECandidate("LIVE-1", "After refresh"), liveE2ECandidate("LIVE-2", "Second issue"))
+		}
+	case "live-structural":
+		switch runtime.refreshes {
+		case 1:
+			runtime.replaceCandidatesLocked(liveE2ECandidateWithID("live-two", "LIVE-2", "Second issue"))
+		case 2:
+			runtime.replaceCandidatesLocked(liveE2ECandidateWithID("live-two", "TEAM:@&=+$!é", "Second issue updated"))
+		}
+	case "live-pause":
+		switch runtime.refreshes {
+		case 1:
+			runtime.replaceCandidatesLocked(liveE2ECandidate("LIVE-2", "While paused"))
+		case 2:
+			runtime.replaceCandidatesLocked(liveE2ECandidate("LIVE-2", "After resume"), liveE2ECandidate("LIVE-3", "Future delivery"))
+		}
+	}
+	published, err := runtime.journal.Publish(domain.Event{Type: "queue.refreshed", Data: map[string]any{}})
+	if err != nil {
+		return domain.RefreshReceipt{}, err
+	}
+	runtime.snapshot.EventCursor = domain.EventCursor{Epoch: published.Epoch, Sequence: published.Sequence}
+	runtime.snapshot.GeneratedAt = published.At
+	return domain.RefreshReceipt{Queued: true, RequestedAt: published.At, Operations: []string{"poll"}}, nil
+}
+
+func (*liveE2ERuntime) SetScheduler(context.Context, bool) error { return app.ErrUnavailableInPhase }
+func (*liveE2ERuntime) Respond(context.Context, domain.OperatorResponse) error {
+	return app.ErrUnavailableInPhase
+}
+
+var _ app.RuntimeQueries = (*liveE2ERuntime)(nil)
+var _ app.RuntimeCommands = (*liveE2ERuntime)(nil)
 
 func newE2EPageFixture(scenario string) (*e2ePageRuntime, *e2eLogQueries) {
 	snapshot := domain.EmptySnapshot()

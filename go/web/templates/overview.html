@@ -3,43 +3,46 @@
   <h2 id="service-status-heading">Service status</h2>
   <dl class="identity-list">
     <div><dt>Service</dt><dd>Symphony</dd></div>
-    <div><dt>Tracker scope</dt><dd>{{.Content.TrackerScope}}</dd></div>
+    <div data-live-overview-field-container="tracker-scope"><dt>Tracker scope</dt><dd>{{.Content.TrackerScope}}</dd></div>
     <div><dt>Mode</dt><dd>{{if eq .Content.Mode "run"}}Run{{else}}Configure{{end}}</dd></div>
-    <div><dt>Scheduler</dt><dd>{{if not .Content.Scheduler.Available}}Unavailable{{else if .Content.Scheduler.Enabled}}Enabled{{else}}Paused{{end}}</dd></div>
-    {{if .Content.Scheduler.State}}<div><dt>Scheduler state</dt><dd>{{.Content.Scheduler.State}}</dd></div>{{end}}
-    {{if .Content.Scheduler.Message}}<div><dt>Scheduler detail</dt><dd>{{.Content.Scheduler.Message}}</dd></div>{{end}}
+    <div><dt>Scheduler</dt><dd data-live-overview-field="scheduler">{{if not .Content.Scheduler.Available}}Unavailable{{else if .Content.Scheduler.Enabled}}Enabled{{else}}Paused{{end}}</dd></div>
+    <div data-live-overview-row="scheduler-state"{{if not .Content.Scheduler.State}} hidden{{end}}><dt>Scheduler state</dt><dd data-live-overview-field="scheduler-state">{{.Content.Scheduler.State}}</dd></div>
+    <div data-live-overview-row="scheduler-message"{{if not .Content.Scheduler.Message}} hidden{{end}}><dt>Scheduler detail</dt><dd data-live-overview-field="scheduler-message">{{.Content.Scheduler.Message}}</dd></div>
+    <div data-live-overview-row="tracker-state"{{if not .Content.Tracker.State}} hidden{{end}}><dt>Tracker state</dt><dd data-live-overview-field="tracker-state">{{.Content.Tracker.State}}</dd></div>
+    <div data-live-overview-row="tracker-message"{{if not .Content.Tracker.Message}} hidden{{end}}><dt>Tracker detail</dt><dd data-live-overview-field="tracker-message">{{.Content.Tracker.Message}}</dd></div>
+    <div data-live-overview-row="config-state"{{if not .Content.Config.State}} hidden{{end}}><dt>Configuration state</dt><dd data-live-overview-field="config-state">{{.Content.Config.State}}</dd></div>
+    <div data-live-overview-row="config-message"{{if not .Content.Config.Message}} hidden{{end}}><dt>Configuration detail</dt><dd data-live-overview-field="config-message">{{.Content.Config.Message}}</dd></div>
   </dl>
-  {{if .Content.Tracker.Stale}}<p class="notice">Tracker information is stale and is shown as last known.</p>{{end}}
+  <p class="notice" data-live-overview-stale{{if not .Content.Tracker.Stale}} hidden{{end}}>Tracker information is stale and is shown as last known.</p>
 </section>
-<section aria-labelledby="work-heading">
+<section aria-labelledby="work-heading" data-live-presentation>
   <h2 id="work-heading">Work summary</h2>
   <ul class="metric-list">
-    <li><strong>{{.Content.CandidateCount}}</strong> Candidates</li>
-    <li><strong>{{.Content.RoutableCount}}</strong> Routable</li>
-    <li><strong>{{.Content.RunningCount}}</strong> Running</li>
-    <li><strong>{{.Content.RetryingCount}}</strong> Retrying</li>
-    <li><strong>{{.Content.RequestCount}}</strong> Operator requests</li>
-    <li><strong>{{.Content.ErrorCount}}</strong> Errors</li>
+    <li><strong data-live-count="candidates">{{.Content.CandidateCount}}</strong> Candidates</li>
+    <li><strong data-live-count="routable">{{.Content.RoutableCount}}</strong> Routable</li>
+    <li><strong data-live-count="running">{{.Content.RunningCount}}</strong> Running</li>
+    <li><strong data-live-count="retrying">{{.Content.RetryingCount}}</strong> Retrying</li>
+    <li><strong data-live-count="requests">{{.Content.RequestCount}}</strong> Operator requests</li>
+    <li><strong data-live-count="errors">{{.Content.ErrorCount}}</strong> Errors</li>
   </ul>
 </section>
 <section aria-labelledby="tracker-timing-heading">
   <h2 id="tracker-timing-heading">Tracker timing</h2>
   <dl class="identity-list">
-    <div><dt>Last attempt</dt><dd>{{if .Content.Tracker.LastAttemptAt}}<time datetime="{{.Content.Tracker.LastAttemptDateTime}}">{{.Content.Tracker.LastAttemptDisplayTime}}</time>{{else}}Not yet attempted{{end}}</dd></div>
-    <div><dt>Last success</dt><dd>{{if .Content.Tracker.LastSuccessAt}}<time datetime="{{.Content.Tracker.LastSuccessDateTime}}">{{.Content.Tracker.LastSuccessDisplayTime}}</time>{{else}}No successful refresh yet{{end}}</dd></div>
+    <div><dt>Last attempt</dt><dd data-live-overview-time="last-attempt">{{if .Content.Tracker.LastAttemptAt}}<time datetime="{{.Content.Tracker.LastAttemptDateTime}}">{{.Content.Tracker.LastAttemptDisplayTime}}</time>{{else}}Not yet attempted{{end}}</dd></div>
+    <div><dt>Last success</dt><dd data-live-overview-time="last-success">{{if .Content.Tracker.LastSuccessAt}}<time datetime="{{.Content.Tracker.LastSuccessDateTime}}">{{.Content.Tracker.LastSuccessDisplayTime}}</time>{{else}}No successful refresh yet{{end}}</dd></div>
   </dl>
-  <form method="post" action="{{.InternalURL "/api/v1/refresh"}}">
+  <form method="post" action="{{.InternalURL "/api/v1/refresh"}}" data-live-refresh-form>
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <button id="refresh" type="submit"{{if eq .FocusTarget "refresh"}} autofocus{{end}}>Refresh tracker work</button>
   </form>
 </section>
 <aside aria-labelledby="errors-heading">
   <h2 id="errors-heading">Configuration and tracker errors</h2>
-  {{if or .Content.ConfigError .Content.TrackerError}}
-  <ul>
-    {{if .Content.ConfigError}}<li class="provider-text"><strong>Configuration:</strong> {{.Content.Config.Message}}</li>{{end}}
-    {{if .Content.TrackerError}}<li class="provider-text"><strong>Tracker:</strong> {{.Content.Tracker.Message}}</li>{{end}}
+  <ul data-live-overview-errors{{if not (or .Content.ConfigError .Content.TrackerError)}} hidden{{end}}>
+    <li class="provider-text" data-live-overview-error="config"{{if not .Content.ConfigError}} hidden{{end}}><strong>Configuration:</strong> <span data-field="message">{{.Content.Config.Message}}</span></li>
+    <li class="provider-text" data-live-overview-error="tracker"{{if not .Content.TrackerError}} hidden{{end}}><strong>Tracker:</strong> <span data-field="message">{{.Content.Tracker.Message}}</span></li>
   </ul>
-  {{else}}<p>No persistent errors.</p>{{end}}
+  <p data-live-overview-errors-empty{{if or .Content.ConfigError .Content.TrackerError}} hidden{{end}}>No persistent errors.</p>
 </aside>
 {{end}}

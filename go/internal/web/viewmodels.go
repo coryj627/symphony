@@ -20,6 +20,10 @@ type Page struct {
 	FocusTarget          string
 	Scenario             string
 	IssueListURL         string
+	LiveRoute            string
+	EventCursorID        string
+	StateURL             string
+	EventsURL            string
 	ErrorSummary         []PageError
 	ErrorSummaryInDialog bool
 	Content              any

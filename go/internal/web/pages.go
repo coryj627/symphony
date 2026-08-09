@@ -29,16 +29,18 @@ type Renderer struct {
 
 // PageHandler serves the application pages and their semantic error documents.
 type PageHandler struct {
-	renderer      *Renderer
-	mux           *http.ServeMux
-	configService *app.ConfigService
-	mode          string
-	queries       app.RuntimeQueries
-	commands      app.RuntimeCommands
-	logs          LogQueries
-	logger        *slog.Logger
-	errorSeed     [32]byte
-	errorCounter  atomic.Uint64
+	renderer            *Renderer
+	mux                 *http.ServeMux
+	configService       *app.ConfigService
+	mode                string
+	queries             app.RuntimeQueries
+	commands            app.RuntimeCommands
+	logs                LogQueries
+	logger              *slog.Logger
+	events              eventStreamConfig
+	resolveDependencies pageDependencyResolver
+	errorSeed           [32]byte
+	errorCounter        atomic.Uint64
 }
 
 type pageDependencies struct {
@@ -53,6 +55,8 @@ type resolvedPageDependencies struct {
 }
 
 type pageDependenciesContextKey struct{}
+
+type pageDependencyResolver func(*http.Request, pageDependencies) (pageDependencies, string, bool)
 
 // LogQueries is the narrow immutable log-query surface consumed by pages.
 type LogQueries interface {
@@ -151,10 +155,11 @@ func newPageHandlerWithEntropy(options PageOptions, entropy io.Reader) (*PageHan
 	mux := http.NewServeMux()
 	handler := &PageHandler{
 		renderer: renderer, mux: mux, configService: options.Configuration, mode: options.Mode,
-		queries: options.Queries, commands: options.Commands, logs: options.Logs, logger: options.Logger, errorSeed: seed,
+		queries: options.Queries, commands: options.Commands, logs: options.Logs, logger: options.Logger, events: newEventStreamConfig(), resolveDependencies: newPageDependencyResolver(), errorSeed: seed,
 	}
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFiles))))
 	mux.HandleFunc("GET /api/v1/state", handler.stateAPI)
+	mux.HandleFunc("GET /api/v1/events", handler.eventsAPI)
 	mux.HandleFunc("POST /api/v1/refresh", handler.refreshAPI)
 	mux.HandleFunc("GET /api/v1/{issue_identifier}", handler.issueAPI)
 	mux.HandleFunc("GET /{$}", handler.overviewHTML)
@@ -209,7 +214,7 @@ func (h *PageHandler) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	base := pageDependencies{queries: h.queries, commands: h.commands, logs: h.logs}
-	dependencies, scenario, ok := resolvePageDependencies(request, base)
+	dependencies, scenario, ok := h.resolveDependencies(request, base)
 	if !ok {
 		h.RespondRequestError(w, request, http.StatusNotFound)
 		return
@@ -241,7 +246,7 @@ func (h *PageHandler) AllowedMethods(request *http.Request) ([]string, bool) {
 		return nil, false
 	}
 	switch escaped {
-	case "/", "/issues", "/activity", "/configuration", "/logs", "/api/v1/state":
+	case "/", "/issues", "/activity", "/configuration", "/logs", "/api/v1/state", "/api/v1/events":
 		return []string{http.MethodGet, http.MethodHead}, true
 	case "/api/v1/refresh", "/api/v1/config/validate", "/api/v1/config/save", "/api/v1/config/credential", "/api/v1/config/credential/delete":
 		return []string{http.MethodPost}, true
@@ -381,9 +386,43 @@ func renderPage(renderer *Renderer, templateName string, build func(*http.Reques
 	}
 }
 
+func configureLivePage(page *Page, route string, cursor domain.EventCursor, filters url.Values) {
+	formattedCursor, ok := formatValidEventCursor(cursor)
+	if !ok {
+		return
+	}
+	stateValues := make(url.Values)
+	for key, values := range filters {
+		if len(values) == 1 {
+			stateValues.Set(key, values[0])
+		}
+	}
+	if page.Scenario != "" {
+		stateValues.Set("__e2e_scenario", page.Scenario)
+	}
+	stateURL := "/api/v1/state"
+	if encoded := stateValues.Encode(); encoded != "" {
+		stateURL += "?" + encoded
+	}
+	eventValues := url.Values{"after": {formattedCursor}}
+	if page.Scenario != "" {
+		eventValues.Set("__e2e_scenario", page.Scenario)
+	}
+	eventsURL := "/api/v1/events?" + eventValues.Encode()
+	if len(stateURL) > 1024 || len(eventsURL) > 1024 {
+		return
+	}
+	page.LiveRoute = route
+	page.EventCursorID = formattedCursor
+	page.StateURL = stateURL
+	page.EventsURL = eventsURL
+}
+
 type emptyPageRuntime struct{}
 
 const emptyPageRuntimeEpoch = "00000000000000000000000000000000"
+
+var emptyPageRuntimeEvents = make(chan struct{})
 
 func (emptyPageRuntime) Snapshot(context.Context) (domain.Snapshot, error) {
 	snapshot := domain.EmptySnapshot()
@@ -394,16 +433,18 @@ func (emptyPageRuntime) Snapshot(context.Context) (domain.Snapshot, error) {
 func (emptyPageRuntime) Issue(context.Context, string) (domain.IssueDetail, error) {
 	return domain.IssueDetail{}, app.ErrIssueNotFound
 }
-func (emptyPageRuntime) EventsAfter(context.Context, domain.EventCursor) (domain.EventPage, error) {
-	return domain.EventPage{Events: []domain.Event{}}, nil
+func (emptyPageRuntime) EventsAfter(ctx context.Context, cursor domain.EventCursor) (domain.EventPage, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.EventPage{}, err
+	}
+	current := domain.EventCursor{Epoch: emptyPageRuntimeEpoch}
+	return domain.EventPage{Events: []domain.Event{}, LatestCursor: current, Reset: cursor != current}, nil
 }
 func (emptyPageRuntime) RecentEvents(context.Context, int) (domain.EventPage, error) {
 	return domain.EventPage{Events: []domain.Event{}, LatestCursor: domain.EventCursor{Epoch: emptyPageRuntimeEpoch}}, nil
 }
 func (emptyPageRuntime) SubscribeEvents(domain.EventCursor) <-chan struct{} {
-	ready := make(chan struct{})
-	close(ready)
-	return ready
+	return emptyPageRuntimeEvents
 }
 func (emptyPageRuntime) Refresh(context.Context) (domain.RefreshReceipt, error) {
 	return domain.RefreshReceipt{Operations: []string{}}, app.ErrUnavailableInPhase

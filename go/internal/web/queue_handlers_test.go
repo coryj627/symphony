@@ -30,7 +30,8 @@ func TestIssuesHTMLUsesOneFilteredRowSliceForEquivalentTableAndList(t *testing.T
 	}
 	html := recorder.Body.String()
 	for _, want := range []string{
-		`<caption>Tracker work candidates</caption>`, `<th scope="col">Title</th>`, `<th scope="row"><a data-responsive-focus-key="issue-0" href="/issues/TEAM-1?sort=identifier&amp;state=Open">TEAM-1</a></th>`,
+		`<caption>Tracker work candidates</caption>`, `<th scope="col">Title</th>`, `<tbody data-live-issues-wide>`,
+		`<th scope="row"><a data-field="identifier" data-live-issue-id="1" data-responsive-focus-key="issue-1" href="/issues/TEAM-1?sort=identifier&amp;state=Open">TEAM-1</a></th>`,
 		`<ul class="issue-list responsive-narrow"`, "Needs attention", "Routable", "last known", "Tracker marked this issue unavailable for dispatch.",
 		`value="Open" selected`, `value="all" selected`, `value="identifier" selected`, `&lt;script&gt;bad()&lt;/script&gt;`,
 	} {
@@ -80,6 +81,109 @@ func TestIssuesAndStateAPIShareFirstValueFilterOrderWithoutMutatingScheduling(t 
 	scheduling := serveDirect(t, handler, http.MethodGet, "/issues", "", nil).Body.String()
 	if strings.Index(scheduling, ">B-2</a>") > strings.Index(scheduling, ">A-1</a>") {
 		t.Fatal("identifier sort mutated the backing scheduling order")
+	}
+}
+
+func TestStateAPIBuildsOneHundredAndTwentyEventViewsFromOneCoherentRead(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	events := make([]domain.Event, 100)
+	for index := range events {
+		events[index] = domain.Event{Epoch: "epoch-a", Sequence: uint64(index + 1), Type: "queue.refreshed", At: now.Add(time.Duration(index) * time.Second), Data: map[string]any{}}
+	}
+	runtime := &pageRuntimeFake{
+		snapshot: domain.Snapshot{GeneratedAt: now, EventCursor: domain.EventCursor{Epoch: "epoch-a", Sequence: 100}},
+		recent:   domain.EventPage{LatestCursor: domain.EventCursor{Epoch: "epoch-a", Sequence: 100}, Events: events},
+	}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+	recorder := serveDirect(t, handler, http.MethodGet, "/api/v1/state", "", nil)
+	var response struct {
+		RecentEvents        []eventSummaryResponse `json:"recent_events"`
+		RecentEventsReset   bool                   `json:"recent_events_reset"`
+		ActivityEvents      []eventSummaryResponse `json:"activity_events"`
+		ActivityEventsReset bool                   `json:"activity_events_reset"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusOK || len(response.ActivityEvents) != 100 || len(response.RecentEvents) != 20 || response.ActivityEventsReset || response.RecentEventsReset {
+		t.Fatalf("state event views = %d activity=%d/%t recent=%d/%t body=%s", recorder.Code, len(response.ActivityEvents), response.ActivityEventsReset, len(response.RecentEvents), response.RecentEventsReset, recorder.Body.String())
+	}
+	if response.ActivityEvents[0].EventCursor != "epoch-a:1" || response.ActivityEvents[99].EventCursor != "epoch-a:100" || response.RecentEvents[0].EventCursor != "epoch-a:81" || response.RecentEvents[19].EventCursor != "epoch-a:100" {
+		t.Fatalf("state event view boundaries = %#v/%#v", response.ActivityEvents, response.RecentEvents)
+	}
+	if runtime.callOrderString() != "snapshot,recent:100" {
+		t.Fatalf("state runtime order = %q", runtime.callOrderString())
+	}
+}
+
+func TestStateAPIReturnsUnfilteredTotalsAlongsideTheFilteredCandidateView(t *testing.T) {
+	candidates := []domain.CandidateRow{
+		{Issue: domain.Issue{ID: "a", Identifier: "A-1", Title: "Open match", State: "Open", Labels: []string{}}, Routable: true, RoutingReasons: []string{}},
+		{Issue: domain.Issue{ID: "b", Identifier: "B-2", Title: "Open match", State: "Open", Labels: []string{}}, Routable: false, RoutingReasons: []string{"missing_required_label"}},
+		{Issue: domain.Issue{ID: "c", Identifier: "C-3", Title: "Closed", State: "Closed", Labels: []string{}}, Routable: true, RoutingReasons: []string{}},
+	}
+	runtime := &pageRuntimeFake{
+		snapshot: domain.Snapshot{EventCursor: domain.EventCursor{Epoch: "epoch-a"}, Candidates: candidates},
+		recent:   domain.EventPage{LatestCursor: domain.EventCursor{Epoch: "epoch-a"}, Events: []domain.Event{}},
+	}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+	recorder := serveDirect(t, handler, http.MethodGet, "/api/v1/state?state=Open", "", nil)
+	var response struct {
+		Counts struct {
+			Candidates     int `json:"candidates"`
+			Routable       int `json:"routable"`
+			NeedsAttention int `json:"needs_attention"`
+		} `json:"counts"`
+		Candidates []candidateResponse `json:"candidates"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Candidates) != 2 || response.Counts.Candidates != 3 || response.Counts.Routable != 2 || response.Counts.NeedsAttention != 1 {
+		t.Fatalf("filtered view/unfiltered totals = %d/%#v", len(response.Candidates), response.Counts)
+	}
+}
+
+func TestStateAPIPresentsFallbackScopeAndExplicitUnknownErrorPresence(t *testing.T) {
+	runtime := &pageRuntimeFake{
+		snapshot: domain.Snapshot{
+			EventCursor: domain.EventCursor{Epoch: "epoch-a"},
+			Config:      domain.ConfigStatus{State: "invalid", ErrorCode: "unknown-config-code", Message: "unsafe config detail"},
+			Tracker:     domain.TrackerStatus{State: "failed", ErrorCode: "unknown-tracker-code", Message: "unsafe tracker detail"},
+		},
+		recent: domain.EventPage{LatestCursor: domain.EventCursor{Epoch: "epoch-a"}, Events: []domain.Event{}},
+	}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+	recorder := serveDirect(t, handler, http.MethodGet, "/api/v1/state", "", nil)
+	var response struct {
+		Counts struct {
+			Errors int `json:"errors"`
+		} `json:"counts"`
+		Config struct {
+			HasError  bool   `json:"has_error"`
+			ErrorCode string `json:"error_code"`
+			Message   string `json:"message"`
+		} `json:"config"`
+		Tracker struct {
+			Scope     string `json:"scope"`
+			HasError  bool   `json:"has_error"`
+			ErrorCode string `json:"error_code"`
+			Message   string `json:"message"`
+		} `json:"tracker"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusOK ||
+		response.Counts.Errors != 2 ||
+		response.Tracker.Scope != "Tracker scope not selected" ||
+		!response.Config.HasError ||
+		!response.Tracker.HasError ||
+		response.Config.ErrorCode != "" ||
+		response.Tracker.ErrorCode != "" ||
+		response.Config.Message != "Configuration status needs attention." ||
+		response.Tracker.Message != "Tracker status needs attention." {
+		t.Fatalf("presentation-ready state = %d %#v", recorder.Code, response)
 	}
 }
 
@@ -140,7 +244,7 @@ func TestSafeStatusMessageSeparatesHealthyTextFromUnknownErrors(t *testing.T) {
 
 func TestActivityUsesBoundedTailResetTextAndSafeAllowlistedSummaries(t *testing.T) {
 	now := time.Date(2026, 8, 8, 16, 0, 0, 0, time.UTC)
-	runtime := &pageRuntimeFake{recent: domain.EventPage{Reset: true, LatestCursor: domain.EventCursor{Epoch: "epoch-a", Sequence: 3}, Events: []domain.Event{
+	runtime := &pageRuntimeFake{snapshot: domain.Snapshot{EventCursor: domain.EventCursor{Epoch: "epoch-a", Sequence: 2}}, recent: domain.EventPage{Reset: true, LatestCursor: domain.EventCursor{Epoch: "epoch-a", Sequence: 3}, Events: []domain.Event{
 		{Epoch: "epoch-a", Sequence: 1, Type: "queue.refreshed", At: now.Add(-time.Minute), Data: map[string]any{"secret": "event-secret-canary"}},
 		{Epoch: "epoch-a", Sequence: 2, Type: "unknown-type-canary", At: now, Data: map[string]any{"message": "event-message-canary"}},
 	}}}
@@ -149,12 +253,12 @@ func TestActivityUsesBoundedTailResetTextAndSafeAllowlistedSummaries(t *testing.
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("activity status = %d", recorder.Code)
 	}
-	if runtime.callOrderString() != "recent:100" {
+	if runtime.callOrderString() != "snapshot,recent:100" {
 		t.Fatalf("activity call order = %q", runtime.callOrderString())
 	}
 	html := recorder.Body.String()
 	reset := "Earlier activity is unavailable because the in-memory history was restarted or trimmed."
-	if strings.Count(html, reset) != 1 || !strings.Contains(html, "Tracker work refreshed.") || !strings.Contains(html, "Activity occurred.") || !strings.Contains(html, `<ol class="timeline">`) || !strings.Contains(html, `<time datetime="`) {
+	if strings.Count(html, reset) != 1 || !strings.Contains(html, "Tracker work refreshed.") || !strings.Contains(html, "Activity occurred.") || !strings.Contains(html, `<ol class="timeline" data-live-activity>`) || !strings.Contains(html, `<time datetime="`) {
 		t.Fatal("activity semantics or summaries are incomplete")
 	}
 	for _, forbidden := range []string{"event-secret-canary", "event-message-canary", "unknown-type-canary", `role="log"`, `aria-live=`} {

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="stylesheet" href="/static/app.css">
-  <script src="/static/app.js" defer></script>
+  <script type="module" src="/static/app.js"></script>
 </head>
 <body{{if .FocusTarget}} data-focus-target="{{.FocusTarget}}"{{end}}>
   <a class="skip-link" href="#main-content" tabindex="0">Skip to main content</a>
@@ -20,7 +20,15 @@
     </div>
     {{template "flash" .}}
     {{if and .ErrorSummary (not .ErrorSummaryInDialog)}}{{template "error-summary" .}}{{end}}
-    {{template "content" .}}
+    {{if .LiveRoute}}<div data-live-root data-live-route="{{.LiveRoute}}" data-event-cursor-id="{{.EventCursorID}}" data-state-url="{{.StateURL}}" data-events-url="{{.EventsURL}}">
+      <div class="live-controls" data-live-controls hidden>
+        <button type="button" data-live-toggle>Pause live updates</button>
+        <p data-live-connection>Live updates are available.</p>
+        <button type="button" data-live-apply hidden>Apply pending updates</button>
+      </div>
+      <div data-live-feedback></div>
+      {{template "content" .}}
+    </div>{{else}}{{template "content" .}}{{end}}
   </main>
   <footer>
     <p>Symphony runs on this workstation.</p>

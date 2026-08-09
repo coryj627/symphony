@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coryj627/symphony/go/internal/domain"
 )
 
 type runningTestServer struct {
@@ -471,6 +473,331 @@ func TestServerDoneSignalsAfterShutdown(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("server completion signal did not close promptly")
 	}
+}
+
+func TestServerShutdownCancelsBaseContextBeforeWaitingForOpenStreams(t *testing.T) {
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			t.Errorf("flush stream headers: %v", err)
+			return
+		}
+		close(started)
+		<-request.Context().Done()
+		close(stopped)
+	})
+	server, err := NewServer(Options{Port: 0, Bootstrap: bootstrapFromValue("base-context-capability"), Handler: handler})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := server.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	running := &runningTestServer{server: server, bound: bound, client: client, logs: new(bytes.Buffer)}
+	cookie := exchange(t, running)
+	parsed, err := url.Parse(bound.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.RawQuery = ""
+	streamRequest, err := http.NewRequest(http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamRequest.AddCookie(cookie)
+	responseResult := make(chan *http.Response, 1)
+	errorResult := make(chan error, 1)
+	go func() {
+		response, requestErr := client.Do(streamRequest)
+		if requestErr != nil {
+			errorResult <- requestErr
+			return
+		}
+		responseResult <- response
+	}()
+	select {
+	case <-started:
+	case err := <-errorResult:
+		t.Fatalf("open stream: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("stream handler did not start")
+	}
+	var response *http.Response
+	select {
+	case response = <-responseResult:
+	case err := <-errorResult:
+		t.Fatalf("stream response: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("stream headers were not delivered")
+	}
+	defer response.Body.Close()
+
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	start := time.Now()
+	err = server.Shutdown(shutdownContext)
+	elapsed := time.Since(start)
+	cancel()
+	if err != nil || elapsed >= time.Second {
+		t.Fatalf("shutdown with open stream = %v after %s", err, elapsed)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("open stream context was not canceled")
+	}
+}
+
+func TestProtectedRealServerGuardsSSEAndReturnsExactTransportHeaders(t *testing.T) {
+	runtime := &sseRuntimeFake{events: domain.EventPage{LatestCursor: domain.EventCursor{Epoch: "epoch-a"}, Reset: true, Events: []domain.Event{}}}
+	pageHandler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+	var resolverCalls atomic.Int64
+	pageHandler.resolveDependencies = func(_ *http.Request, base pageDependencies) (pageDependencies, string, bool) {
+		resolverCalls.Add(1)
+		return base, "", true
+	}
+	server := startTestServerWithErrorResponder(t, bootstrapFromValue("real-protected-sse-capability"), pageHandler, pageHandler)
+	server.client.Timeout = 5 * time.Second
+	parsed, err := url.Parse(server.bound.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Path = "/api/v1/events"
+	parsed.RawQuery = "after=epoch-a%3A0"
+	eventsURL := parsed.String()
+
+	unauthenticated := request(t, server.client, http.MethodGet, eventsURL, nil, nil)
+	if unauthenticated.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated SSE status = %d", unauthenticated.StatusCode)
+	}
+	assertNoCORSResponseHeaders(t, unauthenticated.Header)
+	cookie := exchange(t, server)
+	wrongHostRequest, err := http.NewRequest(http.MethodGet, eventsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongHostRequest.Host = "attacker.example:" + strconv.Itoa(server.bound.Port)
+	wrongHostRequest.AddCookie(cookie)
+	wrongHost, err := server.client.Do(wrongHostRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wrongHost.Body.Close()
+	if wrongHost.StatusCode != http.StatusBadRequest {
+		t.Fatalf("wrong-Host SSE status = %d", wrongHost.StatusCode)
+	}
+	methodRequest, err := http.NewRequest(http.MethodPost, eventsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	methodRequest.AddCookie(cookie)
+	method, err := server.client.Do(methodRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer method.Body.Close()
+	if method.StatusCode != http.StatusMethodNotAllowed || method.Header.Get("Allow") != "GET, HEAD" || method.Header.Get("Content-Type") != "application/json; charset=utf-8" || method.Header.Get("X-Accel-Buffering") != "" {
+		t.Fatalf("real 405 status/headers = %d/%#v", method.StatusCode, method.Header)
+	}
+	assertNoCORSResponseHeaders(t, method.Header)
+	if resolverCalls.Load() != 0 || runtime.eventsCalls != 0 || len(runtime.subscribeCursorCalls()) != 0 {
+		t.Fatalf("rejected real requests resolver/events/subscribes = %d/%d/%#v", resolverCalls.Load(), runtime.eventsCalls, runtime.subscribeCursorCalls())
+	}
+
+	for _, requestMethod := range []string{http.MethodGet, http.MethodHead} {
+		request, err := http.NewRequest(requestMethod, eventsURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.AddCookie(cookie)
+		response, err := server.client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusOK {
+			response.Body.Close()
+			t.Fatalf("real %s SSE status = %d", requestMethod, response.StatusCode)
+		}
+		assertExactSSETransportHeaders(t, response.Header)
+		body := readBoundedTestResponse(t, response, maximumEventPayloadBytes+maximumEventCursorBytes+1024)
+		response.Body.Close()
+		if requestMethod == http.MethodHead && len(body) != 0 {
+			t.Fatalf("real HEAD SSE body = %q", body)
+		}
+	}
+	if resolverCalls.Load() != 2 || runtime.eventsCalls != 1 || len(runtime.subscribeCursorCalls()) != 0 {
+		t.Fatalf("accepted real requests resolver/events/subscribes = %d/%d/%#v, want 2/1/none", resolverCalls.Load(), runtime.eventsCalls, runtime.subscribeCursorCalls())
+	}
+}
+
+func TestRealSSEProductionCapAndConcurrentRepeatedShutdownReleaseEveryStream(t *testing.T) {
+	hold := make(chan struct{})
+	subscriptions := make([]<-chan struct{}, maximumEventClients)
+	for index := range subscriptions {
+		subscriptions[index] = hold
+	}
+	runtime := &sseRuntimeFake{
+		events:            domain.EventPage{LatestCursor: domain.EventCursor{Epoch: "epoch-a"}, Events: []domain.Event{}},
+		subscribeChannels: subscriptions,
+	}
+	pageHandler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+	server := startTestServerWithErrorResponder(t, bootstrapFromValue("real-dual-sse-capability"), pageHandler, pageHandler)
+	server.client.Timeout = 5 * time.Second
+	server.server.mu.Lock()
+	listenerCount := len(server.server.listeners)
+	server.server.mu.Unlock()
+	hasIPv6 := listenerCount >= 2
+	cookie := exchange(t, server)
+	baseIPv4 := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(server.bound.Port))
+	baseIPv6 := "http://" + net.JoinHostPort("::1", strconv.Itoa(server.bound.Port))
+	t.Run("IPv4 and IPv6 listeners share the selected port", func(t *testing.T) {
+		if !hasIPv6 {
+			t.Skip("IPv6 loopback listener is unavailable")
+		}
+		request, err := http.NewRequest(http.MethodHead, baseIPv6+"/api/v1/events?after=epoch-a%3A0", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.AddCookie(cookie)
+		response, err := server.client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("IPv6 SSE HEAD status = %d", response.StatusCode)
+		}
+		assertExactSSETransportHeaders(t, response.Header)
+	})
+	responses := make([]*http.Response, 0, maximumEventClients)
+	for index := range maximumEventClients {
+		base := baseIPv4
+		if hasIPv6 && index%2 == 1 {
+			base = baseIPv6
+		}
+		request, err := http.NewRequest(http.MethodGet, base+"/api/v1/events?after=epoch-a%3A0", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.AddCookie(cookie)
+		response, err := server.client.Do(request)
+		if err != nil {
+			t.Fatalf("open real stream %d: %v", index, err)
+		}
+		if response.StatusCode != http.StatusOK {
+			response.Body.Close()
+			t.Fatalf("real stream %d status = %d", index, response.StatusCode)
+		}
+		assertExactSSETransportHeaders(t, response.Header)
+		responses = append(responses, response)
+	}
+	if len(pageHandler.events.clients) != maximumEventClients || runtime.eventsCalls != maximumEventClients {
+		t.Fatalf("real saturated slots/events = %d/%d, want %d/%d", len(pageHandler.events.clients), runtime.eventsCalls, maximumEventClients, maximumEventClients)
+	}
+
+	capURL := baseIPv4
+	if hasIPv6 {
+		capURL = baseIPv6
+	}
+	request33, err := http.NewRequest(http.MethodGet, capURL+"/api/v1/events?after=epoch-a%3A0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request33.AddCookie(cookie)
+	response33, err := server.client.Do(request33)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body33 := readBoundedTestResponse(t, response33, 64<<10)
+	response33.Body.Close()
+	if response33.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body33), `"code":"event_stream_unavailable"`) || runtime.eventsCalls != maximumEventClients {
+		t.Fatalf("real 33rd status/events/body = %d/%d/%s", response33.StatusCode, runtime.eventsCalls, body33)
+	}
+
+	const shutdownCallers = 8
+	shutdownErrors := make(chan error, shutdownCallers)
+	startShutdown := make(chan struct{})
+	enteredShutdown := make(chan struct{}, shutdownCallers)
+	server.server.mu.Lock()
+	for range shutdownCallers {
+		go func() {
+			<-startShutdown
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			enteredShutdown <- struct{}{}
+			shutdownErrors <- server.server.Shutdown(ctx)
+		}()
+	}
+	close(startShutdown)
+	for range shutdownCallers {
+		<-enteredShutdown
+	}
+	shutdownStarted := time.Now()
+	server.server.mu.Unlock()
+	for range shutdownCallers {
+		if err := <-shutdownErrors; err != nil {
+			t.Fatalf("concurrent SSE shutdown: %v", err)
+		}
+	}
+	if elapsed := time.Since(shutdownStarted); elapsed >= time.Second {
+		t.Fatalf("concurrent SSE shutdown took %s", elapsed)
+	}
+	for index, response := range responses {
+		if err := response.Body.Close(); err != nil {
+			t.Fatalf("close real stream %d: %v", index, err)
+		}
+	}
+	if len(pageHandler.events.clients) != 0 {
+		t.Fatalf("real shutdown retained %d stream slots", len(pageHandler.events.clients))
+	}
+	for range 2 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		err := server.server.Shutdown(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("repeated SSE shutdown: %v", err)
+		}
+	}
+}
+
+func assertExactSSETransportHeaders(t *testing.T, header http.Header) {
+	t.Helper()
+	want := map[string]string{
+		"Cache-Control":                "no-store",
+		"Content-Security-Policy":      contentSecurityPolicy,
+		"Content-Type":                 "text/event-stream; charset=utf-8",
+		"Cross-Origin-Resource-Policy": "same-origin",
+		"Referrer-Policy":              "no-referrer",
+		"X-Accel-Buffering":            "no",
+		"X-Content-Type-Options":       "nosniff",
+	}
+	for name, value := range want {
+		if got := header.Get(name); got != value {
+			t.Fatalf("SSE header %s = %q, want %q; all=%#v", name, got, value, header)
+		}
+	}
+	if header.Get("Connection") != "" {
+		t.Fatalf("SSE response retained Connection header %q", header.Get("Connection"))
+	}
+	assertNoCORSResponseHeaders(t, header)
+}
+
+func readBoundedTestResponse(t *testing.T, response *http.Response, maximum int64) []byte {
+	t.Helper()
+	body, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
+	if err != nil {
+		t.Fatalf("read bounded response: %v", err)
+	}
+	if int64(len(body)) > maximum {
+		t.Fatalf("response exceeded %d bytes", maximum)
+	}
+	return body
 }
 
 func TestIPv6BindFailureRollsBackIPv4Listener(t *testing.T) {

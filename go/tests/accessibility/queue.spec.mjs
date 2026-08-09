@@ -165,7 +165,7 @@ test('refresh preserves scenario, restores focus, and announces one concise stat
   const current = new URL(page.url());
   expect(current.searchParams.get('__e2e_scenario')).toBe('populated');
   expect(current.searchParams.get('result')).toBe('refresh-requested');
-  await expect(page.getByRole('status')).toHaveText('Refresh requested');
+  await expect(page.getByRole('status')).toHaveText('Refresh requested.');
   await expect(page.getByRole('status')).toHaveCount(1);
   await expect(page.getByRole('button', {name: 'Refresh tracker work'})).toBeFocused();
 });
@@ -177,7 +177,7 @@ test('refresh remains an ordinary form journey without JavaScript', async ({page
   const current = new URL(page.url());
   expect(current.searchParams.get('__e2e_scenario')).toBe('populated');
   expect(current.searchParams.get('result')).toBe('refresh-requested');
-  await expect(page.getByRole('status')).toHaveText('Refresh requested');
+  await expect(page.getByRole('status')).toHaveText('Refresh requested.');
   await expect(page.getByRole('button', {name: 'Refresh tracker work'})).toBeFocused();
 });
 

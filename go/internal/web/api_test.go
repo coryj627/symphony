@@ -158,8 +158,8 @@ func TestStateAPIUsesExactAllowlistedNonNullShapeAndCoherentEventSuffix(t *testi
 	if err := json.Unmarshal(recorder.Body.Bytes(), &top); err != nil {
 		t.Fatal(err)
 	}
-	assertExactJSONKeys(t, top, "candidates", "codex_totals", "config", "counts", "event_cursor", "generated_at", "rate_limits", "recent_events", "recent_events_reset", "requests", "retrying", "running", "scheduler", "tracker")
-	for _, collection := range []string{"candidates", "recent_events", "requests", "retrying", "running"} {
+	assertExactJSONKeys(t, top, "activity_events", "activity_events_reset", "candidates", "codex_totals", "config", "counts", "event_cursor", "generated_at", "rate_limits", "recent_events", "recent_events_reset", "requests", "retrying", "running", "scheduler", "tracker")
+	for _, collection := range []string{"activity_events", "candidates", "recent_events", "requests", "retrying", "running"} {
 		if bytes.Equal(top[collection], []byte("null")) {
 			t.Fatalf("%s was null", collection)
 		}
@@ -229,12 +229,12 @@ func TestStateAPIUsesExactAllowlistedNonNullShapeAndCoherentEventSuffix(t *testi
 	if err := json.Unmarshal(top["config"], &config); err != nil {
 		t.Fatal(err)
 	}
-	assertExactJSONKeys(t, config, "active_digest", "changed_at", "digest", "error_code", "message", "state", "using_last_good")
+	assertExactJSONKeys(t, config, "active_digest", "changed_at", "digest", "error_code", "has_error", "message", "state", "using_last_good")
 	var trackerStatus map[string]json.RawMessage
 	if err := json.Unmarshal(top["tracker"], &trackerStatus); err != nil {
 		t.Fatal(err)
 	}
-	assertExactJSONKeys(t, trackerStatus, "error_code", "kind", "last_attempt_at", "last_success_at", "message", "retry_at", "retryable", "scope", "stale", "state")
+	assertExactJSONKeys(t, trackerStatus, "error_code", "has_error", "kind", "last_attempt_at", "last_success_at", "message", "retry_at", "retryable", "scope", "stale", "state")
 
 	var events []map[string]json.RawMessage
 	if err := json.Unmarshal(top["recent_events"], &events); err != nil {
@@ -246,7 +246,14 @@ func TestStateAPIUsesExactAllowlistedNonNullShapeAndCoherentEventSuffix(t *testi
 	for _, event := range events {
 		assertExactJSONKeys(t, event, "at", "code", "event_cursor", "summary", "type")
 	}
-	if runtime.callOrderString() != "snapshot,recent:20" {
+	var activityEvents []map[string]json.RawMessage
+	if err := json.Unmarshal(top["activity_events"], &activityEvents); err != nil {
+		t.Fatal(err)
+	}
+	if len(activityEvents) != 2 || string(top["activity_events_reset"]) != "false" {
+		t.Fatalf("activity event view = %d/%s", len(activityEvents), top["activity_events_reset"])
+	}
+	if runtime.callOrderString() != "snapshot,recent:100" {
 		t.Fatalf("runtime call order = %q", runtime.callOrderString())
 	}
 	body := recorder.Body.String()
@@ -301,14 +308,16 @@ func TestStateAPICoherentEventTailResetEpochAndDisplacementRules(t *testing.T) {
 			handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
 			recorder := serveDirect(t, handler, http.MethodGet, "/api/v1/state", "", nil)
 			var response struct {
-				EventCursor       string                 `json:"event_cursor"`
-				RecentEvents      []eventSummaryResponse `json:"recent_events"`
-				RecentEventsReset bool                   `json:"recent_events_reset"`
+				EventCursor         string                 `json:"event_cursor"`
+				RecentEvents        []eventSummaryResponse `json:"recent_events"`
+				RecentEventsReset   bool                   `json:"recent_events_reset"`
+				ActivityEvents      []eventSummaryResponse `json:"activity_events"`
+				ActivityEventsReset bool                   `json:"activity_events_reset"`
 			}
 			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 				t.Fatal(err)
 			}
-			if response.EventCursor != eventCursorString(test.cursor) || len(response.RecentEvents) != test.wantCount || response.RecentEventsReset != test.wantReset || strings.Contains(recorder.Body.String(), "canary") {
+			if response.EventCursor != eventCursorString(test.cursor) || len(response.RecentEvents) != test.wantCount || len(response.ActivityEvents) != test.wantCount || response.RecentEventsReset != test.wantReset || response.ActivityEventsReset != test.wantReset || strings.Contains(recorder.Body.String(), "canary") {
 				t.Fatalf("coherent response = %#v body=%s", response, recorder.Body.String())
 			}
 		})

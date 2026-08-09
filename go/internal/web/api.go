@@ -43,19 +43,21 @@ type apiErrorSpec struct {
 }
 
 var apiErrorSpecs = map[string]apiErrorSpec{
-	"invalid_request":        {http.StatusBadRequest, "invalid_request", "The request is invalid.", false},
-	"invalid_identifier":     {http.StatusBadRequest, "invalid_identifier", "The issue identifier is invalid.", false},
-	"invalid_body":           {http.StatusBadRequest, "invalid_request", "The request body is invalid.", false},
-	"unauthorized":           {http.StatusUnauthorized, "unauthorized", "Authentication is required.", false},
-	"forbidden":              {http.StatusForbidden, "forbidden", "The request was not allowed.", false},
-	"issue_not_found":        {http.StatusNotFound, "issue_not_found", "The requested issue was not found.", false},
-	"not_found":              {http.StatusNotFound, "not_found", "The requested API route was not found.", false},
-	"method_not_allowed":     {http.StatusMethodNotAllowed, "method_not_allowed", "The method is not allowed for this route.", false},
-	"refresh_unavailable":    {http.StatusConflict, "refresh_unavailable", "Refresh is unavailable in this mode.", false},
-	"unsupported_media_type": {http.StatusUnsupportedMediaType, "unsupported_media_type", "Use JSON or form data for this request.", false},
-	"runtime_unavailable":    {http.StatusServiceUnavailable, "runtime_unavailable", "Runtime state is temporarily unavailable.", true},
-	"refresh_failed":         {http.StatusServiceUnavailable, "refresh_failed", "The refresh could not be completed.", false},
-	"internal_error":         {http.StatusInternalServerError, "internal_error", "The request could not be completed.", false},
+	"invalid_request":          {http.StatusBadRequest, "invalid_request", "The request is invalid.", false},
+	"invalid_identifier":       {http.StatusBadRequest, "invalid_identifier", "The issue identifier is invalid.", false},
+	"invalid_event_cursor":     {http.StatusBadRequest, "invalid_event_cursor", "The event cursor is invalid.", false},
+	"event_stream_unavailable": {http.StatusServiceUnavailable, "event_stream_unavailable", "Live updates are temporarily unavailable.", true},
+	"invalid_body":             {http.StatusBadRequest, "invalid_request", "The request body is invalid.", false},
+	"unauthorized":             {http.StatusUnauthorized, "unauthorized", "Authentication is required.", false},
+	"forbidden":                {http.StatusForbidden, "forbidden", "The request was not allowed.", false},
+	"issue_not_found":          {http.StatusNotFound, "issue_not_found", "The requested issue was not found.", false},
+	"not_found":                {http.StatusNotFound, "not_found", "The requested API route was not found.", false},
+	"method_not_allowed":       {http.StatusMethodNotAllowed, "method_not_allowed", "The method is not allowed for this route.", false},
+	"refresh_unavailable":      {http.StatusConflict, "refresh_unavailable", "Refresh is unavailable in this mode.", false},
+	"unsupported_media_type":   {http.StatusUnsupportedMediaType, "unsupported_media_type", "Use JSON or form data for this request.", false},
+	"runtime_unavailable":      {http.StatusServiceUnavailable, "runtime_unavailable", "Runtime state is temporarily unavailable.", true},
+	"refresh_failed":           {http.StatusServiceUnavailable, "refresh_failed", "The refresh could not be completed.", false},
+	"internal_error":           {http.StatusInternalServerError, "internal_error", "The request could not be completed.", false},
 }
 
 func (handler *PageHandler) nextCorrelationID() string {
@@ -195,20 +197,22 @@ func eventCursorString(cursor domain.EventCursor) string {
 type emptyResponse struct{}
 
 type stateResponse struct {
-	GeneratedAt       time.Time                 `json:"generated_at"`
-	Counts            stateCountsResponse       `json:"counts"`
-	Running           []runningResponse         `json:"running"`
-	Retrying          []retryResponse           `json:"retrying"`
-	CodexTotals       tokenTotalsResponse       `json:"codex_totals"`
-	RateLimits        *emptyResponse            `json:"rate_limits"`
-	EventCursor       string                    `json:"event_cursor"`
-	Candidates        []candidateResponse       `json:"candidates"`
-	RecentEvents      []eventSummaryResponse    `json:"recent_events"`
-	RecentEventsReset bool                      `json:"recent_events_reset"`
-	Scheduler         schedulerResponse         `json:"scheduler"`
-	Config            configStatusResponse      `json:"config"`
-	Tracker           trackerStatusResponse     `json:"tracker"`
-	Requests          []operatorRequestResponse `json:"requests"`
+	GeneratedAt         time.Time                 `json:"generated_at"`
+	Counts              stateCountsResponse       `json:"counts"`
+	Running             []runningResponse         `json:"running"`
+	Retrying            []retryResponse           `json:"retrying"`
+	CodexTotals         tokenTotalsResponse       `json:"codex_totals"`
+	RateLimits          *emptyResponse            `json:"rate_limits"`
+	EventCursor         string                    `json:"event_cursor"`
+	Candidates          []candidateResponse       `json:"candidates"`
+	RecentEvents        []eventSummaryResponse    `json:"recent_events"`
+	RecentEventsReset   bool                      `json:"recent_events_reset"`
+	ActivityEvents      []eventSummaryResponse    `json:"activity_events"`
+	ActivityEventsReset bool                      `json:"activity_events_reset"`
+	Scheduler           schedulerResponse         `json:"scheduler"`
+	Config              configStatusResponse      `json:"config"`
+	Tracker             trackerStatusResponse     `json:"tracker"`
+	Requests            []operatorRequestResponse `json:"requests"`
 }
 
 type stateCountsResponse struct {
@@ -272,6 +276,7 @@ type configStatusResponse struct {
 	Digest        string    `json:"digest"`
 	ActiveDigest  string    `json:"active_digest"`
 	UsingLastGood bool      `json:"using_last_good"`
+	HasError      bool      `json:"has_error"`
 	ErrorCode     string    `json:"error_code"`
 	Message       string    `json:"message"`
 	ChangedAt     time.Time `json:"changed_at"`
@@ -282,6 +287,7 @@ type trackerStatusResponse struct {
 	Scope                  string     `json:"scope"`
 	State                  string     `json:"state"`
 	Stale                  bool       `json:"stale"`
+	HasError               bool       `json:"has_error"`
 	Retryable              bool       `json:"retryable"`
 	LastAttemptAt          *time.Time `json:"last_attempt_at"`
 	LastSuccessAt          *time.Time `json:"last_success_at"`
