@@ -1,0 +1,55 @@
+{{define "content"}}
+<form class="filter-form" method="get" action="{{.InternalURL "/logs"}}">
+  {{if .Scenario}}<input type="hidden" name="__e2e_scenario" value="{{.Scenario}}">{{end}}
+  <div>
+    <label for="log-query">Search logs</label>
+    <input id="log-query" name="query" type="search" value="{{.Content.Filters.Query}}">
+  </div>
+  <div>
+    <label for="log-level">Level</label>
+    <select id="log-level" name="level">
+      <option value=""{{if eq .Content.Filters.Level ""}} selected{{end}}>All levels</option>
+      <option value="DEBUG"{{if eq .Content.Filters.Level "DEBUG"}} selected{{end}}>Debug</option>
+      <option value="INFO"{{if eq .Content.Filters.Level "INFO"}} selected{{end}}>Info</option>
+      <option value="WARN"{{if eq .Content.Filters.Level "WARN"}} selected{{end}}>Warning</option>
+      <option value="ERROR"{{if eq .Content.Filters.Level "ERROR"}} selected{{end}}>Error</option>
+    </select>
+  </div>
+  <button type="submit">Apply log filters</button>
+</form>
+
+{{if .Content.Degraded}}<p class="persistent-warning">Symphony logging is degraded. Recent in-memory entries remain available.</p>{{end}}
+
+<section aria-labelledby="application-logs-heading">
+  <h2 id="application-logs-heading">Application logs</h2>
+  {{if .Content.Records}}
+  <div class="log-table responsive-wide">
+    <table>
+      <caption>Application log entries</caption>
+      <thead><tr><th scope="col">Time</th><th scope="col">Level</th><th scope="col">Message and fields</th></tr></thead>
+      <tbody>{{range .Content.Records}}<tr>
+        <th scope="row"><time datetime="{{.DateTime}}">{{.DisplayTime}}</time></th>
+        <td>{{.Level}}</td>
+        <td><p>{{.Message}}</p>{{if .MessageTruncated}}<p>Message truncated for display.</p>{{end}}
+          <div class="log-scroll" role="group" aria-label="Structured fields for log entry {{.Sequence}}" data-responsive-focus-key="log-{{.Sequence}}" tabindex="0"><pre>{{.Fields}}</pre></div>
+          {{if .FieldsTruncated}}<p>Structured fields truncated for display.</p>{{end}}
+        </td>
+      </tr>{{end}}</tbody>
+    </table>
+  </div>
+  <ul class="log-list responsive-narrow" aria-label="Application log entries">
+    {{range .Content.Records}}<li><dl>
+      <div><dt>Time</dt><dd><time datetime="{{.DateTime}}">{{.DisplayTime}}</time></dd></div>
+      <div><dt>Level</dt><dd>{{.Level}}</dd></div>
+      <div><dt>Message</dt><dd>{{.Message}}{{if .MessageTruncated}} <span>Message truncated for display.</span>{{end}}</dd></div>
+      <div><dt>Structured fields</dt><dd><div class="log-scroll" role="group" aria-label="Structured fields for log entry {{.Sequence}}" data-responsive-focus-key="log-{{.Sequence}}" tabindex="0"><pre>{{.Fields}}</pre></div>{{if .FieldsTruncated}}<p>Structured fields truncated for display.</p>{{end}}</dd></div>
+    </dl></li>{{end}}
+  </ul>
+  {{else}}<p>No log entries are available for these filters.</p>{{end}}
+</section>
+
+<nav class="pagination" aria-label="Log pages">
+  {{if .Content.NewestURL}}<a href="{{.Content.NewestURL}}">Newest log entries</a>{{else}}<span>Newest log entries</span>{{end}}
+  {{if .Content.OlderURL}}<a href="{{.Content.OlderURL}}">Older log entries</a>{{else}}<span>Older log entries</span>{{end}}
+</nav>
+{{end}}

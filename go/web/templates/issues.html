@@ -1,0 +1,28 @@
+{{define "content"}}
+<form class="filter-form" method="get" action="{{.InternalURL "/issues"}}">
+  {{if .Scenario}}<input type="hidden" name="__e2e_scenario" value="{{.Scenario}}">{{end}}
+  <div><label for="issue-query">Search issues</label><input id="issue-query" name="query" type="search" value="{{.Content.Filters.Query}}"></div>
+  <div><label for="issue-state">State</label><select id="issue-state" name="state"><option value="">All states</option>{{range .Content.States}}<option value="{{.}}"{{if eq $.Content.Filters.State .}} selected{{end}}>{{.}}</option>{{end}}</select></div>
+  <div><label for="issue-eligibility">Eligibility</label><select id="issue-eligibility" name="eligibility"><option value="all"{{if eq .Content.Filters.Eligibility "all"}} selected{{end}}>All</option><option value="routable"{{if eq .Content.Filters.Eligibility "routable"}} selected{{end}}>Routable</option><option value="needs_attention"{{if eq .Content.Filters.Eligibility "needs_attention"}} selected{{end}}>Needs attention</option></select></div>
+  <div><label for="issue-sort">Sort issues</label><select id="issue-sort" name="sort"><option value="scheduling"{{if eq .Content.Filters.Sort "scheduling"}} selected{{end}}>Scheduling order</option><option value="identifier"{{if eq .Content.Filters.Sort "identifier"}} selected{{end}}>Identifier</option></select></div>
+  <button type="submit">Apply filters</button>
+</form>
+<div data-live-presentation data-live-issues-results>
+{{if .Content.Rows}}<div class="issue-table responsive-wide" data-live-issues-wide-container>
+  <table>
+    <caption>Tracker work candidates</caption>
+    <thead><tr><th scope="col">Identifier</th><th scope="col">Title</th><th scope="col">State</th><th scope="col">Eligibility</th></tr></thead>
+    <tbody data-live-issues-wide>{{range $row := .Content.Rows}}<tr data-live-issue-id="{{$row.IssueID}}">
+      <th scope="row"><a data-field="identifier" data-live-issue-id="{{$row.IssueID}}" data-responsive-focus-key="issue-{{$row.IssueID}}" href="{{$row.DetailURL}}">{{$row.Identifier}}</a></th>
+      <td data-field="title">{{$row.Title}}</td>
+      <td data-field="state">{{$row.State}}{{if $row.Stale}} <span class="muted">(last known)</span>{{end}}</td>
+      <td data-field="eligibility">{{if $row.Routable}}Routable{{else}}Needs attention{{range $row.RoutingReasons}}<span class="reason">{{.Message}}</span>{{end}}{{end}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+</div>
+<ul class="issue-list responsive-narrow" data-live-issues-narrow aria-label="Tracker work candidates">{{range $row := .Content.Rows}}
+  <li data-live-issue-id="{{$row.IssueID}}"><h2><a data-field="identifier" data-live-issue-id="{{$row.IssueID}}" data-responsive-focus-key="issue-{{$row.IssueID}}" href="{{$row.DetailURL}}">{{$row.Identifier}}</a></h2><p data-field="title">{{$row.Title}}</p><dl><div><dt>State</dt><dd data-field="state">{{$row.State}}{{if $row.Stale}} (last known){{end}}</dd></div><div><dt>Eligibility</dt><dd data-field="eligibility">{{if $row.Routable}}Routable{{else}}Needs attention{{range $row.RoutingReasons}}<span class="reason">{{.Message}}</span>{{end}}{{end}}</dd></div></dl></li>
+{{end}}</ul>
+{{else}}<p data-live-issues-empty>No tracker work candidates match these filters.</p>{{end}}
+</div>
+{{end}}

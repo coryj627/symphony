@@ -1,0 +1,46 @@
+{{define "content"}}
+{{if .IssueListURL}}<p><a href="{{.InternalURL .IssueListURL}}">Return to filtered issues</a></p>{{end}}
+<section aria-labelledby="metadata-heading">
+  <h2 id="metadata-heading">Issue metadata</h2>
+  <dl class="identity-list">
+    <div><dt>Identifier</dt><dd>{{if .Content.Issue.URL}}<a href="{{.Content.Issue.URL}}">{{.Content.Issue.Identifier}}</a>{{else}}{{.Content.Issue.Identifier}}{{end}}</dd></div>
+    <div><dt>Title</dt><dd>{{.Content.Issue.Title}}</dd></div>
+    <div><dt>State</dt><dd>{{.Content.Issue.State}}</dd></div>
+    <div><dt>Priority</dt><dd>{{with .Content.Issue.Priority}}{{.}}{{else}}Not set{{end}}</dd></div>
+    <div><dt>Created</dt><dd>{{if .Content.Issue.CreatedAt}}<time datetime="{{.Content.Issue.CreatedDateTime}}">{{.Content.Issue.CreatedDisplayTime}}</time>{{else}}Not available{{end}}</dd></div>
+    <div><dt>Updated</dt><dd>{{if .Content.Issue.UpdatedAt}}<time datetime="{{.Content.Issue.UpdatedDateTime}}">{{.Content.Issue.UpdatedDisplayTime}}</time>{{else}}Not available{{end}}</dd></div>
+  </dl>
+  <h3>Description</h3>
+  {{with .Content.Issue.Description}}<p>{{.}}</p>{{if $.Content.Issue.DescriptionTruncated}}<p>Description truncated for display.</p>{{end}}{{else}}<p>No description is available.</p>{{end}}
+  <h3>Labels</h3>
+  {{if .Content.Issue.Labels}}<ul>{{range .Content.Issue.Labels}}<li class="provider-text">{{.}}</li>{{end}}</ul>{{else}}<p>No labels.</p>{{end}}
+  <h3>Blockers</h3>
+  {{if .Content.Issue.Blockers}}<ul>{{range .Content.Issue.Blockers}}<li><dl><div><dt>Identifier</dt><dd>{{with .Identifier}}{{.}}{{else}}Unavailable{{end}}</dd></div><div><dt>State</dt><dd>{{with .State}}{{.}}{{else}}Unavailable{{end}}</dd></div></dl></li>{{end}}</ul>{{else}}<p>No blockers.</p>{{end}}
+</section>
+
+<section aria-labelledby="eligibility-heading">
+  <h2 id="eligibility-heading">Eligibility</h2>
+  <p>{{if .Content.Eligibility.Routable}}Routable{{else}}Needs attention{{end}}</p>
+  {{if .Content.Eligibility.Reasons}}<ul>{{range .Content.Eligibility.Reasons}}<li>{{.Message}}</li>{{end}}</ul>{{end}}
+</section>
+
+<section aria-labelledby="requests-heading">
+  <h2 id="requests-heading">Operator requests</h2>
+  {{if .Content.Requests}}<ul>{{range .Content.Requests}}<li class="provider-text"><h3>{{.Title}}</h3><p>{{.Summary}}</p>{{if .Choices}}<ul>{{range .Choices}}<li class="provider-text"><strong>{{.Label}}</strong>{{if .Description}} — {{.Description}}{{end}}</li>{{end}}</ul>{{end}}{{if .Questions}}<ol>{{range .Questions}}<li class="provider-text"><strong>{{.Label}}</strong>{{if .Description}} — {{.Description}}{{end}}</li>{{end}}</ol>{{end}}</li>{{end}}</ul>{{else}}<p>No operator requests are waiting.</p>{{end}}
+</section>
+
+<section aria-labelledby="run-heading"><h2 id="run-heading">Current run</h2>{{if .Content.Running}}<dl><div><dt>State</dt><dd>{{.Content.Running.State}}</dd></div><div><dt>Turns</dt><dd>{{.Content.Running.TurnCount}}</dd></div><div><dt>Last event</dt><dd>{{.Content.Running.LastEvent}}</dd></div><div><dt>Last message</dt><dd>{{.Content.Running.LastMessage}}</dd></div><div><dt>Started</dt><dd><time datetime="{{.Content.Running.StartedDateTime}}">{{.Content.Running.StartedDisplayTime}}</time></dd></div><div><dt>Tokens</dt><dd>{{.Content.Running.Tokens.TotalTokens}} total</dd></div></dl>{{else}}<p>No run is active.</p>{{end}}</section>
+<section aria-labelledby="retry-heading"><h2 id="retry-heading">Retry history</h2>{{if .Content.Retry}}<dl><div><dt>Attempt</dt><dd>{{.Content.Retry.Attempt}}</dd></div><div><dt>Due</dt><dd><time datetime="{{.Content.Retry.DueDateTime}}">{{.Content.Retry.DueDisplayTime}}</time></dd></div>{{if .Content.Retry.Error}}<div><dt>Status</dt><dd>{{.Content.Retry.Error}}</dd></div>{{end}}</dl>{{else}}<p>No retries have been recorded.</p>{{end}}</section>
+<section aria-labelledby="issue-activity-heading"><h2 id="issue-activity-heading">Activity</h2><p>Issue-specific activity is not available in this phase.</p></section>
+
+<section aria-labelledby="issue-logs-heading">
+  <h2 id="issue-logs-heading">Logs</h2>
+  {{if .Content.LogDegraded}}<p class="persistent-warning">Symphony logging is degraded. Recent in-memory entries remain available.</p>{{end}}
+  {{if .Content.Logs}}<ol class="log-list">{{range .Content.Logs}}<li>
+    <p><time datetime="{{.DateTime}}">{{.DisplayTime}}</time> — {{.Level}} — {{.Message}}</p>
+    {{if .MessageTruncated}}<p>Message truncated for display.</p>{{end}}
+    <div class="log-scroll" role="group" aria-label="Structured fields for log entry {{.Sequence}}" tabindex="0"><pre>{{.Fields}}</pre></div>
+    {{if .FieldsTruncated}}<p>Structured fields truncated for display.</p>{{end}}
+  </li>{{end}}</ol>{{else}}<p>No log entries are available for this issue.</p>{{end}}
+</section>
+{{end}}

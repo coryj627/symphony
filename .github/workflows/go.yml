@@ -1,0 +1,161 @@
+name: Go CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os:
+          - macos-15
+          - windows-2025
+    defaults:
+      run:
+        working-directory: go
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+
+      - name: Build Symphony
+        run: go build ./cmd/symphony
+
+      - name: Test Go
+        run: go test ./...
+
+      - name: Vet Go
+        run: go vet ./...
+
+      - name: Test Go with the race detector
+        if: runner.os == 'macOS'
+        run: go test -race ./...
+
+      - name: Verify disabled GitHub live profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/github 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 0
+          case "$output" in
+            *"SKIPPED: GitHub live profile not enabled"*) ;;
+            *)
+              echo "::error::GitHub disabled profile did not emit its exact sentinel" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Verify disabled Linear live profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/linear 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 0
+          case "$output" in
+            *"SKIPPED: Linear live profile not enabled"*) ;;
+            *)
+              echo "::error::Linear disabled profile did not emit its exact sentinel" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install browser engines
+        run: npx playwright install chromium webkit
+
+      - name: Test verification wrappers
+        run: npm run test:wrappers
+
+      - name: Validate rendered HTML
+        run: npm run html:validate
+
+      - name: Test browser accessibility
+        run: npm run test:a11y
+
+  source-accessibility:
+    name: Source accessibility
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: go
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+
+      - name: Download a11y-check-web v0.3.1
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.A11Y_RELEASE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::A11Y_RELEASE_READ_TOKEN is required to download a11y-check-web v0.3.1"
+            exit 1
+          fi
+          download_dir="$RUNNER_TEMP/a11y-check-web-download"
+          test ! -e "$download_dir"
+          mkdir "$download_dir"
+          gh release download v0.3.1 --repo coryj627/a11y-check-web \
+            --pattern 'a11y-check-web-mcp-server-0.3.1.tgz' \
+            --dir "$download_dir"
+
+      - name: Install and verify a11y-check-web v0.3.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          download_dir="$RUNNER_TEMP/a11y-check-web-download"
+          expected_artifact="$download_dir/a11y-check-web-mcp-server-0.3.1.tgz"
+          regular_count="$(find "$download_dir" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
+          entry_count="$(find "$download_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d '[:space:]')"
+          test "$regular_count" = "1"
+          test "$entry_count" = "1"
+          test -f "$expected_artifact"
+          test ! -L "$expected_artifact"
+          npm install -g "$expected_artifact"
+          test "$(a11y-check-web --version)" = "0.3.1"
+
+      - name: Scan source accessibility without updating the baseline
+        env:
+          A11Y_ALLOWED_ROOTS: ${{ github.workspace }}/go
+        run: node scripts/a11y-scan-all.mjs

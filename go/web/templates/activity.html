@@ -1,0 +1,8 @@
+{{define "content"}}
+<section aria-labelledby="recent-activity-heading" data-live-presentation>
+  <h2 id="recent-activity-heading">Recent activity</h2>
+  <p data-live-activity-reset{{if not .Content.Reset}} hidden{{end}}>Earlier activity is unavailable because the in-memory history was restarted or trimmed.</p>
+  <ol class="timeline" data-live-activity{{if not .Content.Events}} hidden{{end}}>{{range .Content.Events}}<li data-live-event-id="{{.EventCursor}}"><time datetime="{{.DateTime}}">{{.DisplayTime}}</time><p data-field="summary">{{.Summary}}</p></li>{{end}}</ol>
+  <p data-live-activity-empty{{if .Content.Events}} hidden{{end}}>No activity has been recorded.</p>
+</section>
+{{end}}

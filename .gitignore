@@ -1,0 +1,30 @@
+.superpowers/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Build and test output
+/bin/
+/dist/
+/coverage/
+/playwright-report/
+/test-results/
+*.out
+go/bin/
+go/node_modules/
+go/playwright-report/
+go/test-results/
+go/coverage/
+go/testdata/manual/WORKFLOW.md
+
+# Local runtime state
+/.symphony/
+*.log
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
