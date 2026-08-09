@@ -35,11 +35,12 @@ func (ctx *signalingContext) Err() error {
 }
 
 type fakeAdapter struct {
-	mu      sync.Mutex
-	kind    string
-	fetches []fakeFetch
-	calls   int
-	states  [][]string
+	mu       sync.Mutex
+	kind     string
+	fetches  []fakeFetch
+	calls    int
+	states   [][]string
+	contexts []context.Context
 }
 
 func (adapter *fakeAdapter) Kind() string {
@@ -56,6 +57,7 @@ func (adapter *fakeAdapter) FetchIssuesByStates(ctx context.Context, states []st
 	call := adapter.calls
 	adapter.calls++
 	adapter.states = append(adapter.states, append([]string(nil), states...))
+	adapter.contexts = append(adapter.contexts, ctx)
 	var fetch fakeFetch
 	if call < len(adapter.fetches) {
 		fetch = adapter.fetches[call]
@@ -104,6 +106,15 @@ func (adapter *fakeAdapter) requestedStates() [][]string {
 		clone[index] = append([]string(nil), adapter.states[index]...)
 	}
 	return clone
+}
+
+func (adapter *fakeAdapter) callContext(index int) context.Context {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	if index < 0 || index >= len(adapter.contexts) {
+		return nil
+	}
+	return adapter.contexts[index]
 }
 
 type fakeFactory struct {
@@ -181,21 +192,40 @@ func (resolver *fakeResolver) Resolve(_ context.Context, ref secrets.Ref, refere
 }
 
 type fakeWorkflowStore struct {
-	mu           sync.Mutex
-	current      workflow.Snapshot
-	hasCurrent   bool
-	loadErr      error
-	changes      chan workflow.Change
-	currentCalls int
-	loadCalls    int
-	changeCalls  int
+	mu            sync.Mutex
+	current       workflow.Snapshot
+	hasCurrent    bool
+	loadErr       error
+	changes       chan workflow.Change
+	currentWaits  []<-chan struct{}
+	currentCalled chan<- int
+	currentCalls  int
+	loadCalls     int
+	changeCalls   int
 }
 
 func (store *fakeWorkflowStore) Current() (workflow.Snapshot, bool) {
 	store.mu.Lock()
-	defer store.mu.Unlock()
+	call := store.currentCalls
 	store.currentCalls++
-	return cloneWorkflowSnapshotForTest(store.current), store.hasCurrent
+	snapshot := cloneWorkflowSnapshotForTest(store.current)
+	available := store.hasCurrent
+	var wait <-chan struct{}
+	if call < len(store.currentWaits) {
+		wait = store.currentWaits[call]
+	}
+	called := store.currentCalled
+	store.mu.Unlock()
+	if called != nil {
+		select {
+		case called <- call:
+		default:
+		}
+	}
+	if wait != nil {
+		<-wait
+	}
+	return snapshot, available
 }
 func (store *fakeWorkflowStore) Load(context.Context) (workflow.Snapshot, error) {
 	store.mu.Lock()
