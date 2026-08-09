@@ -1559,6 +1559,26 @@ func TestInvalidChangeCancelsManualRebuildReservedBeforeObservation(t *testing.T
 		snapshot.Config.ActiveDigest != "" || snapshot.Config.UsingLastGood || len(snapshot.Candidates) != 0 || snapshot.EventCursor.Sequence != 2 {
 		t.Fatalf("pre-invalid manual rebuild committed late: builds=%d polls=%d snapshot=%#v", factory.buildCount(), recovered.callCount(), snapshot)
 	}
+	currentCalls, loadCalls, _ := store.accessCounts()
+	if currentCalls != 1 || loadCalls != 0 {
+		t.Fatalf("pre-invalid manual intent touched store afterward: current=%d load=%d", currentCalls, loadCalls)
+	}
+
+	receipt, err := runtime.Refresh(context.Background())
+	if err != nil || !receipt.Queued || receipt.Coalesced {
+		t.Fatalf("post-invalid manual recovery = receipt=%#v err=%v", receipt, err)
+	}
+	snapshot, err = runtime.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentCalls, loadCalls, _ = store.accessCounts()
+	if currentCalls != 2 || loadCalls != 0 || factory.buildCount() != 2 || snapshot.Config.State != "invalid" ||
+		!snapshot.Config.UsingLastGood || snapshot.Config.ActiveDigest != "digest-1" || len(snapshot.Candidates) != 1 ||
+		snapshot.Candidates[0].Issue.Identifier != "GH-TOO-LATE" {
+		t.Fatalf("post-invalid manual recovery = current=%d load=%d builds=%d snapshot=%#v",
+			currentCalls, loadCalls, factory.buildCount(), snapshot)
+	}
 }
 
 func TestCredentialNotificationBeforeInvalidObservationCannotRecoverAfterward(t *testing.T) {
@@ -1619,6 +1639,10 @@ func TestCredentialNotificationBeforeInvalidObservationCannotRecoverAfterward(t 
 	if factory.buildCount() != 1 || preInvalidFlight != nil || preInvalidAdapter != nil {
 		t.Fatalf("pre-invalid credential intent rebuilt afterward: builds=%d flight=%#v adapter=%#v", factory.buildCount(), preInvalidFlight, preInvalidAdapter)
 	}
+	currentCalls, loadCalls, _ := store.accessCounts()
+	if currentCalls != 1 || loadCalls != 0 {
+		t.Fatalf("pre-invalid credential intent touched store afterward: current=%d load=%d", currentCalls, loadCalls)
+	}
 
 	runtime.NotifyCredentialChanged()
 	<-credentialFinished
@@ -1630,6 +1654,145 @@ func TestCredentialNotificationBeforeInvalidObservationCannotRecoverAfterward(t 
 	if factory.buildCount() != 2 || snapshot.Config.State != "invalid" || !snapshot.Config.UsingLastGood ||
 		snapshot.Config.ActiveDigest != "digest-1" || snapshot.Candidates[0].Issue.Identifier != "GH-RECOVERED" {
 		t.Fatalf("post-invalid credential recovery = builds=%d snapshot=%#v", factory.buildCount(), snapshot)
+	}
+	currentCalls, loadCalls, _ = store.accessCounts()
+	if currentCalls != 2 || loadCalls != 0 {
+		t.Fatalf("post-invalid credential recovery store reads: current=%d load=%d", currentCalls, loadCalls)
+	}
+}
+
+func TestInvalidatedManualRebuildSkipsStoreBeforeBoundedShutdown(t *testing.T) {
+	t.Parallel()
+	manualStarted := make(chan struct{}, 1)
+	releaseManual := make(chan struct{})
+	blockUnexpectedStoreRead := make(chan struct{})
+	var releaseManualOnce sync.Once
+	var releaseStoreOnce sync.Once
+	factory := &fakeFactory{
+		adapters: []tracker.Adapter{nil},
+		errors:   []error{trackerErr(tracker.CategoryAuth, false, 0)},
+	}
+	store := &fakeWorkflowStore{
+		current:      validQueueSnapshot("github", "", "digest-1"),
+		hasCurrent:   true,
+		changes:      make(chan workflow.Change, 1),
+		currentWaits: []<-chan struct{}{nil, blockUnexpectedStoreRead},
+	}
+	runtime := newQueueRuntimeWithDependencies(QueueOptions{
+		Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")},
+		Journal: observability.NewJournal(observability.JournalOptions{}),
+	}, queueDependencies{
+		now: newFakeQueueClock().Now, after: time.After, jitter: func(time.Duration) time.Duration { return 0 },
+		beforeManualRebuild: func() {
+			manualStarted <- struct{}{}
+			<-releaseManual
+		},
+	})
+	t.Cleanup(func() {
+		releaseManualOnce.Do(func() { close(releaseManual) })
+		releaseStoreOnce.Do(func() { close(blockUnexpectedStoreRead) })
+		_ = runtime.Shutdown(context.Background())
+	})
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	refreshResult := make(chan error, 1)
+	go func() {
+		_, err := runtime.Refresh(context.Background())
+		refreshResult <- err
+	}()
+	<-manualStarted
+	runtime.handleWorkflowChange(context.Background(), workflow.Change{
+		Digest: "invalid-digest",
+		Validation: workflow.ValidationResult{Valid: false, FieldErrors: []workflow.FieldError{{
+			Field: "polling.interval", Code: "invalid_polling_interval", Message: "unsafe detail",
+		}}},
+	})
+	if err := <-refreshResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("invalidated manual refresh error = %v", err)
+	}
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), time.Second)
+	defer cancelShutdown()
+	shutdownResult := make(chan error, 1)
+	go func() { shutdownResult <- runtime.Shutdown(shutdownCtx) }()
+	waitFor(t, "manual shutdown admission", func() bool {
+		runtime.mu.Lock()
+		defer runtime.mu.Unlock()
+		return runtime.closed
+	})
+	releaseManualOnce.Do(func() { close(releaseManual) })
+	if err := <-shutdownResult; err != nil {
+		currentCalls, loadCalls, _ := store.accessCounts()
+		t.Fatalf("invalidated manual store read blocked shutdown: err=%v current=%d load=%d", err, currentCalls, loadCalls)
+	}
+	currentCalls, loadCalls, _ := store.accessCounts()
+	if currentCalls != 1 || loadCalls != 0 || factory.buildCount() != 1 {
+		t.Fatalf("invalidated manual intent touched dependencies: current=%d load=%d builds=%d",
+			currentCalls, loadCalls, factory.buildCount())
+	}
+}
+
+func TestInvalidatedCredentialRebuildSkipsStoreBeforeBoundedShutdown(t *testing.T) {
+	t.Parallel()
+	credentialStarted := make(chan struct{}, 1)
+	releaseCredential := make(chan struct{})
+	blockUnexpectedStoreRead := make(chan struct{})
+	var releaseCredentialOnce sync.Once
+	var releaseStoreOnce sync.Once
+	adapter := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+	factory := &fakeFactory{adapters: []tracker.Adapter{adapter}}
+	store := &fakeWorkflowStore{
+		current:      validQueueSnapshot("github", "", "digest-1"),
+		hasCurrent:   true,
+		changes:      make(chan workflow.Change, 1),
+		currentWaits: []<-chan struct{}{nil, blockUnexpectedStoreRead},
+	}
+	runtime := newQueueRuntimeWithDependencies(QueueOptions{
+		Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")},
+		Journal: observability.NewJournal(observability.JournalOptions{}),
+	}, queueDependencies{
+		now: newFakeQueueClock().Now, after: time.After, jitter: func(time.Duration) time.Duration { return 0 },
+		beforeCredentialRebuild: func() {
+			credentialStarted <- struct{}{}
+			<-releaseCredential
+		},
+	})
+	t.Cleanup(func() {
+		releaseCredentialOnce.Do(func() { close(releaseCredential) })
+		releaseStoreOnce.Do(func() { close(blockUnexpectedStoreRead) })
+		_ = runtime.Shutdown(context.Background())
+	})
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runtime.NotifyCredentialChanged()
+	<-credentialStarted
+	runtime.handleWorkflowChange(context.Background(), workflow.Change{
+		Digest: "invalid-digest",
+		Validation: workflow.ValidationResult{Valid: false, FieldErrors: []workflow.FieldError{{
+			Field: "tracker.kind", Code: "invalid_tracker_config", Message: "unsafe detail",
+		}}},
+	})
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), time.Second)
+	defer cancelShutdown()
+	shutdownResult := make(chan error, 1)
+	go func() { shutdownResult <- runtime.Shutdown(shutdownCtx) }()
+	waitFor(t, "credential shutdown admission", func() bool {
+		runtime.mu.Lock()
+		defer runtime.mu.Unlock()
+		return runtime.closed
+	})
+	releaseCredentialOnce.Do(func() { close(releaseCredential) })
+	if err := <-shutdownResult; err != nil {
+		currentCalls, loadCalls, _ := store.accessCounts()
+		t.Fatalf("invalidated credential store read blocked shutdown: err=%v current=%d load=%d", err, currentCalls, loadCalls)
+	}
+	currentCalls, loadCalls, _ := store.accessCounts()
+	if currentCalls != 1 || loadCalls != 0 || factory.buildCount() != 1 {
+		t.Fatalf("invalidated credential intent touched dependencies: current=%d load=%d builds=%d",
+			currentCalls, loadCalls, factory.buildCount())
 	}
 }
 

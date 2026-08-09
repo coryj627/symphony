@@ -654,8 +654,14 @@ func (runtime *QueueRuntime) handleWorkflowChange(ctx context.Context, change wo
 }
 
 func (runtime *QueueRuntime) rebuildCurrentForCredentialIntent(ctx context.Context, intent credentialRebuildIntent) error {
+	if admitted, err := runtime.admitRebuildLoad(ctx, intent.generation, intent.epoch); !admitted {
+		return err
+	}
 	snapshot, available := runtime.options.Store.Current()
 	if !available {
+		if admitted, err := runtime.admitRebuildLoad(ctx, intent.generation, intent.epoch); !admitted {
+			return err
+		}
 		var err error
 		snapshot, err = runtime.options.Store.Load(ctx)
 		if err != nil {
@@ -670,8 +676,14 @@ func (runtime *QueueRuntime) rebuildCurrentForCredentialIntent(ctx context.Conte
 }
 
 func (runtime *QueueRuntime) rebuildCurrentForGeneration(ctx context.Context, expectedGeneration, expectedIntentEpoch uint64) error {
+	if admitted, err := runtime.admitRebuildLoad(ctx, expectedGeneration, expectedIntentEpoch); !admitted {
+		return err
+	}
 	snapshot, available := runtime.options.Store.Current()
 	if !available {
+		if admitted, err := runtime.admitRebuildLoad(ctx, expectedGeneration, expectedIntentEpoch); !admitted {
+			return err
+		}
 		var err error
 		snapshot, err = runtime.options.Store.Load(ctx)
 		if err != nil {
@@ -691,6 +703,21 @@ func (runtime *QueueRuntime) rebuildCurrentForGeneration(ctx context.Context, ex
 	case <-flight.done:
 		return flight.err
 	}
+}
+
+func (runtime *QueueRuntime) admitRebuildLoad(ctx context.Context, expectedGeneration, expectedIntentEpoch uint64) (bool, error) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if runtime.closed || runtime.runtimeCtx == nil || runtime.runtimeCtx.Err() != nil {
+		return false, context.Canceled
+	}
+	if runtime.generation != expectedGeneration || runtime.rebuildIntentEpoch != expectedIntentEpoch {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (runtime *QueueRuntime) enqueueRebuild(snapshot workflow.Snapshot, publishConfiguration bool, expectedGeneration uint64, requireCurrentGeneration bool) (*refreshFlight, error) {
