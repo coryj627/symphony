@@ -34,6 +34,8 @@ type queueDependencies struct {
 	after                   func(time.Duration) <-chan time.Time
 	jitter                  func(time.Duration) time.Duration
 	beforeManualRebuild     func()
+	beforeCredentialRebuild func()
+	afterCredentialRebuild  func()
 	beforeRebuildCompletion func()
 }
 
@@ -67,10 +69,28 @@ type rebuildIntent struct {
 	generation     uint64
 	ctx            context.Context
 	snapshot       workflow.Snapshot
+	startup        bool
+	changes        <-chan workflow.Change
+	kind           string
+	scope          string
 	activeStates   []string
 	pollInterval   time.Duration
 	preparationErr error
 	flight         *refreshFlight
+	startupOutcome startupRebuildOutcome
+}
+
+type startupRebuildOutcome struct {
+	adapter     tracker.Adapter
+	candidates  []domain.CandidateRow
+	details     map[string]domain.IssueDetail
+	providerErr error
+	buildFailed bool
+}
+
+type credentialRebuildIntent struct {
+	generation uint64
+	epoch      uint64
 }
 
 type QueueRuntime struct {
@@ -86,25 +106,28 @@ type QueueRuntime struct {
 	startupRefreshErr error
 	closed            bool
 	startupDone       chan struct{}
+	rebuildDone       chan struct{}
 	startupOnce       sync.Once
 	done              chan struct{}
 	runtimeCtx        context.Context
 	cancel            context.CancelFunc
 
-	generation       uint64
-	generationCtx    context.Context
-	generationCancel context.CancelFunc
-	adapter          tracker.Adapter
-	activeStates     []string
-	requiredLabels   []string
-	pollInterval     time.Duration
-	activeScope      string
-	currentSnapshot  workflow.Snapshot
-	hasSnapshot      bool
-	inFlight         *refreshFlight
-	rebuildFlight    *refreshFlight
-	manualRebuild    *refreshFlight
-	pendingRebuild   *rebuildIntent
+	generation          uint64
+	generationCommitted bool
+	rebuildIntentEpoch  uint64
+	generationCtx       context.Context
+	generationCancel    context.CancelFunc
+	adapter             tracker.Adapter
+	activeStates        []string
+	requiredLabels      []string
+	pollInterval        time.Duration
+	activeScope         string
+	currentSnapshot     workflow.Snapshot
+	hasSnapshot         bool
+	inFlight            *refreshFlight
+	rebuildFlight       *refreshFlight
+	manualRebuild       *refreshFlight
+	pendingRebuild      *rebuildIntent
 
 	candidates []domain.CandidateRow
 	issues     map[string]domain.IssueDetail
@@ -114,7 +137,7 @@ type QueueRuntime struct {
 	autoSuppressed bool
 	retryAt        *time.Time
 	wake           chan struct{}
-	credentials    chan struct{}
+	credentials    chan credentialRebuildIntent
 	rebuildWake    chan struct{}
 }
 
@@ -149,7 +172,7 @@ func newQueueRuntimeWithDependencies(options QueueOptions, dependencies queueDep
 	}
 	return &QueueRuntime{
 		options: options, deps: dependencies,
-		startupDone: make(chan struct{}), wake: make(chan struct{}, 1), credentials: make(chan struct{}, 1), rebuildWake: make(chan struct{}, 1),
+		startupDone: make(chan struct{}), rebuildDone: make(chan struct{}), wake: make(chan struct{}, 1), credentials: make(chan credentialRebuildIntent, 1), rebuildWake: make(chan struct{}, 1),
 		pollInterval: defaultQueuePollInterval,
 		candidates:   []domain.CandidateRow{}, issues: make(map[string]domain.IssueDetail),
 		config:  domain.ConfigStatus{State: configState, ChangedAt: now},
@@ -200,8 +223,7 @@ func (runtime *QueueRuntime) Start(ctx context.Context) error {
 		runtime.mu.Unlock()
 		return err
 	case <-ctx.Done():
-		runtime.abortStartup(ctx.Err())
-		return ctx.Err()
+		return runtime.abortStartup(ctx.Err())
 	}
 }
 
@@ -217,7 +239,18 @@ func (runtime *QueueRuntime) waitForStartup(ctx context.Context, startupDone <-c
 }
 
 func (runtime *QueueRuntime) initialize(ctx context.Context) {
-	defer runtime.wg.Done()
+	var terminalErr error
+	defer func() {
+		runtime.wg.Done()
+		if terminalErr == nil {
+			return
+		}
+		runtime.mu.Lock()
+		if runtime.initializing {
+			runtime.completeStartupLocked(terminalErr)
+		}
+		runtime.mu.Unlock()
+	}()
 	snapshot, available := runtime.options.Store.Current()
 	if !available {
 		var err error
@@ -227,54 +260,25 @@ func (runtime *QueueRuntime) initialize(ctx context.Context) {
 				runtime.abortStartup(ctx.Err())
 				return
 			}
-			runtime.mu.Lock()
-			runtime.completeStartupLocked(errors.New("queue_workflow_unavailable"))
-			runtime.mu.Unlock()
+			terminalErr = errors.New("queue_workflow_unavailable")
+			runtime.failStartupAndJoinRebuildWorker()
 			return
 		}
 	}
-	flight, err := runtime.enqueueRebuild(snapshot, false, 0, false)
+	changes := runtime.options.Store.Changes()
+	_, err := runtime.enqueueStartupRebuild(snapshot, changes)
 	if err != nil {
 		if ctx.Err() != nil {
-			runtime.abortStartup(ctx.Err())
+			_ = runtime.abortStartup(ctx.Err())
 			return
 		}
-		runtime.mu.Lock()
-		runtime.completeStartupLocked(err)
-		runtime.mu.Unlock()
+		terminalErr = err
+		runtime.failStartupAndJoinRebuildWorker()
 		return
 	}
-	select {
-	case <-ctx.Done():
-		runtime.abortStartup(ctx.Err())
-		return
-	case <-flight.done:
-		if errors.Is(flight.err, context.Canceled) && ctx.Err() != nil {
-			runtime.abortStartup(ctx.Err())
-			return
-		}
-		// Provider failures are observable runtime state; the local read-only UI
-		// remains available so a workflow or credential change can recover it.
-	}
-
-	changes := runtime.options.Store.Changes()
-	runtime.mu.Lock()
-	if runtime.closed || !runtime.initializing || ctx.Err() != nil {
-		runtime.mu.Unlock()
-		return
-	}
-	runtime.wg.Add(2)
-	runtime.startupRefreshErr = flight.err
-	runtime.completeStartupLocked(nil)
-	runtime.mu.Unlock()
-	go runtime.controlLoop(ctx, changes)
-	go runtime.pollLoop(ctx)
 }
 
-func (runtime *QueueRuntime) abortStartup(err error) {
-	if err == nil {
-		err = context.Canceled
-	}
+func (runtime *QueueRuntime) failStartupAndJoinRebuildWorker() {
 	runtime.mu.Lock()
 	if !runtime.initializing {
 		runtime.mu.Unlock()
@@ -284,10 +288,31 @@ func (runtime *QueueRuntime) abortStartup(err error) {
 		runtime.cancel()
 	}
 	runtime.retireGenerationLocked()
+	runtime.mu.Unlock()
+	runtime.signalRebuild()
+	runtime.signalWake()
+	<-runtime.rebuildDone
+}
+
+func (runtime *QueueRuntime) abortStartup(err error) error {
+	if err == nil {
+		err = context.Canceled
+	}
+	runtime.mu.Lock()
+	if !runtime.initializing {
+		result := runtime.startErr
+		runtime.mu.Unlock()
+		return result
+	}
+	if runtime.cancel != nil {
+		runtime.cancel()
+	}
+	runtime.retireGenerationLocked()
 	runtime.completeStartupLocked(err)
 	runtime.mu.Unlock()
 	runtime.signalRebuild()
 	runtime.signalWake()
+	return err
 }
 
 func (runtime *QueueRuntime) completeStartupLocked(err error) {
@@ -449,10 +474,11 @@ func (runtime *QueueRuntime) Refresh(ctx context.Context) (domain.RefreshReceipt
 		runtime.manualRebuild = flight
 		rebuildCtx := runtime.runtimeCtx
 		expectedGeneration := runtime.generation
+		expectedIntentEpoch := runtime.rebuildIntentEpoch
 		runtime.wg.Add(1)
 		runtime.mu.Unlock()
 		receipt.Queued = true
-		go runtime.runManualRebuild(rebuildCtx, flight, expectedGeneration)
+		go runtime.runManualRebuild(rebuildCtx, flight, expectedGeneration, expectedIntentEpoch)
 		select {
 		case <-ctx.Done():
 			return receipt, ctx.Err()
@@ -479,12 +505,12 @@ func (runtime *QueueRuntime) Refresh(ctx context.Context) (domain.RefreshReceipt
 	}
 }
 
-func (runtime *QueueRuntime) runManualRebuild(ctx context.Context, flight *refreshFlight, expectedGeneration uint64) {
+func (runtime *QueueRuntime) runManualRebuild(ctx context.Context, flight *refreshFlight, expectedGeneration, expectedIntentEpoch uint64) {
 	defer runtime.wg.Done()
 	if runtime.deps.beforeManualRebuild != nil {
 		runtime.deps.beforeManualRebuild()
 	}
-	err := runtime.rebuildCurrentForGeneration(ctx, expectedGeneration)
+	err := runtime.rebuildCurrentForGeneration(ctx, expectedGeneration, expectedIntentEpoch)
 	runtime.mu.Lock()
 	if runtime.manualRebuild == flight {
 		runtime.manualRebuild = nil
@@ -521,16 +547,26 @@ func (runtime *QueueRuntime) NotifyCredentialChanged() {
 		return
 	}
 	runtime.retireGenerationLocked()
+	runtime.rebuildIntentEpoch++
+	intent := credentialRebuildIntent{generation: runtime.generation, epoch: runtime.rebuildIntentEpoch}
 	runtime.adapter = nil
 	runtime.autoSuppressed = false
 	runtime.retryAt = nil
 	runtime.tracker.Stale = len(runtime.candidates) > 0
 	runtime.tracker.State = "rebuilding"
-	runtime.mu.Unlock()
 	select {
-	case runtime.credentials <- struct{}{}:
+	case runtime.credentials <- intent:
 	default:
+		select {
+		case <-runtime.credentials:
+		default:
+		}
+		select {
+		case runtime.credentials <- intent:
+		default:
+		}
 	}
+	runtime.mu.Unlock()
 	runtime.signalWake()
 }
 
@@ -540,11 +576,17 @@ func (runtime *QueueRuntime) controlLoop(ctx context.Context, changes <-chan wor
 		select {
 		case <-ctx.Done():
 			return
-		case _, ok := <-runtime.credentials:
+		case intent, ok := <-runtime.credentials:
 			if !ok {
 				return
 			}
-			_ = runtime.rebuildCurrent(ctx)
+			if runtime.deps.beforeCredentialRebuild != nil {
+				runtime.deps.beforeCredentialRebuild()
+			}
+			_ = runtime.rebuildCurrentForCredentialIntent(ctx, intent)
+			if runtime.deps.afterCredentialRebuild != nil {
+				runtime.deps.afterCredentialRebuild()
+			}
 		case change, ok := <-changes:
 			if !ok {
 				changes = nil
@@ -577,13 +619,26 @@ func (runtime *QueueRuntime) pollLoop(ctx context.Context) {
 func (runtime *QueueRuntime) handleWorkflowChange(ctx context.Context, change workflow.Change) {
 	if !change.Validation.Valid || change.Snapshot.Digest == "" {
 		runtime.mu.Lock()
+		runtime.rebuildIntentEpoch++
+		supersedesManual := runtime.manualRebuild != nil
+		supersedesGeneration := runtime.rebuildFlight != nil && !runtime.generationCommitted
 		next := runtime.config
 		next.State = "invalid"
 		next.Digest = change.Digest
-		next.UsingLastGood = runtime.adapter != nil
 		next.ErrorCode = stableValidationCode(change.Validation)
 		next.Message = "Workflow configuration is invalid."
 		next.ChangedAt = runtime.deps.now().UTC()
+		if supersedesManual {
+			runtime.manualRebuild.complete(context.Canceled)
+			runtime.manualRebuild = nil
+		}
+		if supersedesGeneration {
+			runtime.retireGenerationLocked()
+			next.ActiveDigest = ""
+			next.UsingLastGood = false
+		} else {
+			next.UsingLastGood = runtime.adapter != nil
+		}
 		if _, err := runtime.options.Journal.Publish(domain.Event{Type: "configuration.changed", Data: map[string]any{
 			"status": "invalid", "error_code": next.ErrorCode,
 		}}); err != nil {
@@ -598,32 +653,35 @@ func (runtime *QueueRuntime) handleWorkflowChange(ctx context.Context, change wo
 	_, _ = runtime.enqueueRebuild(change.Snapshot, true, 0, false)
 }
 
-func (runtime *QueueRuntime) rebuildCurrent(ctx context.Context) error {
+func (runtime *QueueRuntime) rebuildCurrentForCredentialIntent(ctx context.Context, intent credentialRebuildIntent) error {
 	snapshot, available := runtime.options.Store.Current()
 	if !available {
 		var err error
 		snapshot, err = runtime.options.Store.Load(ctx)
 		if err != nil {
-			return runtime.recordBuildFailure(err, "tracker_config")
+			return runtime.recordBuildFailureForGenerationAndIntent(
+				intent.generation, intent.epoch, true,
+				&tracker.Error{Category: tracker.CategoryConfig, Message: "Tracker configuration is unavailable."},
+			)
 		}
 	}
-	_, err := runtime.enqueueRebuild(snapshot, false, 0, false)
+	_, err := runtime.enqueueRebuildIntent(snapshot, false, intent.generation, true, false, nil, intent.epoch, true)
 	return err
 }
 
-func (runtime *QueueRuntime) rebuildCurrentForGeneration(ctx context.Context, expectedGeneration uint64) error {
+func (runtime *QueueRuntime) rebuildCurrentForGeneration(ctx context.Context, expectedGeneration, expectedIntentEpoch uint64) error {
 	snapshot, available := runtime.options.Store.Current()
 	if !available {
 		var err error
 		snapshot, err = runtime.options.Store.Load(ctx)
 		if err != nil {
-			if !runtime.generationIsCurrent(expectedGeneration) {
-				return nil
-			}
-			return runtime.recordBuildFailure(err, "tracker_config")
+			return runtime.recordBuildFailureForGenerationAndIntent(
+				expectedGeneration, expectedIntentEpoch, true,
+				&tracker.Error{Category: tracker.CategoryConfig, Message: "Tracker configuration is unavailable."},
+			)
 		}
 	}
-	flight, err := runtime.enqueueRebuild(snapshot, false, expectedGeneration, true)
+	flight, err := runtime.enqueueRebuildIntent(snapshot, false, expectedGeneration, true, false, nil, expectedIntentEpoch, true)
 	if err != nil || flight == nil {
 		return err
 	}
@@ -635,13 +693,24 @@ func (runtime *QueueRuntime) rebuildCurrentForGeneration(ctx context.Context, ex
 	}
 }
 
-func (runtime *QueueRuntime) generationIsCurrent(expectedGeneration uint64) bool {
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	return !runtime.closed && runtime.generation == expectedGeneration
+func (runtime *QueueRuntime) enqueueRebuild(snapshot workflow.Snapshot, publishConfiguration bool, expectedGeneration uint64, requireCurrentGeneration bool) (*refreshFlight, error) {
+	return runtime.enqueueRebuildIntent(snapshot, publishConfiguration, expectedGeneration, requireCurrentGeneration, false, nil, 0, false)
 }
 
-func (runtime *QueueRuntime) enqueueRebuild(snapshot workflow.Snapshot, publishConfiguration bool, expectedGeneration uint64, requireCurrentGeneration bool) (*refreshFlight, error) {
+func (runtime *QueueRuntime) enqueueStartupRebuild(snapshot workflow.Snapshot, changes <-chan workflow.Change) (*refreshFlight, error) {
+	return runtime.enqueueRebuildIntent(snapshot, false, 0, false, true, changes, 0, false)
+}
+
+func (runtime *QueueRuntime) enqueueRebuildIntent(
+	snapshot workflow.Snapshot,
+	publishConfiguration bool,
+	expectedGeneration uint64,
+	requireCurrentGeneration bool,
+	startup bool,
+	changes <-chan workflow.Change,
+	expectedIntentEpoch uint64,
+	requireCurrentIntent bool,
+) (*refreshFlight, error) {
 	provider, preparationErr := tracker.DecodeConfig(snapshot.Config.Tracker)
 	selection := TrackerSelection{}
 	activeStates := []string(nil)
@@ -664,6 +733,10 @@ func (runtime *QueueRuntime) enqueueRebuild(snapshot workflow.Snapshot, publishC
 		runtime.mu.Unlock()
 		return nil, nil
 	}
+	if requireCurrentIntent && runtime.rebuildIntentEpoch != expectedIntentEpoch {
+		runtime.mu.Unlock()
+		return nil, nil
+	}
 	if preparationErr == nil && publishConfiguration {
 		if _, err := runtime.options.Journal.Publish(domain.Event{Type: "configuration.changed", Data: map[string]any{
 			"status": "valid",
@@ -674,7 +747,9 @@ func (runtime *QueueRuntime) enqueueRebuild(snapshot workflow.Snapshot, publishC
 	}
 
 	previousScope := runtime.activeScope
+	previousTracker := cloneTrackerStatus(runtime.tracker)
 	runtime.retireGenerationLocked()
+	runtime.generationCommitted = false
 	runtime.adapter = nil
 	runtime.autoSuppressed = false
 	runtime.retryAt = nil
@@ -688,7 +763,9 @@ func (runtime *QueueRuntime) enqueueRebuild(snapshot workflow.Snapshot, publishC
 			runtime.config.Message = ""
 			runtime.config.ChangedAt = runtime.deps.now().UTC()
 		}
-		runtime.activeScope = selection.Scope
+		if !startup {
+			runtime.activeScope = selection.Scope
+		}
 		runtime.tracker.Kind = selection.Kind
 		runtime.tracker.Scope = selection.Scope
 		runtime.tracker.State = "rebuilding"
@@ -705,8 +782,10 @@ func (runtime *QueueRuntime) enqueueRebuild(snapshot workflow.Snapshot, publishC
 	runtime.generationCancel = cancel
 	runtime.generationCtx = generationCtx
 	flight := newRefreshFlight()
+	flight.previousTracker = previousTracker
 	intent := &rebuildIntent{
 		generation: generation, ctx: generationCtx, snapshot: cloneRuntimeSnapshot(snapshot),
+		startup: startup, changes: changes, kind: selection.Kind, scope: selection.Scope,
 		activeStates: activeStates, pollInterval: snapshot.Config.Polling.Interval,
 		preparationErr: preparationErr, flight: flight,
 	}
@@ -718,6 +797,7 @@ func (runtime *QueueRuntime) enqueueRebuild(snapshot workflow.Snapshot, publishC
 }
 
 func (runtime *QueueRuntime) rebuildLoop(ctx context.Context) {
+	defer close(runtime.rebuildDone)
 	defer runtime.wg.Done()
 	for {
 		select {
@@ -733,6 +813,11 @@ func (runtime *QueueRuntime) rebuildLoop(ctx context.Context) {
 			if intent == nil {
 				break
 			}
+			if intent.startup {
+				intent.startupOutcome = runtime.executeStartupRebuild(intent)
+				runtime.completeStartupRebuild(intent)
+				continue
+			}
 			err := runtime.executeRebuild(intent)
 			if runtime.deps.beforeRebuildCompletion != nil {
 				runtime.deps.beforeRebuildCompletion()
@@ -746,6 +831,190 @@ func (runtime *QueueRuntime) rebuildLoop(ctx context.Context) {
 			runtime.signalWake()
 		}
 	}
+}
+
+func (runtime *QueueRuntime) executeStartupRebuild(intent *rebuildIntent) startupRebuildOutcome {
+	if !runtime.rebuildIntentIsCurrent(intent) {
+		return startupRebuildOutcome{providerErr: context.Canceled}
+	}
+	if intent.preparationErr != nil {
+		return startupRebuildOutcome{providerErr: intent.preparationErr, buildFailed: true}
+	}
+	adapter, err := runtime.options.Factory.Build(intent.ctx, cloneRuntimeTrackerConfig(intent.snapshot.Config.Tracker), runtime.options.Resolver)
+	if !runtime.rebuildIntentIsCurrent(intent) {
+		return startupRebuildOutcome{providerErr: context.Canceled}
+	}
+	if err != nil || adapter == nil {
+		if err == nil {
+			err = errors.New("tracker_adapter_unavailable")
+		}
+		return startupRebuildOutcome{providerErr: err, buildFailed: true}
+	}
+	issues, err := adapter.FetchIssuesByStates(intent.ctx, append([]string(nil), intent.activeStates...))
+	var candidates []domain.CandidateRow
+	var details map[string]domain.IssueDetail
+	if err == nil {
+		candidates, details, err = normalizeProviderIssues(issues, intent.snapshot.Config.Tracker.RequiredLabels)
+	}
+	return startupRebuildOutcome{adapter: adapter, candidates: candidates, details: details, providerErr: err}
+}
+
+func (runtime *QueueRuntime) completeStartupRebuild(intent *rebuildIntent) {
+	runtime.mu.Lock()
+	if runtime.closed || !runtime.initializing || runtime.generation != intent.generation || intent.ctx.Err() != nil {
+		startupErr := intent.ctx.Err()
+		if startupErr == nil {
+			startupErr = context.Canceled
+		}
+		intent.flight.complete(startupErr)
+		if runtime.initializing && runtime.generation == intent.generation {
+			runtime.retireGenerationLocked()
+			runtime.completeStartupLocked(startupErr)
+		}
+		runtime.mu.Unlock()
+		runtime.signalRebuild()
+		runtime.signalWake()
+		return
+	}
+
+	refreshErr := runtime.commitStartupOutcomeLocked(intent)
+	if runtime.rebuildFlight == intent.flight {
+		runtime.rebuildFlight = nil
+	}
+	if runtime.pendingRebuild == intent {
+		runtime.pendingRebuild = nil
+	}
+	intent.flight.complete(refreshErr)
+	runtime.startupRefreshErr = refreshErr
+	runtime.wg.Add(2)
+	runtime.completeStartupLocked(nil)
+	lifecycleCtx := runtime.runtimeCtx
+	if runtime.deps.beforeRebuildCompletion != nil {
+		runtime.deps.beforeRebuildCompletion()
+	}
+	runtime.mu.Unlock()
+	go runtime.controlLoop(lifecycleCtx, intent.changes)
+	go runtime.pollLoop(lifecycleCtx)
+	runtime.signalWake()
+}
+
+func (runtime *QueueRuntime) commitStartupOutcomeLocked(intent *rebuildIntent) error {
+	outcome := intent.startupOutcome
+	if errors.Is(outcome.providerErr, context.Canceled) {
+		runtime.tracker = cloneTrackerStatus(intent.flight.previousTracker)
+		runtime.generationCommitted = false
+		return context.Canceled
+	}
+
+	now := runtime.deps.now().UTC()
+	if outcome.providerErr == nil {
+		if _, err := runtime.options.Journal.Publish(domain.Event{Type: "queue.refreshed", Data: map[string]any{
+			"status": "ready", "candidate_count": len(outcome.candidates),
+		}}); err != nil {
+			runtime.tracker = cloneTrackerStatus(intent.flight.previousTracker)
+			runtime.generationCommitted = false
+			return err
+		}
+		runtime.installStartupAdapterLocked(intent, outcome.adapter)
+		runtime.candidates = cloneCandidateRows(outcome.candidates)
+		runtime.issues = cloneIssueDetails(outcome.details)
+		runtime.tracker.LastAttemptAt = timePointer(now)
+		runtime.tracker.State = "ready"
+		runtime.tracker.Stale = false
+		runtime.tracker.Retryable = false
+		runtime.tracker.ErrorCode = ""
+		runtime.tracker.Message = ""
+		runtime.tracker.RetryAt = nil
+		runtime.tracker.LastSuccessAt = timePointer(now)
+		runtime.retryAt = nil
+		runtime.autoSuppressed = false
+		runtime.generationCommitted = true
+		return nil
+	}
+
+	portable, returned := safeTrackerFailure(outcome.providerErr)
+	errorCode := string(portable.Category)
+	if errorCode == "" {
+		errorCode = "tracker_error"
+	}
+	if outcome.buildFailed {
+		if _, err := runtime.options.Journal.Publish(domain.Event{Type: "queue.failed", Data: map[string]any{
+			"status": "failed", "error_code": errorCode, "retryable": false,
+		}}); err != nil {
+			runtime.tracker = cloneTrackerStatus(intent.flight.previousTracker)
+			runtime.generationCommitted = false
+			return err
+		}
+		runtime.activeScope = intent.scope
+		runtime.tracker.Kind = intent.kind
+		runtime.tracker.Scope = intent.scope
+		runtime.tracker.State = "failed"
+		runtime.tracker.Stale = len(runtime.candidates) > 0
+		runtime.tracker.Retryable = false
+		runtime.tracker.ErrorCode = errorCode
+		runtime.tracker.Message = portable.Message
+		runtime.tracker.RetryAt = nil
+		runtime.autoSuppressed = true
+		runtime.retryAt = nil
+		runtime.generationCommitted = true
+		return returned
+	}
+	retryable := portable.Retryable
+	var retryAt *time.Time
+	if portable.Category == tracker.CategoryRateLimited {
+		delay := boundedRateLimitDelay(portable.RetryAfter, runtime.deps.jitter)
+		retryAt = timePointer(now.Add(delay))
+		retryable = true
+	} else if portable.Retryable {
+		delay := intent.pollInterval
+		if delay <= 0 {
+			delay = defaultQueuePollInterval
+		}
+		retryAt = timePointer(now.Add(delay))
+	}
+	if _, err := runtime.options.Journal.Publish(domain.Event{Type: "queue.failed", Data: map[string]any{
+		"status": "failed", "error_code": errorCode, "retryable": retryable,
+	}}); err != nil {
+		runtime.tracker = cloneTrackerStatus(intent.flight.previousTracker)
+		runtime.generationCommitted = false
+		return err
+	}
+	runtime.installStartupAdapterLocked(intent, outcome.adapter)
+	runtime.tracker.LastAttemptAt = timePointer(now)
+	runtime.tracker.State = "failed"
+	runtime.tracker.Stale = len(runtime.candidates) > 0
+	runtime.tracker.Retryable = retryable
+	runtime.tracker.ErrorCode = errorCode
+	runtime.tracker.Message = portable.Message
+	runtime.tracker.RetryAt = nil
+	runtime.retryAt = nil
+	if retryAt != nil {
+		runtime.tracker.RetryAt = timePointer(*retryAt)
+		runtime.retryAt = timePointer(*retryAt)
+	}
+	runtime.autoSuppressed = portable.Category == tracker.CategoryAuth || portable.Category == tracker.CategoryConfig
+	runtime.options.Logger.Warn("queue_refresh_failed", slog.String("error_code", runtime.tracker.ErrorCode))
+	runtime.generationCommitted = true
+	return returned
+}
+
+func (runtime *QueueRuntime) installStartupAdapterLocked(intent *rebuildIntent, adapter tracker.Adapter) {
+	runtime.adapter = adapter
+	runtime.activeStates = append([]string(nil), intent.activeStates...)
+	runtime.requiredLabels = append([]string(nil), intent.snapshot.Config.Tracker.RequiredLabels...)
+	runtime.pollInterval = intent.pollInterval
+	if runtime.pollInterval <= 0 {
+		runtime.pollInterval = defaultQueuePollInterval
+	}
+	runtime.activeScope = intent.scope
+	runtime.currentSnapshot = cloneRuntimeSnapshot(intent.snapshot)
+	runtime.hasSnapshot = true
+	runtime.config.ActiveDigest = intent.snapshot.Digest
+	if runtime.config.State == "invalid" {
+		runtime.config.UsingLastGood = true
+	}
+	runtime.tracker.Kind = intent.kind
+	runtime.tracker.Scope = intent.scope
 }
 
 func (runtime *QueueRuntime) executeRebuild(intent *rebuildIntent) error {
@@ -874,6 +1143,7 @@ func (runtime *QueueRuntime) finishRefresh(generation uint64, flight *refreshFli
 		if _, err := runtime.options.Journal.Publish(domain.Event{Type: "queue.refreshed", Data: map[string]any{
 			"status": "ready", "candidate_count": len(candidates),
 		}}); err != nil {
+			runtime.discardUncommittedRebuildAdapterLocked()
 			if runtime.inFlight == flight {
 				runtime.inFlight = nil
 			}
@@ -895,6 +1165,9 @@ func (runtime *QueueRuntime) finishRefresh(generation uint64, flight *refreshFli
 		runtime.tracker.LastSuccessAt = timePointer(now)
 		runtime.retryAt = nil
 		runtime.autoSuppressed = false
+		if runtime.rebuildFlight != nil {
+			runtime.generationCommitted = true
+		}
 		if runtime.inFlight == flight {
 			runtime.inFlight = nil
 		}
@@ -925,6 +1198,7 @@ func (runtime *QueueRuntime) finishRefresh(generation uint64, flight *refreshFli
 	if _, err := runtime.options.Journal.Publish(domain.Event{Type: "queue.failed", Data: map[string]any{
 		"status": "failed", "error_code": errorCode, "retryable": retryable,
 	}}); err != nil {
+		runtime.discardUncommittedRebuildAdapterLocked()
 		if runtime.inFlight == flight {
 			runtime.inFlight = nil
 		}
@@ -947,6 +1221,9 @@ func (runtime *QueueRuntime) finishRefresh(generation uint64, flight *refreshFli
 		runtime.retryAt = timePointer(*retryAt)
 	}
 	runtime.autoSuppressed = portable.Category == tracker.CategoryAuth || portable.Category == tracker.CategoryConfig
+	if runtime.rebuildFlight != nil {
+		runtime.generationCommitted = true
+	}
 	runtime.options.Logger.Warn("queue_refresh_failed", slog.String("error_code", runtime.tracker.ErrorCode))
 	if runtime.inFlight == flight {
 		runtime.inFlight = nil
@@ -954,6 +1231,22 @@ func (runtime *QueueRuntime) finishRefresh(generation uint64, flight *refreshFli
 	runtime.mu.Unlock()
 	flight.complete(returned)
 	runtime.signalWake()
+}
+
+func (runtime *QueueRuntime) discardUncommittedRebuildAdapterLocked() {
+	if runtime.rebuildFlight == nil || runtime.generationCommitted {
+		return
+	}
+	runtime.adapter = nil
+	runtime.activeStates = nil
+	runtime.requiredLabels = nil
+	runtime.pollInterval = defaultQueuePollInterval
+	runtime.currentSnapshot = workflow.Snapshot{}
+	runtime.hasSnapshot = false
+	runtime.config.ActiveDigest = ""
+	runtime.config.UsingLastGood = false
+	runtime.autoSuppressed = false
+	runtime.retryAt = nil
 }
 
 func (runtime *QueueRuntime) startAutomaticRefresh() {
@@ -1006,6 +1299,7 @@ func (runtime *QueueRuntime) retireGenerationLocked() {
 		runtime.generationCtx = nil
 	}
 	runtime.generation++
+	runtime.generationCommitted = false
 	runtime.adapter = nil
 	runtime.config.ActiveDigest = ""
 	runtime.config.UsingLastGood = false
@@ -1018,16 +1312,6 @@ func (runtime *QueueRuntime) retireGenerationLocked() {
 		runtime.rebuildFlight = nil
 	}
 	runtime.pendingRebuild = nil
-}
-
-func (runtime *QueueRuntime) recordBuildFailure(err error, fallback tracker.Category) error {
-	runtime.mu.Lock()
-	generation := runtime.generation
-	runtime.mu.Unlock()
-	if fallback == "tracker_config" {
-		return runtime.recordBuildFailureForGeneration(generation, &tracker.Error{Category: tracker.CategoryConfig, Message: "Tracker configuration is unavailable."})
-	}
-	return runtime.recordBuildFailureForGeneration(generation, err)
 }
 
 func (runtime *QueueRuntime) deactivateForBuildFailure(err error) error {
@@ -1046,13 +1330,17 @@ func (runtime *QueueRuntime) deactivateForBuildFailure(err error) error {
 }
 
 func (runtime *QueueRuntime) recordBuildFailureForGeneration(generation uint64, err error) error {
+	return runtime.recordBuildFailureForGenerationAndIntent(generation, 0, false, err)
+}
+
+func (runtime *QueueRuntime) recordBuildFailureForGenerationAndIntent(generation, expectedIntentEpoch uint64, requireCurrentIntent bool, err error) error {
 	portable, returned := safeTrackerFailure(err)
 	errorCode := string(portable.Category)
 	if errorCode == "" {
 		errorCode = "tracker_error"
 	}
 	runtime.mu.Lock()
-	if runtime.closed || runtime.generation != generation {
+	if runtime.closed || runtime.generation != generation || requireCurrentIntent && runtime.rebuildIntentEpoch != expectedIntentEpoch {
 		runtime.mu.Unlock()
 		return context.Canceled
 	}
@@ -1072,6 +1360,9 @@ func (runtime *QueueRuntime) recordBuildFailureForGeneration(generation uint64, 
 	runtime.tracker.RetryAt = nil
 	runtime.autoSuppressed = true
 	runtime.retryAt = nil
+	if runtime.rebuildFlight != nil {
+		runtime.generationCommitted = true
+	}
 	runtime.mu.Unlock()
 	runtime.signalWake()
 	return returned

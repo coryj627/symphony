@@ -125,13 +125,15 @@ type fakeFactory struct {
 	called   []chan<- struct{}
 	builds   int
 	raw      []workflow.TrackerConfig
+	contexts []context.Context
 }
 
-func (factory *fakeFactory) Build(_ context.Context, raw workflow.TrackerConfig, _ secrets.Resolver) (tracker.Adapter, error) {
+func (factory *fakeFactory) Build(ctx context.Context, raw workflow.TrackerConfig, _ secrets.Resolver) (tracker.Adapter, error) {
 	factory.mu.Lock()
 	call := factory.builds
 	factory.builds++
 	factory.raw = append(factory.raw, cloneTrackerConfigForTest(raw))
+	factory.contexts = append(factory.contexts, ctx)
 	var wait <-chan struct{}
 	if call < len(factory.waits) {
 		wait = factory.waits[call]
@@ -173,6 +175,15 @@ func (factory *fakeFactory) buildCount() int {
 	factory.mu.Lock()
 	defer factory.mu.Unlock()
 	return factory.builds
+}
+
+func (factory *fakeFactory) buildContext(index int) context.Context {
+	factory.mu.Lock()
+	defer factory.mu.Unlock()
+	if index < 0 || index >= len(factory.contexts) {
+		return nil
+	}
+	return factory.contexts[index]
 }
 
 type fakeResolver struct {

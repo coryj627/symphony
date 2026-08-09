@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -674,6 +675,248 @@ func TestStartupDoesNotExposeACompletedRebuildReservation(t *testing.T) {
 	}
 }
 
+func TestStartupOutcomePublicationWinsOwnerCancellationAtCompletionBoundary(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name             string
+		fetchErr         error
+		journalMaxBytes  int
+		wantRefreshError error
+		wantTrackerState string
+		wantAdapter      bool
+		wantEvents       uint64
+	}{
+		{name: "success", wantTrackerState: "ready", wantAdapter: true, wantEvents: 1},
+		{
+			name: "provider failure", fetchErr: trackerErr(tracker.CategoryTransport, true, 0),
+			wantTrackerState: "failed", wantAdapter: true, wantEvents: 1,
+		},
+		{
+			name: "journal failure", journalMaxBytes: 1, wantRefreshError: observability.ErrEventTooLarge,
+			wantTrackerState: "starting",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fetchStarted := make(chan struct{}, 1)
+			releaseFetch := make(chan struct{})
+			completionReached := make(chan struct{}, 1)
+			releaseCompletion := make(chan struct{})
+			var releaseFetchOnce sync.Once
+			var releaseCompletionOnce sync.Once
+			adapter := &fakeAdapter{fetches: []fakeFetch{{
+				issues: []domain.Issue{validIssue("GH-COMMITTED")}, err: test.fetchErr,
+				wait: releaseFetch, called: fetchStarted,
+			}}}
+			factory := &fakeFactory{adapters: []tracker.Adapter{adapter}}
+			store := &fakeWorkflowStore{
+				current: validQueueSnapshot("github", "", "digest-1"), hasCurrent: true,
+				changes: make(chan workflow.Change, 1),
+			}
+			journalOptions := observability.JournalOptions{}
+			if test.journalMaxBytes > 0 {
+				journalOptions.MaxEvents = 4
+				journalOptions.MaxBytes = test.journalMaxBytes
+			}
+			journal := observability.NewJournal(journalOptions)
+			runtime := newQueueRuntimeWithDependencies(QueueOptions{
+				Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")}, Journal: journal,
+			}, queueDependencies{
+				now: newFakeQueueClock().Now, after: time.After, jitter: func(time.Duration) time.Duration { return 0 },
+				beforeRebuildCompletion: func() {
+					completionReached <- struct{}{}
+					<-releaseCompletion
+				},
+			})
+			t.Cleanup(func() {
+				releaseFetchOnce.Do(func() { close(releaseFetch) })
+				releaseCompletionOnce.Do(func() { close(releaseCompletion) })
+				_ = runtime.Shutdown(context.Background())
+			})
+
+			ownerCtx, cancelOwner := context.WithCancel(context.Background())
+			ownerResult := make(chan error, 1)
+			go func() { ownerResult <- runtime.Start(ownerCtx) }()
+			<-fetchStarted
+
+			joinerResult := make(chan error, 1)
+			go func() { joinerResult <- runtime.Start(context.Background()) }()
+			type refreshResult struct {
+				receipt domain.RefreshReceipt
+				err     error
+			}
+			refreshResultChannel := make(chan refreshResult, 1)
+			go func() {
+				receipt, err := runtime.Refresh(context.Background())
+				refreshResultChannel <- refreshResult{receipt: receipt, err: err}
+			}()
+			select {
+			case err := <-joinerResult:
+				t.Fatalf("Start joiner returned before the startup outcome: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+			select {
+			case result := <-refreshResultChannel:
+				t.Fatalf("Refresh joiner returned before the startup outcome: %#v", result)
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			releaseFetchOnce.Do(func() { close(releaseFetch) })
+			<-completionReached
+			cancelOwner()
+			var ownerEarly error
+			ownerReturnedEarly := false
+			select {
+			case ownerEarly = <-ownerResult:
+				ownerReturnedEarly = true
+			case <-time.After(20 * time.Millisecond):
+			}
+			releaseCompletionOnce.Do(func() { close(releaseCompletion) })
+			if !ownerReturnedEarly {
+				ownerEarly = <-ownerResult
+			}
+			if ownerEarly != nil {
+				t.Fatalf("published startup outcome returned owner cancellation: %v", ownerEarly)
+			}
+			if err := <-joinerResult; err != nil {
+				t.Fatalf("Start joiner error = %v", err)
+			}
+			refreshed := <-refreshResultChannel
+			if !refreshed.receipt.Coalesced || refreshed.receipt.Queued {
+				t.Fatalf("startup Refresh receipt = %#v", refreshed.receipt)
+			}
+			if test.wantRefreshError != nil {
+				if !errors.Is(refreshed.err, test.wantRefreshError) {
+					t.Fatalf("startup Refresh error = %v, want %v", refreshed.err, test.wantRefreshError)
+				}
+			} else if test.fetchErr == nil {
+				if refreshed.err != nil {
+					t.Fatalf("startup Refresh error = %v", refreshed.err)
+				}
+			} else if refreshed.err == nil || !strings.Contains(refreshed.err.Error(), "tracker_transport") {
+				t.Fatalf("startup Refresh provider error = %v", refreshed.err)
+			}
+
+			snapshot, err := runtime.Snapshot(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime.mu.Lock()
+			adapterPublished := runtime.adapter != nil
+			generation := runtime.generation
+			flightCleared := runtime.rebuildFlight == nil
+			initializing := runtime.initializing
+			startErr := runtime.startErr
+			runtime.mu.Unlock()
+			if snapshot.Tracker.State != test.wantTrackerState || adapterPublished != test.wantAdapter ||
+				snapshot.EventCursor.Sequence != test.wantEvents || generation != 1 || !flightCleared || initializing || startErr != nil {
+				t.Fatalf("startup boundary state = snapshot=%#v adapter=%t generation=%d flight_cleared=%t initializing=%t start_err=%v",
+					snapshot, adapterPublished, generation, flightCleared, initializing, startErr)
+			}
+			if test.wantAdapter {
+				if snapshot.Config.ActiveDigest != "digest-1" {
+					t.Fatalf("active digest = %q", snapshot.Config.ActiveDigest)
+				}
+				if test.fetchErr == nil && (len(snapshot.Candidates) != 1 || snapshot.Candidates[0].Issue.Identifier != "GH-COMMITTED") {
+					t.Fatalf("committed candidates = %#v", snapshot.Candidates)
+				}
+			} else if snapshot.Config.ActiveDigest != "" || len(snapshot.Candidates) != 0 {
+				t.Fatalf("unpublished startup state = %#v", snapshot)
+			}
+		})
+	}
+}
+
+func TestStartupBuildFailurePublicationWinsOwnerCancellationAtCompletionBoundary(t *testing.T) {
+	t.Parallel()
+	buildStarted := make(chan struct{}, 1)
+	releaseBuild := make(chan struct{})
+	completionReached := make(chan struct{}, 1)
+	releaseCompletion := make(chan struct{})
+	var releaseBuildOnce sync.Once
+	var releaseCompletionOnce sync.Once
+	factory := &fakeFactory{
+		adapters: []tracker.Adapter{nil}, errors: []error{trackerErr(tracker.CategoryAuth, false, 0)},
+		waits: []<-chan struct{}{releaseBuild}, called: []chan<- struct{}{buildStarted},
+	}
+	store := &fakeWorkflowStore{
+		current: validQueueSnapshot("github", "", "digest-1"), hasCurrent: true,
+		changes: make(chan workflow.Change, 1),
+	}
+	journal := observability.NewJournal(observability.JournalOptions{})
+	runtime := newQueueRuntimeWithDependencies(QueueOptions{
+		Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")}, Journal: journal,
+	}, queueDependencies{
+		now: newFakeQueueClock().Now, after: time.After, jitter: func(time.Duration) time.Duration { return 0 },
+		beforeRebuildCompletion: func() {
+			completionReached <- struct{}{}
+			<-releaseCompletion
+		},
+	})
+	t.Cleanup(func() {
+		releaseBuildOnce.Do(func() { close(releaseBuild) })
+		releaseCompletionOnce.Do(func() { close(releaseCompletion) })
+		_ = runtime.Shutdown(context.Background())
+	})
+
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	ownerResult := make(chan error, 1)
+	go func() { ownerResult <- runtime.Start(ownerCtx) }()
+	<-buildStarted
+	joinerResult := make(chan error, 1)
+	go func() { joinerResult <- runtime.Start(context.Background()) }()
+	type refreshResult struct {
+		receipt domain.RefreshReceipt
+		err     error
+	}
+	refreshResultChannel := make(chan refreshResult, 1)
+	go func() {
+		receipt, err := runtime.Refresh(context.Background())
+		refreshResultChannel <- refreshResult{receipt: receipt, err: err}
+	}()
+	select {
+	case err := <-joinerResult:
+		t.Fatalf("Start joiner returned before build outcome: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	select {
+	case result := <-refreshResultChannel:
+		t.Fatalf("Refresh joiner returned before build outcome: %#v", result)
+	case <-time.After(20 * time.Millisecond):
+	}
+	releaseBuildOnce.Do(func() { close(releaseBuild) })
+	<-completionReached
+	cancelOwner()
+	releaseCompletionOnce.Do(func() { close(releaseCompletion) })
+	if err := <-ownerResult; err != nil {
+		t.Fatalf("published build failure returned owner cancellation: %v", err)
+	}
+	if err := <-joinerResult; err != nil {
+		t.Fatalf("Start joiner error = %v", err)
+	}
+	refreshed := <-refreshResultChannel
+	if !refreshed.receipt.Coalesced || refreshed.receipt.Queued || refreshed.err == nil || !strings.Contains(refreshed.err.Error(), "tracker_auth") {
+		t.Fatalf("Refresh joiner result = receipt=%#v err=%v", refreshed.receipt, refreshed.err)
+	}
+	snapshot, err := runtime.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.mu.Lock()
+	adapterPublished := runtime.adapter != nil
+	flightCleared := runtime.rebuildFlight == nil
+	committedGeneration := runtime.generationCommitted
+	runtime.mu.Unlock()
+	if snapshot.Tracker.State != "failed" || snapshot.Tracker.ErrorCode != "tracker_auth" || adapterPublished ||
+		snapshot.Config.ActiveDigest != "" || len(snapshot.Candidates) != 0 || snapshot.EventCursor.Sequence != 1 ||
+		!flightCleared || !committedGeneration {
+		t.Fatalf("published build failure state = snapshot=%#v adapter=%t flight_cleared=%t committed=%t",
+			snapshot, adapterPublished, flightCleared, committedGeneration)
+	}
+}
+
 func TestQueueDoesNotCommitInvalidConfigurationWhenJournalIsClosed(t *testing.T) {
 	t.Parallel()
 	adapter := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-1")}}}}
@@ -931,6 +1174,524 @@ func TestNewestWinsStormKeepsOnlyOnePendingRebuild(t *testing.T) {
 	}
 }
 
+func TestInvalidChangeSupersedesBlockedValidRebuildAndDiscardsLateOutcome(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		blockAt string
+		lateErr error
+	}{
+		{name: "blocked_build_late_success", blockAt: "build"},
+		{name: "blocked_build_late_error", blockAt: "build", lateErr: trackerErr(tracker.CategoryAuth, false, 0)},
+		{name: "blocked_fetch_late_success", blockAt: "fetch"},
+		{name: "blocked_fetch_late_error", blockAt: "fetch", lateErr: trackerErr(tracker.CategoryTransport, true, 0)},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			blockedStarted := make(chan struct{}, 1)
+			releaseBlocked := make(chan struct{})
+			var releaseOnce sync.Once
+			rebuildCompleted := make(chan struct{}, 4)
+			initial := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+			obsolete := &fakeAdapter{fetches: []fakeFetch{{
+				issues: []domain.Issue{validIssue("GH-OBSOLETE")}, err: test.lateErr,
+			}}}
+			factory := &fakeFactory{adapters: []tracker.Adapter{initial, obsolete}}
+			if test.blockAt == "build" {
+				factory.waits = []<-chan struct{}{nil, releaseBlocked}
+				factory.called = []chan<- struct{}{nil, blockedStarted}
+				factory.errors = []error{nil, test.lateErr}
+			} else {
+				obsolete.fetches[0].wait = releaseBlocked
+				obsolete.fetches[0].called = blockedStarted
+				obsolete.fetches[0].ignoreCancellation = true
+			}
+			store := &fakeWorkflowStore{current: validQueueSnapshot("github", "", "digest-1"), hasCurrent: true, changes: make(chan workflow.Change, 16)}
+			clock := newFakeQueueClock()
+			journal := observability.NewJournal(observability.JournalOptions{})
+			runtime := newQueueRuntimeWithDependencies(QueueOptions{
+				Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")}, Journal: journal,
+			}, queueDependencies{
+				now: clock.Now, after: clock.After, jitter: func(time.Duration) time.Duration { return 0 },
+				beforeRebuildCompletion: func() { rebuildCompleted <- struct{}{} },
+			})
+			t.Cleanup(func() {
+				releaseOnce.Do(func() { close(releaseBlocked) })
+				_ = runtime.Shutdown(context.Background())
+			})
+			if err := runtime.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			<-rebuildCompleted
+			digest2 := validQueueSnapshot("github", "", "digest-2")
+			store.setCurrent(digest2)
+			store.changes <- workflow.Change{Snapshot: digest2, Digest: digest2.Digest, Validation: workflow.ValidationResult{Valid: true}}
+			<-blockedStarted
+			var blockedContext context.Context
+			if test.blockAt == "build" {
+				blockedContext = factory.buildContext(1)
+			} else {
+				blockedContext = obsolete.callContext(0)
+			}
+			if blockedContext == nil {
+				t.Fatal("blocked valid generation did not retain its context")
+			}
+
+			clock.Advance(time.Second)
+			store.changes <- workflow.Change{Digest: "invalid-digest-3", Validation: workflow.ValidationResult{
+				Valid: false, FieldErrors: []workflow.FieldError{{Code: "invalid_tracker_config", Message: "unsafe detail 3"}},
+			}}
+			waitFor(t, "invalid digest 3 observation", func() bool {
+				snapshot, _ := runtime.Snapshot(context.Background())
+				return snapshot.Config.Digest == "invalid-digest-3" && len(store.changes) == 0
+			})
+			select {
+			case <-blockedContext.Done():
+			case <-time.After(100 * time.Millisecond):
+				t.Fatal("invalid watcher change did not synchronously cancel the valid rebuild generation")
+			}
+			clock.Advance(time.Second)
+			store.changes <- workflow.Change{Digest: "invalid-digest-4", Validation: workflow.ValidationResult{
+				Valid: false, FieldErrors: []workflow.FieldError{{Code: "invalid_polling_interval", Message: "unsafe detail 4"}},
+			}}
+			waitFor(t, "repeated invalid observation", func() bool {
+				snapshot, _ := runtime.Snapshot(context.Background())
+				return snapshot.Config.Digest == "invalid-digest-4" && len(store.changes) == 0
+			})
+			invalidSnapshot, _ := runtime.Snapshot(context.Background())
+			invalidEvents := journal.After(domain.EventCursor{Epoch: journal.Epoch(), Sequence: 0})
+			if invalidSnapshot.Config.State != "invalid" || invalidSnapshot.Config.ActiveDigest != "" || invalidSnapshot.Config.UsingLastGood ||
+				invalidSnapshot.Config.ErrorCode != "invalid_polling_interval" || len(invalidSnapshot.Candidates) != 1 || invalidSnapshot.Candidates[0].Issue.Identifier != "GH-INITIAL" {
+				t.Fatalf("invalid supersession state = %#v", invalidSnapshot)
+			}
+
+			releaseOnce.Do(func() { close(releaseBlocked) })
+			<-rebuildCompleted
+			afterLate, _ := runtime.Snapshot(context.Background())
+			afterEvents := journal.After(domain.EventCursor{Epoch: journal.Epoch(), Sequence: 0})
+			if !reflect.DeepEqual(afterLate, invalidSnapshot) || !reflect.DeepEqual(afterEvents, invalidEvents) {
+				t.Fatalf("late obsolete outcome changed public state: invalid=%#v after=%#v events_before=%#v events_after=%#v", invalidSnapshot, afterLate, invalidEvents, afterEvents)
+			}
+			if test.blockAt == "build" && obsolete.callCount() != 0 {
+				t.Fatalf("obsolete adapter fetched after its build was invalidated: polls=%d", obsolete.callCount())
+			}
+		})
+	}
+}
+
+func TestInvalidChangeFencesQueuedValidRebuildWhenStatusJournalRejects(t *testing.T) {
+	t.Parallel()
+	buildStarted := make(chan struct{}, 1)
+	releaseBuild := make(chan struct{})
+	rebuildCompleted := make(chan struct{}, 4)
+	var releaseOnce sync.Once
+	initial := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+	obsolete := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-OBSOLETE")}}}}
+	queued := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-QUEUED")}}}}
+	factory := &fakeFactory{
+		adapters: []tracker.Adapter{initial, obsolete, queued},
+		waits:    []<-chan struct{}{nil, releaseBuild},
+		called:   []chan<- struct{}{nil, buildStarted},
+	}
+	store := &fakeWorkflowStore{
+		current: validQueueSnapshot("github", "", "digest-1"), hasCurrent: true,
+		changes: make(chan workflow.Change, 4),
+	}
+	journal := observability.NewJournal(observability.JournalOptions{})
+	runtime := newQueueRuntimeWithDependencies(QueueOptions{
+		Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")}, Journal: journal,
+	}, queueDependencies{
+		now: newFakeQueueClock().Now, after: time.After, jitter: func(time.Duration) time.Duration { return 0 },
+		beforeRebuildCompletion: func() { rebuildCompleted <- struct{}{} },
+	})
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseBuild) })
+		_ = runtime.Shutdown(context.Background())
+	})
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-rebuildCompleted
+
+	digest2 := validQueueSnapshot("github", "", "digest-2")
+	store.setCurrent(digest2)
+	store.changes <- workflow.Change{Snapshot: digest2, Digest: digest2.Digest, Validation: workflow.ValidationResult{Valid: true}}
+	<-buildStarted
+	digest3 := validQueueSnapshot("github", "", "digest-3")
+	store.setCurrent(digest3)
+	store.changes <- workflow.Change{Snapshot: digest3, Digest: digest3.Digest, Validation: workflow.ValidationResult{Valid: true}}
+	waitFor(t, "queued digest 3", func() bool {
+		snapshot, _ := runtime.Snapshot(context.Background())
+		return snapshot.Config.Digest == "digest-3" && len(store.changes) == 0
+	})
+
+	journal.Close()
+	runtime.handleWorkflowChange(context.Background(), workflow.Change{
+		Digest: "invalid-digest",
+		Validation: workflow.ValidationResult{Valid: false, FieldErrors: []workflow.FieldError{{
+			Field: "polling.interval", Code: "invalid_polling_interval", Message: "unsafe detail",
+		}}},
+	})
+	runtime.mu.Lock()
+	pending := runtime.pendingRebuild
+	flight := runtime.rebuildFlight
+	activeAdapter := runtime.adapter
+	config := runtime.config
+	runtime.mu.Unlock()
+	if pending != nil || flight != nil || activeAdapter != nil || config.State != "valid" || config.Digest != "digest-3" || config.ActiveDigest != "" {
+		t.Fatalf("rejected invalid status did not fence queued rebuild: pending=%#v flight=%#v adapter=%#v config=%#v", pending, flight, activeAdapter, config)
+	}
+
+	releaseOnce.Do(func() { close(releaseBuild) })
+	<-rebuildCompleted
+	time.Sleep(10 * time.Millisecond)
+	snapshot, err := runtime.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if factory.buildCount() != 2 || len(snapshot.Candidates) != 1 || snapshot.Candidates[0].Issue.Identifier != "GH-INITIAL" ||
+		snapshot.Config != config || snapshot.EventCursor.Sequence != 3 {
+		t.Fatalf("fenced queued rebuild committed late: builds=%d snapshot=%#v", factory.buildCount(), snapshot)
+	}
+}
+
+func TestInvalidChangePreservesActiveGenerationDuringOrdinaryRefresh(t *testing.T) {
+	t.Parallel()
+	refreshStarted := make(chan struct{}, 1)
+	releaseRefresh := make(chan struct{})
+	var releaseOnce sync.Once
+	adapter := &fakeAdapter{fetches: []fakeFetch{
+		{issues: []domain.Issue{validIssue("GH-INITIAL")}},
+		{issues: []domain.Issue{validIssue("GH-REFRESHED")}, wait: releaseRefresh, called: refreshStarted, ignoreCancellation: true},
+	}}
+	runtime, _, _, _, _ := newQueueRuntimeForTest(t, adapter, validQueueSnapshot("github", "", "digest-1"))
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseRefresh) }) })
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runtime.mu.Lock()
+	generation := runtime.generation
+	pollInterval := runtime.pollInterval
+	runtime.mu.Unlock()
+	refreshResult := make(chan error, 1)
+	go func() {
+		_, err := runtime.Refresh(context.Background())
+		refreshResult <- err
+	}()
+	<-refreshStarted
+	refreshCtx := adapter.callContext(1)
+	runtime.handleWorkflowChange(context.Background(), workflow.Change{
+		Digest: "invalid-digest",
+		Validation: workflow.ValidationResult{Valid: false, FieldErrors: []workflow.FieldError{{
+			Field: "tracker.kind", Code: "invalid_tracker_config", Message: "unsafe detail",
+		}}},
+	})
+	if refreshCtx == nil || refreshCtx.Err() != nil {
+		t.Fatalf("ordinary refresh generation was canceled by invalid disk observation: %v", refreshCtx)
+	}
+	during, err := runtime.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.mu.Lock()
+	duringGeneration := runtime.generation
+	duringPollInterval := runtime.pollInterval
+	activeAdapter := runtime.adapter
+	runtime.mu.Unlock()
+	if during.Config.State != "invalid" || !during.Config.UsingLastGood || during.Config.ActiveDigest != "digest-1" ||
+		len(during.Candidates) != 1 || during.Candidates[0].Issue.Identifier != "GH-INITIAL" ||
+		duringGeneration != generation || duringPollInterval != pollInterval || activeAdapter != adapter {
+		t.Fatalf("invalid observation retired active generation: snapshot=%#v generation=%d/%d poll=%s/%s adapter=%#v",
+			during, duringGeneration, generation, duringPollInterval, pollInterval, activeAdapter)
+	}
+	releaseOnce.Do(func() { close(releaseRefresh) })
+	if err := <-refreshResult; err != nil {
+		t.Fatal(err)
+	}
+	after, _ := runtime.Snapshot(context.Background())
+	if after.Config.State != "invalid" || !after.Config.UsingLastGood || after.Config.ActiveDigest != "digest-1" ||
+		len(after.Candidates) != 1 || after.Candidates[0].Issue.Identifier != "GH-REFRESHED" {
+		t.Fatalf("ordinary refresh did not remain active under invalid observation: %#v", after)
+	}
+}
+
+func TestInvalidChangeImmediatelyAfterRebuildCommitPreservesCommittedAdapter(t *testing.T) {
+	t.Parallel()
+	commitReached := make(chan struct{}, 1)
+	releaseCommit := make(chan struct{})
+	var releaseOnce sync.Once
+	var hookMu sync.Mutex
+	hookCalls := 0
+	initial := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+	committed := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-COMMITTED")}}}}
+	factory := &fakeFactory{adapters: []tracker.Adapter{initial, committed}}
+	store := &fakeWorkflowStore{
+		current: validQueueSnapshot("github", "", "digest-1"), hasCurrent: true,
+		changes: make(chan workflow.Change, 2),
+	}
+	runtime := newQueueRuntimeWithDependencies(QueueOptions{
+		Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")},
+		Journal: observability.NewJournal(observability.JournalOptions{}),
+	}, queueDependencies{
+		now: newFakeQueueClock().Now, after: time.After, jitter: func(time.Duration) time.Duration { return 0 },
+		beforeRebuildCompletion: func() {
+			hookMu.Lock()
+			hookCalls++
+			call := hookCalls
+			hookMu.Unlock()
+			if call == 2 {
+				commitReached <- struct{}{}
+				<-releaseCommit
+			}
+		},
+	})
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseCommit) })
+		_ = runtime.Shutdown(context.Background())
+	})
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	digest2 := validQueueSnapshot("github", "", "digest-2")
+	store.setCurrent(digest2)
+	store.changes <- workflow.Change{Snapshot: digest2, Digest: digest2.Digest, Validation: workflow.ValidationResult{Valid: true}}
+	<-commitReached
+	runtime.handleWorkflowChange(context.Background(), workflow.Change{
+		Digest: "invalid-digest",
+		Validation: workflow.ValidationResult{Valid: false, FieldErrors: []workflow.FieldError{{
+			Field: "polling.interval", Code: "invalid_polling_interval", Message: "unsafe detail",
+		}}},
+	})
+	during, err := runtime.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.mu.Lock()
+	activeAdapter := runtime.adapter
+	committedGeneration := runtime.generationCommitted
+	runtime.mu.Unlock()
+	if during.Config.State != "invalid" || !during.Config.UsingLastGood || during.Config.ActiveDigest != "digest-2" ||
+		len(during.Candidates) != 1 || during.Candidates[0].Issue.Identifier != "GH-COMMITTED" || activeAdapter != committed || !committedGeneration {
+		t.Fatalf("invalid observation retired a committed rebuild: snapshot=%#v adapter=%#v committed=%t", during, activeAdapter, committedGeneration)
+	}
+	releaseOnce.Do(func() { close(releaseCommit) })
+	waitFor(t, "rebuild completion", func() bool {
+		runtime.mu.Lock()
+		defer runtime.mu.Unlock()
+		return runtime.rebuildFlight == nil
+	})
+	after, _ := runtime.Snapshot(context.Background())
+	if !reflect.DeepEqual(after, during) {
+		t.Fatalf("external rebuild completion changed committed invalid state: before=%#v after=%#v", during, after)
+	}
+}
+
+func TestInvalidChangeCancelsManualRebuildReservedBeforeObservation(t *testing.T) {
+	t.Parallel()
+	manualStarted := make(chan struct{}, 1)
+	releaseManual := make(chan struct{})
+	var releaseOnce sync.Once
+	recovered := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-TOO-LATE")}}}}
+	factory := &fakeFactory{
+		adapters: []tracker.Adapter{nil, recovered},
+		errors:   []error{trackerErr(tracker.CategoryAuth, false, 0), nil},
+	}
+	store := &fakeWorkflowStore{
+		current: validQueueSnapshot("github", "", "digest-1"), hasCurrent: true,
+		changes: make(chan workflow.Change, 1),
+	}
+	runtime := newQueueRuntimeWithDependencies(QueueOptions{
+		Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")},
+		Journal: observability.NewJournal(observability.JournalOptions{}),
+	}, queueDependencies{
+		now: newFakeQueueClock().Now, after: time.After, jitter: func(time.Duration) time.Duration { return 0 },
+		beforeManualRebuild: func() {
+			manualStarted <- struct{}{}
+			<-releaseManual
+		},
+	})
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseManual) })
+		_ = runtime.Shutdown(context.Background())
+	})
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	type refreshResult struct {
+		receipt domain.RefreshReceipt
+		err     error
+	}
+	refreshResultChannel := make(chan refreshResult, 1)
+	go func() {
+		receipt, err := runtime.Refresh(context.Background())
+		refreshResultChannel <- refreshResult{receipt: receipt, err: err}
+	}()
+	<-manualStarted
+	runtime.handleWorkflowChange(context.Background(), workflow.Change{
+		Digest: "invalid-digest",
+		Validation: workflow.ValidationResult{Valid: false, FieldErrors: []workflow.FieldError{{
+			Field: "polling.interval", Code: "invalid_polling_interval", Message: "unsafe detail",
+		}}},
+	})
+	var refreshed refreshResult
+	returnedBeforeRelease := false
+	select {
+	case refreshed = <-refreshResultChannel:
+		returnedBeforeRelease = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(releaseManual) })
+	if !returnedBeforeRelease {
+		refreshed = <-refreshResultChannel
+		t.Fatalf("invalid observation did not synchronously cancel reserved manual rebuild; eventual result=%#v", refreshed)
+	}
+	if !errors.Is(refreshed.err, context.Canceled) || !refreshed.receipt.Queued || refreshed.receipt.Coalesced {
+		t.Fatalf("superseded manual rebuild result = %#v", refreshed)
+	}
+	time.Sleep(10 * time.Millisecond)
+	snapshot, err := runtime.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if factory.buildCount() != 1 || recovered.callCount() != 0 || snapshot.Config.State != "invalid" ||
+		snapshot.Config.ActiveDigest != "" || snapshot.Config.UsingLastGood || len(snapshot.Candidates) != 0 || snapshot.EventCursor.Sequence != 2 {
+		t.Fatalf("pre-invalid manual rebuild committed late: builds=%d polls=%d snapshot=%#v", factory.buildCount(), recovered.callCount(), snapshot)
+	}
+}
+
+func TestCredentialNotificationBeforeInvalidObservationCannotRecoverAfterward(t *testing.T) {
+	t.Parallel()
+	credentialStarted := make(chan struct{}, 1)
+	releaseCredential := make(chan struct{})
+	credentialFinished := make(chan struct{}, 2)
+	var releaseOnce sync.Once
+	var hookMu sync.Mutex
+	hookCalls := 0
+	recovered := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-RECOVERED")}}}}
+	factory := &fakeFactory{
+		adapters: []tracker.Adapter{nil, recovered},
+		errors:   []error{trackerErr(tracker.CategoryAuth, false, 0), nil},
+	}
+	store := &fakeWorkflowStore{
+		current: validQueueSnapshot("github", "", "digest-1"), hasCurrent: true,
+		changes: make(chan workflow.Change, 1),
+	}
+	runtime := newQueueRuntimeWithDependencies(QueueOptions{
+		Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")},
+		Journal: observability.NewJournal(observability.JournalOptions{}),
+	}, queueDependencies{
+		now: newFakeQueueClock().Now, after: time.After, jitter: func(time.Duration) time.Duration { return 0 },
+		beforeCredentialRebuild: func() {
+			hookMu.Lock()
+			hookCalls++
+			call := hookCalls
+			hookMu.Unlock()
+			if call == 1 {
+				credentialStarted <- struct{}{}
+				<-releaseCredential
+			}
+		},
+		afterCredentialRebuild: func() { credentialFinished <- struct{}{} },
+	})
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseCredential) })
+		_ = runtime.Shutdown(context.Background())
+	})
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runtime.NotifyCredentialChanged()
+	<-credentialStarted
+	runtime.handleWorkflowChange(context.Background(), workflow.Change{
+		Digest: "invalid-digest",
+		Validation: workflow.ValidationResult{Valid: false, FieldErrors: []workflow.FieldError{{
+			Field: "tracker.kind", Code: "invalid_tracker_config", Message: "unsafe detail",
+		}}},
+	})
+	releaseOnce.Do(func() { close(releaseCredential) })
+	<-credentialFinished
+	runtime.mu.Lock()
+	preInvalidFlight := runtime.rebuildFlight
+	preInvalidAdapter := runtime.adapter
+	runtime.mu.Unlock()
+	if factory.buildCount() != 1 || preInvalidFlight != nil || preInvalidAdapter != nil {
+		t.Fatalf("pre-invalid credential intent rebuilt afterward: builds=%d flight=%#v adapter=%#v", factory.buildCount(), preInvalidFlight, preInvalidAdapter)
+	}
+
+	runtime.NotifyCredentialChanged()
+	<-credentialFinished
+	waitFor(t, "post-invalid credential recovery", func() bool {
+		snapshot, _ := runtime.Snapshot(context.Background())
+		return snapshot.Tracker.State == "ready" && len(snapshot.Candidates) == 1
+	})
+	snapshot, _ := runtime.Snapshot(context.Background())
+	if factory.buildCount() != 2 || snapshot.Config.State != "invalid" || !snapshot.Config.UsingLastGood ||
+		snapshot.Config.ActiveDigest != "digest-1" || snapshot.Candidates[0].Issue.Identifier != "GH-RECOVERED" {
+		t.Fatalf("post-invalid credential recovery = builds=%d snapshot=%#v", factory.buildCount(), snapshot)
+	}
+}
+
+func TestRejectedRebuildEventDiscardsUncommittedAdapterBeforeFlightClears(t *testing.T) {
+	t.Parallel()
+	fetchStarted := make(chan struct{}, 1)
+	releaseFetch := make(chan struct{})
+	rebuildCompleted := make(chan struct{}, 4)
+	var releaseOnce sync.Once
+	initial := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+	rejected := &fakeAdapter{fetches: []fakeFetch{{
+		issues: []domain.Issue{validIssue("GH-REJECTED")}, wait: releaseFetch, called: fetchStarted,
+	}}}
+	factory := &fakeFactory{adapters: []tracker.Adapter{initial, rejected}}
+	store := &fakeWorkflowStore{
+		current: validQueueSnapshot("github", "", "digest-1"), hasCurrent: true,
+		changes: make(chan workflow.Change, 2),
+	}
+	journal := observability.NewJournal(observability.JournalOptions{})
+	runtime := newQueueRuntimeWithDependencies(QueueOptions{
+		Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")}, Journal: journal,
+	}, queueDependencies{
+		now: newFakeQueueClock().Now, after: time.After, jitter: func(time.Duration) time.Duration { return 0 },
+		beforeRebuildCompletion: func() { rebuildCompleted <- struct{}{} },
+	})
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseFetch) })
+		_ = runtime.Shutdown(context.Background())
+	})
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-rebuildCompleted
+	digest2 := validQueueSnapshot("github", "", "digest-2")
+	store.setCurrent(digest2)
+	store.changes <- workflow.Change{Snapshot: digest2, Digest: digest2.Digest, Validation: workflow.ValidationResult{Valid: true}}
+	<-fetchStarted
+	journal.Close()
+	releaseOnce.Do(func() { close(releaseFetch) })
+	<-rebuildCompleted
+	runtime.handleWorkflowChange(context.Background(), workflow.Change{
+		Digest: "invalid-digest",
+		Validation: workflow.ValidationResult{Valid: false, FieldErrors: []workflow.FieldError{{
+			Field: "polling.interval", Code: "invalid_polling_interval", Message: "unsafe detail",
+		}}},
+	})
+	snapshot, err := runtime.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.mu.Lock()
+	activeAdapter := runtime.adapter
+	flight := runtime.rebuildFlight
+	committedGeneration := runtime.generationCommitted
+	runtime.mu.Unlock()
+	if activeAdapter != nil || flight != nil || committedGeneration || snapshot.Config.ActiveDigest != "" || snapshot.Config.UsingLastGood ||
+		len(snapshot.Candidates) != 1 || snapshot.Candidates[0].Issue.Identifier != "GH-INITIAL" || snapshot.EventCursor.Sequence != 2 {
+		t.Fatalf("rejected rebuild publication left staged adapter active: snapshot=%#v adapter=%#v flight=%#v committed=%t",
+			snapshot, activeAdapter, flight, committedGeneration)
+	}
+}
+
 func TestWorkflowInvalidChangeRetainsLastGoodAndScopeChangeClearsBeforeNewPoll(t *testing.T) {
 	t.Parallel()
 	newStarted := make(chan struct{}, 1)
@@ -982,7 +1743,7 @@ func TestWorkflowInvalidChangeRetainsLastGoodAndScopeChangeClearsBeforeNewPoll(t
 	}
 }
 
-func TestInvalidChangeDuringRebuildMarksTheActivatedAdapterAsLastGood(t *testing.T) {
+func TestInvalidChangeDuringRebuildRequiresExplicitLastGoodRecovery(t *testing.T) {
 	t.Parallel()
 	buildStarted := make(chan struct{}, 1)
 	releaseBuild := make(chan struct{})
@@ -1012,15 +1773,26 @@ func TestInvalidChangeDuringRebuildMarksTheActivatedAdapterAsLastGood(t *testing
 		return snapshot.Config.State == "invalid"
 	})
 	close(releaseBuild)
-	if err := <-refreshed; err != nil {
-		t.Fatal(err)
+	if err := <-refreshed; !errors.Is(err, context.Canceled) {
+		t.Fatalf("superseded rebuild error = %v, want context.Canceled", err)
 	}
 	snapshot, err := runtime.Snapshot(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Config.State != "invalid" || !snapshot.Config.UsingLastGood || snapshot.Config.ActiveDigest != "digest-1" || snapshot.Tracker.State != "ready" {
-		t.Fatalf("adapter activated under invalid configuration without last-good status: %#v", snapshot)
+	if snapshot.Config.State != "invalid" || snapshot.Config.UsingLastGood || snapshot.Config.ActiveDigest != "" || snapshot.Tracker.State == "ready" {
+		t.Fatalf("superseded adapter activated under invalid configuration: %#v", snapshot)
+	}
+	if _, err := runtime.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	recoveredSnapshot, err := runtime.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveredSnapshot.Config.State != "invalid" || !recoveredSnapshot.Config.UsingLastGood ||
+		recoveredSnapshot.Config.ActiveDigest != "digest-1" || recoveredSnapshot.Tracker.State != "ready" {
+		t.Fatalf("explicit recovery did not activate last good under invalid observation: %#v", recoveredSnapshot)
 	}
 }
 
@@ -1586,6 +2358,63 @@ func TestStartDeadlineDiscardsLateInitializationError(t *testing.T) {
 				t.Fatalf("late initialization error committed after deadline: builds=%d polls=%d cursor=%#v snapshot=%s", factory.buildCount(), adapter.callCount(), journal.Cursor(), encoded)
 			}
 		})
+	}
+}
+
+func TestWorkflowLoadStartupFailureCancelsAndJoinsOwnedLifecycle(t *testing.T) {
+	t.Parallel()
+	store := &fakeWorkflowStore{
+		loadErr: errors.New("raw workflow load detail canary"), changes: make(chan workflow.Change, 1),
+	}
+	journal := observability.NewJournal(observability.JournalOptions{})
+	runtime := NewQueueRuntime(QueueOptions{
+		Enabled: true, Store: store, Factory: &fakeFactory{}, Resolver: &fakeResolver{value: []byte("test-token")}, Journal: journal,
+	})
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+
+	err := runtime.Start(context.Background())
+	if err == nil || err.Error() != "queue_workflow_unavailable" {
+		t.Fatalf("Start error = %v", err)
+	}
+	runtime.mu.Lock()
+	runtimeCtx := runtime.runtimeCtx
+	adapterPublished := runtime.adapter != nil
+	activeDigest := runtime.config.ActiveDigest
+	startErr := runtime.startErr
+	runtime.mu.Unlock()
+	if runtimeCtx == nil || !errors.Is(runtimeCtx.Err(), context.Canceled) {
+		t.Fatalf("failed startup left owned runtime context live: %#v", runtimeCtx)
+	}
+	if adapterPublished || activeDigest != "" || startErr == nil || startErr.Error() != "queue_workflow_unavailable" {
+		t.Fatalf("failed startup internal state = adapter=%t active_digest=%q start_err=%v", adapterPublished, activeDigest, startErr)
+	}
+
+	workersDone := make(chan struct{})
+	go func() {
+		runtime.wg.Wait()
+		close(workersDone)
+	}()
+	select {
+	case <-workersDone:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Start returned before its owned lifecycle workers exited")
+	}
+	snapshot, err := runtime.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Candidates) != 0 || snapshot.Config.ActiveDigest != "" || snapshot.Tracker.State != "starting" ||
+		snapshot.EventCursor.Sequence != 0 || journal.Cursor().Sequence != 0 {
+		t.Fatalf("workflow load failure published queue state: %#v", snapshot)
+	}
+	if err := runtime.Start(context.Background()); err == nil || err.Error() != "queue_workflow_unavailable" {
+		t.Fatalf("repeated Start lost original failure: %v", err)
+	}
+	if err := runtime.Shutdown(context.Background()); err != nil {
+		t.Fatalf("first Shutdown error = %v", err)
+	}
+	if err := runtime.Shutdown(context.Background()); err != nil {
+		t.Fatalf("second Shutdown error = %v", err)
 	}
 }
 
