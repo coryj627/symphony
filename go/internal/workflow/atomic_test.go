@@ -127,6 +127,9 @@ func TestAtomicCompleteWriteLoopHandlesShortWrites(t *testing.T) {
 }
 
 func TestAtomicPreservesExistingPermissionsAndRestrictsNewFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ACLs are not represented by os.FileMode permission bits")
+	}
 	t.Run("existing", func(t *testing.T) {
 		path, _, replacement := atomicFixture(t)
 		if err := atomicReplace(path, replacement, defaultAtomicOperations()); err != nil {

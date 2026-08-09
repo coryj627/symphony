@@ -15,24 +15,27 @@ func TestResolveAppliesCoreDefaultsAndTargetedExpansion(t *testing.T) {
 	// Break caught: expanding every dollar expression corrupts the user-supplied
 	// Codex shell command, while failing to expand workspace.root escapes its
 	// documented environment-indirection contract.
-	def, err := Parse("/repo/WORKFLOW.md", []byte("---\ntracker:\n  kind: github\n  provider:\n    repo: coryj627/symphony\nworkspace:\n  root: $WORK_ROOT\ncodex:\n  command: 'codex app-server --config $UNCHANGED'\n---\nPrompt"))
+	root := t.TempDir()
+	workflowPath := filepath.Join(root, "repo", "WORKFLOW.md")
+	workRoot := filepath.Join(root, "safe", "work")
+	def, err := Parse(workflowPath, []byte("---\ntracker:\n  kind: github\n  provider:\n    repo: coryj627/symphony\nworkspace:\n  root: $WORK_ROOT\ncodex:\n  command: 'codex app-server --config $UNCHANGED'\n---\nPrompt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	env := func(key string) (string, bool) {
 		if key == "WORK_ROOT" {
-			return "/safe/work", true
+			return workRoot, true
 		}
 		return "", false
 	}
-	got, err := Resolve("/repo/WORKFLOW.md", def, env)
+	got, err := Resolve(workflowPath, def, env)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Polling.Interval != 30*time.Second || got.Agent.MaxConcurrent != 10 || got.Agent.MaxTurns != 20 {
 		t.Fatalf("defaults not applied: %#v", got)
 	}
-	if got.Workspace.Root != filepath.Clean("/safe/work") || got.Codex.Command != "codex app-server --config $UNCHANGED" {
+	if got.Workspace.Root != filepath.Clean(workRoot) || got.Codex.Command != "codex app-server --config $UNCHANGED" {
 		t.Fatalf("bad expansion: %#v", got)
 	}
 }
@@ -44,22 +47,23 @@ func TestResolveMakesRelativeAndHomeWorkspaceRootsAbsolute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	workflowPath := filepath.Join(t.TempDir(), "repo", "config", "WORKFLOW.md")
 	cases := []struct {
 		name     string
 		yamlRoot string
 		want     string
 	}{
-		{name: "relative", yamlRoot: "workspaces", want: "/repo/config/workspaces"},
+		{name: "relative", yamlRoot: "workspaces", want: filepath.Join(filepath.Dir(workflowPath), "workspaces")},
 		{name: "home", yamlRoot: "~/workspaces", want: filepath.Join(home, "workspaces")},
 		{name: "bare home", yamlRoot: "'~'", want: home},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			def, err := Parse("/repo/config/WORKFLOW.md", []byte("---\nworkspace:\n  root: "+test.yamlRoot+"\n---\nPrompt"))
+			def, err := Parse(workflowPath, []byte("---\nworkspace:\n  root: "+test.yamlRoot+"\n---\nPrompt"))
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := Resolve("/repo/config/WORKFLOW.md", def, nil)
+			got, err := Resolve(workflowPath, def, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

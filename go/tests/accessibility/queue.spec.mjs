@@ -154,7 +154,8 @@ test('malicious provider text is text-only and unsafe URL is never linked', asyn
 test('stale and provider failures remain persistent ordinary text', async ({page}) => {
   await authorize(page, scenarioPath('/', 'stale-error'));
   await expect(page.getByText(/last known/)).toBeVisible();
-  await expect(page.getByText('Configuration needs attention.')).toBeVisible();
+  await expect(page.locator('[data-live-overview-field="config-message"]')).toHaveText('Configuration needs attention.');
+  await expect(page.locator('[data-live-overview-error="config"]')).toContainText('Configuration needs attention.');
   await expect(page.locator('aside li', {hasText: 'W'.repeat(512)})).toBeVisible();
   await expect(page.getByRole('status')).toHaveCount(0);
 });

@@ -274,8 +274,9 @@ test('structural and focused-field changes wait for an explicit safe focus bound
 
   const apply = page.getByRole('button', {name: 'Apply pending updates'});
   await apply.focus();
+  await expect(page.getByRole('link', {name: 'LIVE-1'}).first()).toBeVisible();
   const beforeApplyScroll = await page.evaluate(() => ({x: scrollX, y: scrollY}));
-  await apply.click();
+  await page.keyboard.press('Enter');
   await expect(apply).toBeFocused();
   await expect(apply).toBeVisible();
   expect(await page.evaluate(() => ({x: scrollX, y: scrollY}))).toEqual(beforeApplyScroll);
@@ -354,12 +355,13 @@ test('structural and focused-field changes wait for an explicit safe focus bound
   await expect(apply).toBeVisible();
   await expect(page.getByRole('link', {name: pendingIdentifier})).toHaveCount(0);
   const beforePendingPause = await page.locator('[data-live-presentation]').evaluate(node => node.innerHTML);
-  await page.getByRole('button', {name: 'Pause live updates'}).click();
+  await page.getByRole('button', {name: 'Pause live updates'}).focus();
+  await page.keyboard.press('Enter');
   const heldResume = page.getByRole('button', {name: 'Resume live updates'});
   await expect(heldResume).toBeFocused();
   await expect(apply).toBeHidden();
   expect(await page.locator('[data-live-presentation]').evaluate(node => node.innerHTML)).toBe(beforePendingPause);
-  await heldResume.click();
+  await page.keyboard.press('Enter');
   await expect.poll(() => heldStateCalls).toBe(4);
   await expect(heldResume).toBeFocused();
   await expect(heldResume).toHaveText('Resume live updates');
@@ -374,11 +376,12 @@ test('structural and focused-field changes wait for an explicit safe focus bound
   const beforeHeldPause = await page.locator('[data-live-presentation]').evaluate(node => node.innerHTML);
   expect(await requestRefresh(page, 'live-structural', csrf)).toBe(202);
   await expect.poll(() => heldStateCalls).toBe(5);
-  await page.getByRole('button', {name: 'Pause live updates'}).click();
+  await page.getByRole('button', {name: 'Pause live updates'}).focus();
+  await page.keyboard.press('Enter');
   await expect(page.getByRole('button', {name: 'Resume live updates'})).toBeFocused();
   releasePrePauseState();
   expect(await page.locator('[data-live-presentation]').evaluate(node => node.innerHTML)).toBe(beforeHeldPause);
-  await page.getByRole('button', {name: 'Resume live updates'}).click();
+  await page.keyboard.press('Enter');
   await expect.poll(() => heldStateCalls).toBe(6);
   await expect(page.getByRole('button', {name: 'Pause live updates'})).toBeFocused();
   expect(await page.evaluate(() => sessionStorage.getItem('symphony.live-updates.paused'))).toBeNull();
@@ -405,10 +408,12 @@ test('structural and focused-field changes wait for an explicit safe focus bound
     await expectNoAxeViolations(page);
     await page.emulateMedia({reducedMotion: 'reduce', forcedColors: 'none'});
   }
-  await pause.click();
+  await pause.focus();
+  await page.keyboard.press('Enter');
   await expect(page.getByRole('button', {name: 'Resume live updates'})).toBeVisible();
   await expectNoAxeViolations(page);
-  await page.getByRole('button', {name: 'Resume live updates'}).click();
+  await page.getByRole('button', {name: 'Resume live updates'}).focus();
+  await page.keyboard.press('Enter');
   await expect.poll(() => heldStateCalls).toBe(8);
   await page.unroute('**/api/v1/state**');
   const navigationLink = page.getByRole('link', {name: updatedIdentifier}).last();
@@ -448,10 +453,14 @@ test('pause freezes presentation across publication and persists until authorita
     const beforeActivity = await activityPresentation.evaluate(node => node.innerHTML);
     const beforeOverviewCounts = await overviewCounts.evaluate(node => node.innerHTML);
 
-    await page.getByRole('button', {name: 'Pause live updates'}).click();
-    await activityPage.getByRole('button', {name: 'Pause live updates'}).click();
-    await overviewPage.getByRole('button', {name: 'Pause live updates'}).click();
-    await navigationPage.getByRole('button', {name: 'Pause live updates'}).click();
+    await page.getByRole('button', {name: 'Pause live updates'}).focus();
+    await page.keyboard.press('Enter');
+    await activityPage.getByRole('button', {name: 'Pause live updates'}).focus();
+    await activityPage.keyboard.press('Enter');
+    await overviewPage.getByRole('button', {name: 'Pause live updates'}).focus();
+    await overviewPage.keyboard.press('Enter');
+    await navigationPage.getByRole('button', {name: 'Pause live updates'}).focus();
+    await navigationPage.keyboard.press('Enter');
     await navigationPage.getByRole('link', {name: 'Activity'}).click();
     await expect(navigationPage.getByRole('button', {name: 'Resume live updates'})).toBeVisible();
     await expect(navigationPage.locator('[data-live-connection]')).toHaveText('Live updates are paused.');
@@ -467,9 +476,12 @@ test('pause freezes presentation across publication and persists until authorita
     const activityLiveAncestors = await activityPage.locator('[data-live-connection], [data-live-activity], [data-live-activity] time').evaluateAll(nodes => nodes.map(node => Boolean(node.closest('[role="log"], [aria-live]'))));
     expect(activityLiveAncestors).toEqual([false, false]);
 
-    await page.getByRole('button', {name: 'Resume live updates'}).click();
-    await activityPage.getByRole('button', {name: 'Resume live updates'}).click();
-    await overviewPage.getByRole('button', {name: 'Resume live updates'}).click();
+    await page.getByRole('button', {name: 'Resume live updates'}).focus();
+    await page.keyboard.press('Enter');
+    await activityPage.getByRole('button', {name: 'Resume live updates'}).focus();
+    await activityPage.keyboard.press('Enter');
+    await overviewPage.getByRole('button', {name: 'Resume live updates'}).focus();
+    await overviewPage.keyboard.press('Enter');
     await expect(page.getByText('While paused', {exact: true}).first()).toBeVisible();
     await expect(activityPage.locator('[data-live-activity] > li')).toHaveCount(1);
     const resumedActivityLiveAncestors = await activityPage.locator('[data-live-connection], [data-live-activity], [data-live-activity] time').evaluateAll(nodes => nodes.map(node => Boolean(node.closest('[role="log"], [aria-live]'))));
@@ -513,11 +525,12 @@ test('failed resume announces once on a later frame and keeps focus on the reusa
   await csrfForScenario(page, 'live-resume-failure');
   await expect(page.locator('[data-live-count="candidates"]')).toHaveText('1');
   await expect(page.locator('[data-live-count="routable"]')).toHaveText('1');
+  const pause = page.getByRole('button', {name: 'Pause live updates'});
+  await pause.focus();
+  await page.keyboard.press('Enter');
   await page.getByRole('button', {name: 'Refresh tracker work'}).click();
   await expect(page.getByRole('status')).toHaveText('Refresh requested.');
   await expect(page.getByRole('status')).toHaveCount(1);
-  const pause = page.getByRole('button', {name: 'Pause live updates'});
-  await pause.click();
   await page.evaluate(() => {
     const target = document.querySelector('[data-live-feedback]');
     window.__liveFeedbackFrames = [];
@@ -534,7 +547,8 @@ test('failed resume announces once on a later frame and keeps focus on the reusa
   });
 
   const resume = page.getByRole('button', {name: 'Resume live updates'});
-  await resume.click();
+  await resume.focus();
+  await page.keyboard.press('Enter');
   const status = page.getByRole('status');
   await expect(status).toHaveText('Live updates could not be resumed.');
   await expect(status).toHaveCount(1);
@@ -686,9 +700,11 @@ test('repeated error reset pause and resume transitions retain exactly one open 
   await expectNoAxeViolations(page);
   await page.evaluate(() => window.__controlledEventSources[0].emit('reset'));
   await expect.poll(() => page.evaluate(() => window.__controlledEventSources.length)).toBe(2);
-  await page.getByRole('button', {name: 'Pause live updates'}).click();
+  await page.getByRole('button', {name: 'Pause live updates'}).focus();
+  await page.keyboard.press('Enter');
   const resume = page.getByRole('button', {name: 'Resume live updates'});
-  await resume.click();
+  await resume.focus();
+  await page.keyboard.press('Enter');
   await expect.poll(() => page.evaluate(() => window.__controlledEventSources.length)).toBe(3);
   await page.evaluate(() => window.__controlledEventSources.at(-1).emit('error'));
   await expect(page.locator('[data-live-connection]')).toHaveText('Live updates are reconnecting.');
@@ -768,8 +784,10 @@ test('pagehide during Resume restores paused presentation without a stale failur
     await route.fulfill({status: 503, contentType: 'application/json', body: '{}'}).catch(() => {});
   });
   await authorize(page, scenarioPath('/issues', 'empty'));
-  await page.getByRole('button', {name: 'Pause live updates'}).click();
-  await page.getByRole('button', {name: 'Resume live updates'}).click();
+  await page.getByRole('button', {name: 'Pause live updates'}).focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', {name: 'Resume live updates'}).focus();
+  await page.keyboard.press('Enter');
   await expect.poll(() => stateCalls).toBe(1);
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true})));
   releaseState();
@@ -782,7 +800,8 @@ test('pagehide during Resume restores paused presentation without a stale failur
 test('pagehide invalidates a queued resume-failure announcement before its first frame', async ({page}) => {
   await csrfForScenario(page, 'empty');
   await page.route('**/api/v1/state**', route => route.fulfill({status: 503, contentType: 'application/json', body: '{}'}));
-  await page.getByRole('button', {name: 'Pause live updates'}).click();
+  await page.getByRole('button', {name: 'Pause live updates'}).focus();
+  await page.keyboard.press('Enter');
   await page.evaluate(() => {
     window.__nativeRequestAnimationFrame = window.requestAnimationFrame;
     window.__heldLiveFrames = [];
@@ -791,7 +810,8 @@ test('pagehide invalidates a queued resume-failure announcement before its first
       return 10000 + window.__heldLiveFrames.length;
     };
   });
-  await page.getByRole('button', {name: 'Resume live updates'}).click();
+  await page.getByRole('button', {name: 'Resume live updates'}).focus();
+  await page.keyboard.press('Enter');
   await expect(page.locator('[data-live-connection]')).toHaveText('Live updates are paused.');
   await expect.poll(() => page.evaluate(() => window.__heldLiveFrames.length)).toBeGreaterThan(0);
   await page.evaluate(() => {

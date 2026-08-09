@@ -193,18 +193,24 @@ if (liveRoot instanceof HTMLElement && typeof window.EventSource === 'function')
     });
 
     liveApply.addEventListener('click', () => {
+      const viewport = {left: window.scrollX, top: window.scrollY};
+      reservePresentationHeight();
       applyPendingSnapshot();
+      window.scrollTo({...viewport, behavior: 'instant'});
+      window.requestAnimationFrame(() => window.scrollTo({...viewport, behavior: 'instant'}));
     });
 
     liveRoot.addEventListener('focusout', () => {
       window.requestAnimationFrame(() => {
-        if (!paused && !presentationContainsFocus()) {
+        const controlsContainFocus = liveControls.contains(document.activeElement);
+        if (!paused && !presentationContainsFocus() && !controlsContainFocus) {
           applyPendingSnapshot();
           if (hideApplyAfterFocus && document.activeElement !== liveApply) {
             hideApplyAfterFocus = false;
             liveApply.hidden = true;
           }
         }
+        if (!controlsContainFocus) releasePresentationHeight();
       });
     });
 
@@ -713,6 +719,19 @@ if (liveRoot instanceof HTMLElement && typeof window.EventSource === 'function')
     function presentationContainsFocus() {
       const presentation = liveRoot.querySelector('[data-live-presentation]');
       return presentation instanceof HTMLElement && presentation.contains(document.activeElement);
+    }
+
+    function reservePresentationHeight() {
+      const presentation = liveRoot.querySelector('[data-live-presentation]');
+      if (!(presentation instanceof HTMLElement) || !liveControls.contains(document.activeElement)) return;
+      liveRoot.style.overflowAnchor = 'none';
+      presentation.style.minBlockSize = `${presentation.getBoundingClientRect().height}px`;
+    }
+
+    function releasePresentationHeight() {
+      const presentation = liveRoot.querySelector('[data-live-presentation]');
+      if (presentation instanceof HTMLElement) presentation.style.removeProperty('min-block-size');
+      liveRoot.style.removeProperty('overflow-anchor');
     }
 
     function announceResumeFailure() {

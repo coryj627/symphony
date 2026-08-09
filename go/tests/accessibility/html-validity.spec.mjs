@@ -17,6 +17,7 @@ const validator = new HtmlValidate({
   extends: ['html-validate:recommended'],
   rules: {
     'attribute-boolean-style': 'off',
+    'attribute-empty-style': 'off',
     'no-trailing-whitespace': 'off',
     'no-inline-style': 'error',
   },
