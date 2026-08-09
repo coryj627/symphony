@@ -18,6 +18,182 @@ import (
 	"github.com/coryj627/symphony/go/internal/workflow"
 )
 
+type blockingFallbackWorkflowStore struct {
+	*fakeWorkflowStore
+	loadStarted chan struct{}
+	releaseLoad chan struct{}
+	releaseOnce sync.Once
+}
+
+func (store *blockingFallbackWorkflowStore) Load(context.Context) (workflow.Snapshot, error) {
+	store.mu.Lock()
+	store.loadCalls++
+	snapshot := cloneWorkflowSnapshotForTest(store.current)
+	err := store.loadErr
+	store.mu.Unlock()
+	select {
+	case store.loadStarted <- struct{}{}:
+	default:
+	}
+	<-store.releaseLoad
+	return snapshot, err
+}
+
+func (store *blockingFallbackWorkflowStore) makeCurrentUnavailable() {
+	store.mu.Lock()
+	store.hasCurrent = false
+	store.mu.Unlock()
+}
+
+func (store *blockingFallbackWorkflowStore) waitForLoad(t *testing.T) {
+	t.Helper()
+	select {
+	case <-store.loadStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for fallback Load")
+	}
+}
+
+func (store *blockingFallbackWorkflowStore) release() {
+	store.releaseOnce.Do(func() { close(store.releaseLoad) })
+}
+
+type fallbackLoadHarness struct {
+	runtime     *QueueRuntime
+	store       *blockingFallbackWorkflowStore
+	journal     *observability.Journal
+	logs        *observability.LogStore
+	cancelOwner context.CancelFunc
+}
+
+func newFallbackLoadHarness(t *testing.T, adapter tracker.Adapter, buildErr, loadErr error) *fallbackLoadHarness {
+	return newFallbackLoadHarnessWithDependencies(t, adapter, buildErr, loadErr, queueDependencies{})
+}
+
+func newFallbackLoadHarnessWithDependencies(
+	t *testing.T,
+	adapter tracker.Adapter,
+	buildErr, loadErr error,
+	dependencies queueDependencies,
+) *fallbackLoadHarness {
+	t.Helper()
+	store := &blockingFallbackWorkflowStore{
+		fakeWorkflowStore: &fakeWorkflowStore{
+			current: validQueueSnapshot("github", "", "digest-1"), hasCurrent: true,
+			loadErr: loadErr, changes: make(chan workflow.Change, 2),
+		},
+		loadStarted: make(chan struct{}, 1),
+		releaseLoad: make(chan struct{}),
+	}
+	factory := &fakeFactory{adapters: []tracker.Adapter{adapter}, errors: []error{buildErr}}
+	clock := newFakeQueueClock()
+	journal := observability.NewJournal(observability.JournalOptions{})
+	logger, logs, err := observability.NewLogger(observability.Options{DataDir: t.TempDir(), Stderr: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	dependencies.now = clock.Now
+	dependencies.after = clock.After
+	dependencies.jitter = func(time.Duration) time.Duration { return 0 }
+	runtime := newQueueRuntimeWithDependencies(QueueOptions{
+		Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")},
+		Journal: journal, Logger: logger,
+	}, dependencies)
+	harness := &fallbackLoadHarness{
+		runtime: runtime, store: store, journal: journal, logs: logs, cancelOwner: cancelOwner,
+	}
+	t.Cleanup(func() {
+		store.release()
+		cancelOwner()
+		_ = runtime.Shutdown(context.Background())
+		_ = logs.Close()
+	})
+	if err := runtime.Start(ownerCtx); err != nil {
+		t.Fatal(err)
+	}
+	store.makeCurrentUnavailable()
+	return harness
+}
+
+type fallbackRuntimeEvidence struct {
+	snapshot       domain.Snapshot
+	events         domain.EventPage
+	logs           observability.LogPage
+	adapter        tracker.Adapter
+	autoSuppressed bool
+}
+
+func (harness *fallbackLoadHarness) evidence(t *testing.T) fallbackRuntimeEvidence {
+	t.Helper()
+	snapshot, err := harness.runtime.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs, err := harness.logs.Query(context.Background(), observability.LogQuery{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.runtime.mu.Lock()
+	adapter := harness.runtime.adapter
+	autoSuppressed := harness.runtime.autoSuppressed
+	harness.runtime.mu.Unlock()
+	return fallbackRuntimeEvidence{
+		snapshot: snapshot,
+		events:   harness.journal.After(domain.EventCursor{Epoch: harness.journal.Epoch(), Sequence: 0}),
+		logs:     logs, adapter: adapter, autoSuppressed: autoSuppressed,
+	}
+}
+
+func (harness *fallbackLoadHarness) credentialIntent() (context.Context, credentialRebuildIntent) {
+	harness.runtime.mu.Lock()
+	defer harness.runtime.mu.Unlock()
+	return harness.runtime.runtimeCtx, credentialRebuildIntent{
+		generation: harness.runtime.generation,
+		epoch:      harness.runtime.rebuildIntentEpoch,
+	}
+}
+
+func assertFallbackEvidenceUnchanged(t *testing.T, before, after fallbackRuntimeEvidence) {
+	t.Helper()
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("fallback failure mutated runtime evidence:\nbefore=%#v\nafter=%#v", before, after)
+	}
+}
+
+func assertTrackerConfigFailure(t *testing.T, err error) {
+	t.Helper()
+	var failure *tracker.Error
+	if !errors.As(err, &failure) || err.Error() != "tracker_config: Tracker configuration is unavailable." ||
+		failure.Category != tracker.CategoryConfig || failure.Message != "Tracker configuration is unavailable." ||
+		failure.Retryable || failure.RetryAfter != 0 || failure.Status != 0 || errors.Is(err, context.Canceled) {
+		t.Fatalf("tracker-config fallback error = %#v", err)
+	}
+}
+
+func assertCurrentFallbackFailureEvidence(t *testing.T, before, after fallbackRuntimeEvidence) {
+	t.Helper()
+	if !reflect.DeepEqual(after.snapshot.Config, before.snapshot.Config) ||
+		after.snapshot.EventCursor.Epoch != before.snapshot.EventCursor.Epoch ||
+		after.snapshot.EventCursor.Sequence != before.snapshot.EventCursor.Sequence+1 ||
+		len(after.events.Events) != len(before.events.Events)+1 ||
+		!reflect.DeepEqual(after.snapshot.Candidates, before.snapshot.Candidates) || len(after.snapshot.Candidates) == 0 ||
+		after.snapshot.Tracker.State != "failed" || !after.snapshot.Tracker.Stale ||
+		after.snapshot.Tracker.ErrorCode != string(tracker.CategoryConfig) ||
+		after.snapshot.Tracker.Message != "Tracker configuration is unavailable." || after.snapshot.Tracker.Retryable ||
+		after.snapshot.Tracker.RetryAt != nil ||
+		!reflect.DeepEqual(after.snapshot.Tracker.LastAttemptAt, before.snapshot.Tracker.LastAttemptAt) ||
+		!reflect.DeepEqual(after.snapshot.Tracker.LastSuccessAt, before.snapshot.Tracker.LastSuccessAt) ||
+		after.adapter != nil || !after.autoSuppressed || !reflect.DeepEqual(after.logs, before.logs) {
+		t.Fatalf("current fallback failure evidence:\nbefore=%#v\nafter=%#v", before, after)
+	}
+	last := after.events.Events[len(after.events.Events)-1]
+	if last.Type != "queue.failed" || last.Data["error_code"] != string(tracker.CategoryConfig) ||
+		last.Data["retryable"] != false {
+		t.Fatalf("current fallback failure event = %#v", last)
+	}
+}
+
 func TestQueueInitialPollUsesConfiguredStatesAndPublishesSortedRoutableCandidates(t *testing.T) {
 	t.Parallel()
 	oldest := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
@@ -370,10 +546,25 @@ func TestQueueRateLimitTimerWaitsUntilEligibilityThenPolls(t *testing.T) {
 		{issues: []domain.Issue{validIssue("GH-RECOVERED")}},
 	}}
 	runtime, _, _, clock, _ := newQueueRuntimeForTest(t, adapter, validQueueSnapshot("github", "", "digest-1"))
+	timerArmed := make(chan time.Duration, 2)
+	runtime.deps.after = func(delay time.Duration) <-chan time.Time {
+		timer := clock.After(delay)
+		timerArmed <- delay
+		return timer
+	}
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "rate-limit timer", func() bool { return clock.pendingTimers() > 0 })
+	for arm := 1; arm <= 2; arm++ {
+		select {
+		case delay := <-timerArmed:
+			if delay != time.Minute {
+				t.Fatalf("rate-limit timer arm %d delay = %s, want 1m", arm, delay)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for rate-limit timer arm %d", arm)
+		}
+	}
 	clock.Advance(59 * time.Second)
 	time.Sleep(5 * time.Millisecond)
 	if adapter.callCount() != 1 {
@@ -1793,6 +1984,295 @@ func TestInvalidatedCredentialRebuildSkipsStoreBeforeBoundedShutdown(t *testing.
 	if currentCalls != 1 || loadCalls != 0 || factory.buildCount() != 1 {
 		t.Fatalf("invalidated credential intent touched dependencies: current=%d load=%d builds=%d",
 			currentCalls, loadCalls, factory.buildCount())
+	}
+}
+
+func TestManualFallbackLoadFailureAfterLifecycleCancellationDoesNotPublish(t *testing.T) {
+	t.Parallel()
+	harness := newFallbackLoadHarness(
+		t, nil, trackerErr(tracker.CategoryAuth, false, 0), errors.New("raw fallback load error canary"),
+	)
+	before := harness.evidence(t)
+	type refreshResult struct {
+		receipt domain.RefreshReceipt
+		err     error
+	}
+	result := make(chan refreshResult, 1)
+	go func() {
+		receipt, err := harness.runtime.Refresh(context.Background())
+		result <- refreshResult{receipt: receipt, err: err}
+	}()
+	harness.store.waitForLoad(t)
+	harness.cancelOwner()
+	harness.store.release()
+	got := <-result
+	if got.err != context.Canceled || !got.receipt.Queued || got.receipt.Coalesced {
+		t.Fatalf("canceled manual fallback result = receipt=%#v err=%v", got.receipt, got.err)
+	}
+	assertFallbackEvidenceUnchanged(t, before, harness.evidence(t))
+}
+
+func TestCredentialFallbackLoadFailureAfterLifecycleCancellationDoesNotPublish(t *testing.T) {
+	t.Parallel()
+	adapter := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+	harness := newFallbackLoadHarness(t, adapter, nil, errors.New("raw fallback load error canary"))
+	before := harness.evidence(t)
+	ctx, intent := harness.credentialIntent()
+	result := make(chan error, 1)
+	go func() { result <- harness.runtime.rebuildCurrentForCredentialIntent(ctx, intent) }()
+	harness.store.waitForLoad(t)
+	harness.cancelOwner()
+	harness.store.release()
+	if err := <-result; err != context.Canceled {
+		t.Fatalf("canceled credential fallback result = %v", err)
+	}
+	assertFallbackEvidenceUnchanged(t, before, harness.evidence(t))
+}
+
+func TestManualFallbackLoadFailureAfterEpochSupersessionIsNoOp(t *testing.T) {
+	t.Parallel()
+	harness := newFallbackLoadHarness(
+		t, nil, trackerErr(tracker.CategoryAuth, false, 0), errors.New("raw fallback load error canary"),
+	)
+	before := harness.evidence(t)
+	type refreshResult struct {
+		receipt domain.RefreshReceipt
+		err     error
+	}
+	result := make(chan refreshResult, 1)
+	go func() {
+		receipt, err := harness.runtime.Refresh(context.Background())
+		result <- refreshResult{receipt: receipt, err: err}
+	}()
+	harness.store.waitForLoad(t)
+	harness.runtime.mu.Lock()
+	harness.runtime.rebuildIntentEpoch++
+	harness.runtime.mu.Unlock()
+	harness.store.release()
+	got := <-result
+	if got.err != nil || !got.receipt.Queued || got.receipt.Coalesced {
+		t.Fatalf("stale manual fallback result = receipt=%#v err=%v", got.receipt, got.err)
+	}
+	assertFallbackEvidenceUnchanged(t, before, harness.evidence(t))
+}
+
+func TestCredentialFallbackLoadFailureAfterGenerationSupersessionIsNoOp(t *testing.T) {
+	t.Parallel()
+	adapter := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+	harness := newFallbackLoadHarness(t, adapter, nil, errors.New("raw fallback load error canary"))
+	ctx, intent := harness.credentialIntent()
+	result := make(chan error, 1)
+	go func() { result <- harness.runtime.rebuildCurrentForCredentialIntent(ctx, intent) }()
+	harness.store.waitForLoad(t)
+	harness.runtime.mu.Lock()
+	harness.runtime.retireGenerationLocked()
+	harness.runtime.mu.Unlock()
+	beforeCompletion := harness.evidence(t)
+	harness.store.release()
+	if err := <-result; err != nil {
+		t.Fatalf("stale credential fallback result = %v", err)
+	}
+	assertFallbackEvidenceUnchanged(t, beforeCompletion, harness.evidence(t))
+}
+
+func TestCredentialFallbackLoadFailureAfterEpochSupersessionIsNoOp(t *testing.T) {
+	t.Parallel()
+	adapter := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+	harness := newFallbackLoadHarness(t, adapter, nil, errors.New("raw fallback load error canary"))
+	ctx, intent := harness.credentialIntent()
+	result := make(chan error, 1)
+	go func() { result <- harness.runtime.rebuildCurrentForCredentialIntent(ctx, intent) }()
+	harness.store.waitForLoad(t)
+	harness.runtime.mu.Lock()
+	harness.runtime.rebuildIntentEpoch++
+	harness.runtime.mu.Unlock()
+	beforeCompletion := harness.evidence(t)
+	harness.store.release()
+	if err := <-result; err != nil {
+		t.Fatalf("epoch-stale credential fallback result = %v", err)
+	}
+	assertFallbackEvidenceUnchanged(t, beforeCompletion, harness.evidence(t))
+}
+
+func TestBuildFailureClassificationOrdersLifecycleBeforeStalenessAndPublication(t *testing.T) {
+	t.Parallel()
+	const (
+		wantCanceled = "canceled"
+		wantNoOp     = "no_op"
+		wantJournal  = "journal_error"
+	)
+	for _, test := range []struct {
+		name            string
+		nilRuntimeCtx   bool
+		closed          bool
+		cancel          bool
+		staleGeneration bool
+		staleEpoch      bool
+		closeJournal    bool
+		want            string
+	}{
+		{name: "nil_runtime_context", nilRuntimeCtx: true, want: wantCanceled},
+		{name: "closed_runtime", closed: true, want: wantCanceled},
+		{name: "canceled_lifecycle", cancel: true, want: wantCanceled},
+		{name: "stale_generation", staleGeneration: true, want: wantNoOp},
+		{name: "stale_epoch", staleEpoch: true, want: wantNoOp},
+		{name: "stale_generation_and_epoch", staleGeneration: true, staleEpoch: true, want: wantNoOp},
+		{
+			name: "canceled_lifecycle_beats_staleness_and_closed_journal", cancel: true,
+			staleGeneration: true, staleEpoch: true, closeJournal: true, want: wantCanceled,
+		},
+		{name: "canceled_lifecycle_beats_closed_journal", cancel: true, closeJournal: true, want: wantCanceled},
+		{name: "closed_journal_for_live_current_intent", closeJournal: true, want: wantJournal},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			adapter := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+			harness := newFallbackLoadHarness(t, adapter, nil, errors.New("unused load failure"))
+			harness.runtime.mu.Lock()
+			expectedGeneration := harness.runtime.generation
+			expectedEpoch := harness.runtime.rebuildIntentEpoch
+			originalRuntimeCtx := harness.runtime.runtimeCtx
+			harness.runtime.mu.Unlock()
+
+			if test.cancel {
+				harness.cancelOwner()
+			}
+			harness.runtime.mu.Lock()
+			if test.nilRuntimeCtx {
+				harness.runtime.runtimeCtx = nil
+			}
+			if test.closed {
+				harness.runtime.closed = true
+			}
+			if test.staleGeneration {
+				harness.runtime.retireGenerationLocked()
+			}
+			if test.staleEpoch {
+				harness.runtime.rebuildIntentEpoch++
+			}
+			harness.runtime.mu.Unlock()
+			if test.closeJournal {
+				harness.journal.Close()
+			}
+			before := harness.evidence(t)
+			err := harness.runtime.recordBuildFailureForGenerationAndIntent(
+				expectedGeneration, expectedEpoch, true,
+				&tracker.Error{Category: tracker.CategoryConfig, Message: "Tracker configuration is unavailable."},
+			)
+			harness.runtime.mu.Lock()
+			if test.nilRuntimeCtx {
+				harness.runtime.runtimeCtx = originalRuntimeCtx
+			}
+			if test.closed {
+				harness.runtime.closed = false
+			}
+			harness.runtime.mu.Unlock()
+
+			switch test.want {
+			case wantCanceled:
+				if err != context.Canceled {
+					t.Fatalf("classification error = %v, want context.Canceled", err)
+				}
+			case wantNoOp:
+				if err != nil {
+					t.Fatalf("classification error = %v, want nil no-op", err)
+				}
+			case wantJournal:
+				if !errors.Is(err, observability.ErrJournalClosed) {
+					t.Fatalf("classification error = %v, want journal closed", err)
+				}
+			default:
+				t.Fatalf("unknown expected classification %q", test.want)
+			}
+			assertFallbackEvidenceUnchanged(t, before, harness.evidence(t))
+		})
+	}
+}
+
+func TestCurrentManualFallbackLoadFailureReturnsOneSafeFailure(t *testing.T) {
+	t.Parallel()
+	adapter := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+	harness := newFallbackLoadHarness(t, adapter, nil, errors.New("raw fallback load error canary"))
+	harness.runtime.mu.Lock()
+	harness.runtime.adapter = nil
+	harness.runtime.autoSuppressed = true
+	harness.runtime.mu.Unlock()
+	before := harness.evidence(t)
+	harness.store.release()
+	receipt, err := harness.runtime.Refresh(context.Background())
+	if !receipt.Queued || receipt.Coalesced {
+		t.Fatalf("current manual fallback receipt = %#v", receipt)
+	}
+	assertTrackerConfigFailure(t, err)
+	assertCurrentFallbackFailureEvidence(t, before, harness.evidence(t))
+	currentCalls, loadCalls, _ := harness.store.accessCounts()
+	if currentCalls != 2 || loadCalls != 1 {
+		t.Fatalf("current manual fallback store calls = Current:%d Load:%d", currentCalls, loadCalls)
+	}
+}
+
+func TestCurrentCredentialNotificationFallbackLoadFailureIsIgnoredAfterSafePublication(t *testing.T) {
+	t.Parallel()
+	credentialFinished := make(chan struct{}, 1)
+	adapter := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+	harness := newFallbackLoadHarnessWithDependencies(
+		t, adapter, nil, errors.New("raw fallback load error canary"),
+		queueDependencies{afterCredentialRebuild: func() { credentialFinished <- struct{}{} }},
+	)
+	harness.runtime.NotifyCredentialChanged()
+	harness.store.waitForLoad(t)
+	beforeFailure := harness.evidence(t)
+	harness.store.release()
+	select {
+	case <-credentialFinished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for ignored credential fallback result")
+	}
+	assertCurrentFallbackFailureEvidence(t, beforeFailure, harness.evidence(t))
+	currentCalls, loadCalls, _ := harness.store.accessCounts()
+	if currentCalls != 2 || loadCalls != 1 {
+		t.Fatalf("current credential fallback store calls = Current:%d Load:%d", currentCalls, loadCalls)
+	}
+}
+
+func TestCurrentCredentialFallbackLoadFailuresPublishOneSafeFailure(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		loadErr error
+	}{
+		{name: "non_context_error", loadErr: errors.New("raw fallback load error canary")},
+		{name: "context_canceled_error_with_live_lifecycle", loadErr: context.Canceled},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			adapter := &fakeAdapter{fetches: []fakeFetch{{issues: []domain.Issue{validIssue("GH-INITIAL")}}}}
+			harness := newFallbackLoadHarness(t, adapter, nil, test.loadErr)
+			before := harness.evidence(t)
+			ctx, intent := harness.credentialIntent()
+			harness.store.release()
+			err := harness.runtime.rebuildCurrentForCredentialIntent(ctx, intent)
+			assertTrackerConfigFailure(t, err)
+			after := harness.evidence(t)
+			assertCurrentFallbackFailureEvidence(t, before, after)
+			currentCalls, loadCalls, _ := harness.store.accessCounts()
+			if currentCalls != 2 || loadCalls != 1 {
+				t.Fatalf("current fallback store calls = Current:%d Load:%d", currentCalls, loadCalls)
+			}
+			encoded, marshalErr := json.Marshal(struct {
+				Snapshot domain.Snapshot
+				Events   domain.EventPage
+				Error    string
+			}{after.snapshot, after.events, err.Error()})
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if strings.Contains(string(encoded), "raw fallback load error canary") {
+				t.Fatalf("raw fallback error reached public evidence: %s", encoded)
+			}
+		})
 	}
 }
 

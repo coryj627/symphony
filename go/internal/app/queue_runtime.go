@@ -1367,9 +1367,13 @@ func (runtime *QueueRuntime) recordBuildFailureForGenerationAndIntent(generation
 		errorCode = "tracker_error"
 	}
 	runtime.mu.Lock()
-	if runtime.closed || runtime.generation != generation || requireCurrentIntent && runtime.rebuildIntentEpoch != expectedIntentEpoch {
+	if runtime.closed || runtime.runtimeCtx == nil || runtime.runtimeCtx.Err() != nil {
 		runtime.mu.Unlock()
 		return context.Canceled
+	}
+	if runtime.generation != generation || requireCurrentIntent && runtime.rebuildIntentEpoch != expectedIntentEpoch {
+		runtime.mu.Unlock()
+		return nil
 	}
 	if _, err := runtime.options.Journal.Publish(domain.Event{Type: "queue.failed", Data: map[string]any{
 		"status": "failed", "error_code": errorCode, "retryable": false,
