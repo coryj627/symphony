@@ -301,15 +301,15 @@ func TestRunModeSuppliesStartedLiveRuntimeAndSharedLoggerToHandler(t *testing.T)
 		return logger, logs, err
 	}
 	deps.newRuntime = func(options app.QueueOptions) queueRuntime {
-		if !options.Enabled || options.Store == nil || options.Factory == nil || options.Resolver == nil || options.Journal == nil || options.Logger == nil {
+		if !options.Enabled || options.Store == nil || options.Factory == nil || options.Resolver == nil || options.Journal == nil || options.Logger == nil || options.Logger != processLogger {
 			t.Fatalf("run runtime options = %#v", options)
 		}
 		return &cliQueueRuntime{events: &events}
 	}
-	deps.newHandler = func(_ *app.ConfigService, mode string, queries app.RuntimeQueries, commands app.RuntimeCommands, logs *observability.LogStore) (http.Handler, web.ErrorResponder, error) {
+	deps.newHandler = func(_ *app.ConfigService, mode string, queries app.RuntimeQueries, commands app.RuntimeCommands, logs *observability.LogStore, logger *slog.Logger) (http.Handler, web.ErrorResponder, error) {
 		events = append(events, "handler")
-		if mode != "run" || queries == nil || commands == nil || logs == nil {
-			t.Fatalf("handler live dependencies mode=%q queries=%v commands=%v logs=%v", mode, queries, commands, logs)
+		if mode != "run" || queries == nil || commands == nil || logs == nil || logger != processLogger {
+			t.Fatalf("handler live dependencies mode=%q queries=%v commands=%v logs=%v logger=%p", mode, queries, commands, logs, logger)
 		}
 		return http.NotFoundHandler(), nil, nil
 	}
@@ -326,6 +326,27 @@ func TestRunModeSuppliesStartedLiveRuntimeAndSharedLoggerToHandler(t *testing.T)
 	joined := strings.Join(events, ",")
 	if !strings.Contains(joined, "runtime-start,handler") || !strings.Contains(joined, "shutdown,runtime-shutdown,store-close,logs-close,release") {
 		t.Fatalf("runtime composition/cleanup order = %q", joined)
+	}
+}
+
+func TestHandlerConstructionFailureClosesStartedRuntimeAndLogStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	snapshot := validCLISnapshot(path, "digest", 0)
+	store := &cliStore{snapshots: []workflow.Snapshot{snapshot, snapshot}}
+	events := []string{}
+	deps := testStartDependencies(store, &events)
+	deps.newHandler = func(*app.ConfigService, string, app.RuntimeQueries, app.RuntimeCommands, *observability.LogStore, *slog.Logger) (http.Handler, web.ErrorResponder, error) {
+		events = append(events, "handler")
+		return nil, nil, errors.New("handler-construction-canary")
+	}
+	err := startWithDependencies(context.Background(), Options{Mode: ModeRun, WorkflowPath: path}, io.Discard, io.Discard, deps)
+	var startup *StartupError
+	if !errors.As(err, &startup) || startup.Code != "web_handler_failed" || strings.Contains(err.Error(), "handler-construction-canary") {
+		t.Fatalf("handler construction error = %v", err)
+	}
+	joined := strings.Join(events, ",")
+	if !strings.Contains(joined, "runtime-start,handler,runtime-shutdown,store-close,logs-close,release") {
+		t.Fatalf("handler failure cleanup order = %q", joined)
 	}
 }
 
@@ -457,7 +478,7 @@ func testStartDependencies(store *cliStore, events *[]string) startDependencies 
 			*events = append(*events, fmt.Sprintf("runtime-new:%t", options.Enabled))
 			return &cliQueueRuntime{events: events}
 		},
-		newHandler: func(*app.ConfigService, string, app.RuntimeQueries, app.RuntimeCommands, *observability.LogStore) (http.Handler, web.ErrorResponder, error) {
+		newHandler: func(*app.ConfigService, string, app.RuntimeQueries, app.RuntimeCommands, *observability.LogStore, *slog.Logger) (http.Handler, web.ErrorResponder, error) {
 			*events = append(*events, "handler")
 			handler := http.NotFoundHandler()
 			return handler, nil, nil
@@ -601,6 +622,9 @@ func (*cliQueueRuntime) Issue(context.Context, string) (domain.IssueDetail, erro
 	return domain.IssueDetail{}, app.ErrIssueNotFound
 }
 func (*cliQueueRuntime) EventsAfter(context.Context, domain.EventCursor) (domain.EventPage, error) {
+	return domain.EventPage{Events: []domain.Event{}}, nil
+}
+func (*cliQueueRuntime) RecentEvents(context.Context, int) (domain.EventPage, error) {
 	return domain.EventPage{Events: []domain.Event{}}, nil
 }
 func (*cliQueueRuntime) SubscribeEvents(domain.EventCursor) <-chan struct{} {

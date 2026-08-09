@@ -27,6 +27,36 @@ Work on {{ issue.identifier }}.
 
 export const environmentManagedWorkflow = validGitHubWorkflow.replace('credential_ref: os-vault', 'credential_ref: $GITHUB_TOKEN');
 
+export const scenarioManifest = [
+  'empty',
+  'populated',
+  'stale-error',
+  'filtered-empty',
+  'issue-not-found',
+  'malicious-text',
+  'encoded-identifier',
+  'degraded-log',
+  'long-log',
+];
+
+export function scenarioPath(pathname, scenario) {
+  const target = new URL(pathname, 'http://127.0.0.1:43127');
+  target.searchParams.set('__e2e_scenario', scenario);
+  return `${target.pathname}${target.search}${target.hash}`;
+}
+
+export const scenarioCases = [
+  {scenario: 'empty', path: scenarioPath('/', 'empty')},
+  {scenario: 'populated', path: scenarioPath('/issues', 'populated')},
+  {scenario: 'stale-error', path: scenarioPath('/', 'stale-error')},
+  {scenario: 'filtered-empty', path: `${scenarioPath('/issues', 'filtered-empty')}&state=Open`},
+  {scenario: 'issue-not-found', path: scenarioPath('/issues/MISSING-1', 'issue-not-found'), status: 404},
+  {scenario: 'malicious-text', path: scenarioPath('/issues/MAL-1', 'malicious-text')},
+  {scenario: 'encoded-identifier', path: scenarioPath('/issues/TEAM%2F%2342', 'encoded-identifier')},
+  {scenario: 'degraded-log', path: scenarioPath('/logs', 'degraded-log')},
+  {scenario: 'long-log', path: scenarioPath('/logs', 'long-log')},
+];
+
 export const validLinearWorkflow = `---
 tracker:
   kind: linear
@@ -49,12 +79,12 @@ export async function resetWorkflow() {
 }
 
 export const routes = [
-  {path: '/', title: 'Overview — Symphony', heading: 'Overview'},
-  {path: '/issues', title: 'Issues — Symphony', heading: 'Issues'},
-  {path: '/issues/SYM-123', title: 'SYM-123 — Symphony', heading: 'Issue SYM-123'},
-  {path: '/activity', title: 'Activity — Symphony', heading: 'Activity'},
-  {path: '/configuration', title: 'Configuration — Symphony', heading: 'Configuration'},
-  {path: '/logs', title: 'Logs — Symphony', heading: 'Logs'},
+  {path: scenarioPath('/', 'empty'), title: 'Overview — Symphony', heading: 'Overview'},
+  {path: scenarioPath('/issues', 'populated'), title: 'Issues — Symphony', heading: 'Issues'},
+  {path: scenarioPath('/issues/SYM-123', 'populated'), title: 'SYM-123 — Symphony', heading: 'Issue SYM-123'},
+  {path: scenarioPath('/activity', 'populated'), title: 'Activity — Symphony', heading: 'Activity'},
+  {path: scenarioPath('/configuration', 'empty'), title: 'Configuration — Symphony', heading: 'Configuration'},
+  {path: scenarioPath('/logs', 'populated'), title: 'Logs — Symphony', heading: 'Logs'},
 ];
 
 export const navigationLabels = ['Overview', 'Issues', 'Activity', 'Configuration', 'Logs'];

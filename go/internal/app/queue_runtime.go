@@ -404,6 +404,21 @@ func (runtime *QueueRuntime) EventsAfter(ctx context.Context, cursor domain.Even
 	return runtime.options.Journal.After(cursor), nil
 }
 
+func (runtime *QueueRuntime) RecentEvents(ctx context.Context, limit int) (domain.EventPage, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.EventPage{}, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.options.Journal.Recent(limit), nil
+}
+
 func (runtime *QueueRuntime) SubscribeEvents(cursor domain.EventCursor) <-chan struct{} {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()

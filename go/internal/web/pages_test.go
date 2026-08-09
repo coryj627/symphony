@@ -13,11 +13,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/coryj627/symphony/go/internal/domain"
 )
 
 const testCSRFToken = "test-csrf-value-never-log"
 
-func TestEveryPageHasUniqueTitleMainH1AndStatus(t *testing.T) {
+func TestEveryPageHasUniqueTitleMainH1AndRoutineStatusIsNotLive(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		path    string
@@ -25,9 +27,9 @@ func TestEveryPageHasUniqueTitleMainH1AndStatus(t *testing.T) {
 		heading string
 		status  string
 	}{
-		{"/", "Overview — Symphony", "Overview", "Scheduler configuration is ready."},
-		{"/issues", "Issues — Symphony", "Issues", "No issues are available."},
-		{"/issues/SYM-123", "SYM-123 — Symphony", "Issue SYM-123", "Issue details are not available yet."},
+		{"/", "Overview — Symphony", "Overview", "No scheduler is running. Current tracker work is shown."},
+		{"/issues", "Issues — Symphony", "Issues", "No tracker work candidates match these filters."},
+		{"/issues/SYM-123", "SYM-123 — Symphony", "Issue SYM-123", "Issue details are shown."},
 		{"/activity", "Activity — Symphony", "Activity", "No activity has been recorded."},
 		{"/configuration", "Configuration — Symphony", "Configuration", "Configuration has not been loaded."},
 		{"/logs", "Logs — Symphony", "Logs", "No log entries are available."},
@@ -40,8 +42,10 @@ func TestEveryPageHasUniqueTitleMainH1AndStatus(t *testing.T) {
 			assertContainsOnce(t, html, "<h1>")
 			assertContains(t, html, "<title>"+tc.title+"</title>")
 			assertContains(t, html, ">"+tc.heading+"</h1>")
-			assertContains(t, html, `role="status"`)
 			assertContains(t, html, tc.status)
+			if strings.Contains(html, `role="status"`) || strings.Contains(html, `aria-live=`) {
+				t.Fatal("routine page status was exposed as a live region")
+			}
 			assertContainsOnce(t, html, `<header class="site-header">`)
 			assertContainsOnce(t, html, `<nav aria-label="Primary">`)
 		})
@@ -89,7 +93,7 @@ func TestNavigationOrderAndCurrentPageAreStable(t *testing.T) {
 	}
 }
 
-func TestRenderedFormsContainCurrentSessionCSRFToken(t *testing.T) {
+func TestOnlyRenderedMutationFormsContainCurrentSessionCSRFToken(t *testing.T) {
 	t.Parallel()
 	for _, path := range []string{"/", "/issues", "/configuration"} {
 		html := renderedGET(t, path)
@@ -99,33 +103,37 @@ func TestRenderedFormsContainCurrentSessionCSRFToken(t *testing.T) {
 		}
 		for index, form := range forms {
 			want := `<input type="hidden" name="csrf_token" value="` + testCSRFToken + `">`
-			if strings.Count(form, want) != 1 {
-				t.Fatalf("%s form %d: CSRF field count = %d", path, index, strings.Count(form, want))
+			csrfCount := strings.Count(form, want)
+			if strings.Contains(form, `method="post"`) && csrfCount != 1 {
+				t.Fatalf("%s mutation form %d: CSRF field count = %d", path, index, csrfCount)
+			}
+			if strings.Contains(form, `method="get"`) && csrfCount != 0 {
+				t.Fatalf("%s GET form %d leaked a CSRF field", path, index)
 			}
 		}
 	}
 }
 
-func TestRenderedShellUsesSemanticListsTableAndTextualEmptyStates(t *testing.T) {
+func TestRenderedShellUsesTextualEmptyStatesAndIssueSectionOrder(t *testing.T) {
 	t.Parallel()
 	issues := renderedGET(t, "/issues")
-	for _, want := range []string{
-		`<table>`, `<caption>Issues available to Symphony</caption>`, `<th id="issue-identifier" scope="col">Identifier</th>`,
-		`headers="issue-identifier issue-title issue-state"`,
-		`<ul class="issue-list" aria-label="Issues available to Symphony">`, "No issues are available.",
-	} {
-		assertContains(t, issues, want)
+	assertContains(t, issues, "No tracker work candidates match these filters.")
+	if strings.Contains(issues, "<table") || strings.Contains(issues, `<ul class="issue-list`) {
+		t.Fatal("empty issues page rendered empty duplicate collections")
 	}
 	issue := renderedGET(t, "/issues/SYM-123")
-	operator := strings.Index(issue, "Operator requests")
-	events := strings.Index(issue, "Event and log stream")
 	metadata := strings.Index(issue, "Issue metadata")
-	if operator == -1 || events == -1 || metadata == -1 || !(operator < events && events < metadata) {
+	eligibility := strings.Index(issue, "Eligibility")
+	operator := strings.Index(issue, "Operator requests")
+	run := strings.Index(issue, "Current run")
+	retry := strings.Index(issue, "Retry history")
+	events := strings.Index(issue, "Issue-specific activity is not available in this phase.")
+	logs := strings.Index(issue, `<h2 id="issue-logs-heading">Logs</h2>`)
+	if metadata == -1 || eligibility == -1 || operator == -1 || run == -1 || retry == -1 || events == -1 || logs == -1 || !(metadata < eligibility && eligibility < operator && operator < run && run < retry && retry < events && events < logs) {
 		t.Fatalf("issue detail sections are missing or out of contract order")
 	}
-	for _, path := range []string{"/activity", "/logs"} {
-		assertContains(t, renderedGET(t, path), "<ol")
-	}
+	assertContains(t, renderedGET(t, "/activity"), "No activity has been recorded.")
+	assertContains(t, renderedGET(t, "/logs"), "No log entries are available for these filters.")
 }
 
 func TestRenderedPagesHaveNoInlineEventHandlersOrNestedInteractiveControls(t *testing.T) {
@@ -189,8 +197,12 @@ func TestInvalidHostRemainsSecurityFirstWithRenderedErrorResponder(t *testing.T)
 		t.Fatal("perform invalid-host request")
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusBadRequest || strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") {
+	if response.StatusCode != http.StatusBadRequest || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") {
 		t.Fatalf("invalid Host response status/content type = %d/%q", response.StatusCode, response.Header.Get("Content-Type"))
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil || !strings.Contains(string(body), "Request could not be completed") {
+		t.Fatal("invalid Host did not render the safe semantic HTML error")
 	}
 }
 
@@ -365,7 +377,7 @@ func TestNonemptyFlashUsesTheSinglePersistentStatusRegion(t *testing.T) {
 		Route:   "/",
 		Heading: "Overview",
 		Flash:   "Configuration saved.",
-		Content: overviewContent{Repository: "Repository not selected"},
+		Content: overviewContent{TrackerScope: "Tracker scope not selected"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -374,7 +386,7 @@ func TestNonemptyFlashUsesTheSinglePersistentStatusRegion(t *testing.T) {
 	if count := strings.Count(html, `role="status"`); count != 1 {
 		t.Fatalf("rendered flash status region count = %d, want 1", count)
 	}
-	if !strings.Contains(html, `role="status" aria-live="polite">Configuration saved.`) {
+	if !strings.Contains(html, `role="status" aria-live="polite" aria-atomic="true">Configuration saved.`) {
 		t.Fatal("single status region did not contain the flash message")
 	}
 	if strings.Contains(html, "Scheduler configuration is ready.") {
@@ -439,10 +451,13 @@ func hasNestedInteractiveControl(html string) bool {
 
 func renderedGET(t *testing.T, path string) string {
 	t.Helper()
-	handler, err := NewPageHandler()
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime := &pageRuntimeFake{details: map[string]domain.IssueDetail{
+		"SYM-123": {
+			Issue:    domain.Issue{ID: "sym-123", Identifier: "SYM-123", Title: "Example issue", State: "Open", Labels: []string{}, BlockedBy: []domain.BlockerRef{}},
+			Routable: true, RoutingReasons: []string{},
+		},
+	}}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
 	request := httptest.NewRequest(http.MethodGet, path, nil)
 	request = request.WithContext(context.WithValue(request.Context(), csrfContextKey{}, testCSRFToken))
 	recorder := httptest.NewRecorder()

@@ -194,6 +194,44 @@ func assertCurrentFallbackFailureEvidence(t *testing.T, before, after fallbackRu
 	}
 }
 
+func TestQueueRuntimeRecentEventsDefaultsClampsCopiesAndHonorsCancellation(t *testing.T) {
+	t.Parallel()
+	journal := observability.NewJournal(observability.JournalOptions{MaxEvents: 200, MaxBytes: 8 << 20})
+	t.Cleanup(journal.Close)
+	for sequence := range 110 {
+		if _, err := journal.Publish(domain.Event{Type: "recent", Data: map[string]any{"sequence": sequence}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime := NewQueueRuntime(QueueOptions{Journal: journal})
+
+	for name, limit := range map[string]int{"default": 0, "negative": -1, "clamped": 101} {
+		t.Run(name, func(t *testing.T) {
+			page, err := runtime.RecentEvents(context.Background(), limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Events) != 100 || page.Events[0].Sequence != 11 || page.Events[99].Sequence != 110 || page.LatestCursor.Sequence != 110 || page.Reset {
+				t.Fatalf("recent events = %#v", page)
+			}
+			page.Events[0].Data["sequence"] = "mutated"
+			again, err := runtime.RecentEvents(context.Background(), 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := again.Events[0].Data["sequence"]; got != 10 {
+				t.Fatalf("runtime retained aliased recent event: %v", got)
+			}
+		})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := runtime.RecentEvents(ctx, 20); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled recent events error = %v", err)
+	}
+}
+
 func TestQueueInitialPollUsesConfiguredStatesAndPublishesSortedRoutableCandidates(t *testing.T) {
 	t.Parallel()
 	oldest := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)

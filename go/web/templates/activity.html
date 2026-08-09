@@ -1,3 +1,7 @@
 {{define "content"}}
-<section aria-labelledby="recent-activity-heading"><h2 id="recent-activity-heading">Recent activity</h2><ol class="timeline"><li>No activity has been recorded.</li></ol></section>
+<section aria-labelledby="recent-activity-heading">
+  <h2 id="recent-activity-heading">Recent activity</h2>
+  {{if .Content.Reset}}<p>Earlier activity is unavailable because the in-memory history was restarted or trimmed.</p>{{end}}
+  {{if .Content.Events}}<ol class="timeline">{{range .Content.Events}}<li><time datetime="{{.DateTime}}">{{.DisplayTime}}</time><p>{{.Summary}}</p></li>{{end}}</ol>{{else}}<p>No activity has been recorded.</p>{{end}}
+</section>
 {{end}}

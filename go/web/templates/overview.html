@@ -3,29 +3,43 @@
   <h2 id="service-status-heading">Service status</h2>
   <dl class="identity-list">
     <div><dt>Service</dt><dd>Symphony</dd></div>
-    <div><dt>Repository</dt><dd>{{.Content.Repository}}</dd></div>
+    <div><dt>Tracker scope</dt><dd>{{.Content.TrackerScope}}</dd></div>
     <div><dt>Mode</dt><dd>{{if eq .Content.Mode "run"}}Run{{else}}Configure{{end}}</dd></div>
+    <div><dt>Scheduler</dt><dd>{{if not .Content.Scheduler.Available}}Unavailable{{else if .Content.Scheduler.Enabled}}Enabled{{else}}Paused{{end}}</dd></div>
+    {{if .Content.Scheduler.State}}<div><dt>Scheduler state</dt><dd>{{.Content.Scheduler.State}}</dd></div>{{end}}
+    {{if .Content.Scheduler.Message}}<div><dt>Scheduler detail</dt><dd>{{.Content.Scheduler.Message}}</dd></div>{{end}}
   </dl>
+  {{if .Content.Tracker.Stale}}<p class="notice">Tracker information is stale and is shown as last known.</p>{{end}}
 </section>
 <section aria-labelledby="work-heading">
   <h2 id="work-heading">Work summary</h2>
   <ul class="metric-list">
-    <li><strong>0</strong> Active</li>
-    <li><strong>0</strong> Queued</li>
-    <li><strong>0</strong> Retrying</li>
-    <li><strong>0</strong> Needs attention</li>
+    <li><strong>{{.Content.CandidateCount}}</strong> Candidates</li>
+    <li><strong>{{.Content.RoutableCount}}</strong> Routable</li>
+    <li><strong>{{.Content.RunningCount}}</strong> Running</li>
+    <li><strong>{{.Content.RetryingCount}}</strong> Retrying</li>
+    <li><strong>{{.Content.RequestCount}}</strong> Operator requests</li>
+    <li><strong>{{.Content.ErrorCount}}</strong> Errors</li>
   </ul>
 </section>
-<section aria-labelledby="sessions-heading">
-  <h2 id="sessions-heading">Running sessions</h2>
-  <p id="no-running-sessions">No sessions are running.</p>
-  <form method="post" action="/actions/stop">
+<section aria-labelledby="tracker-timing-heading">
+  <h2 id="tracker-timing-heading">Tracker timing</h2>
+  <dl class="identity-list">
+    <div><dt>Last attempt</dt><dd>{{if .Content.Tracker.LastAttemptAt}}<time datetime="{{.Content.Tracker.LastAttemptDateTime}}">{{.Content.Tracker.LastAttemptDisplayTime}}</time>{{else}}Not yet attempted{{end}}</dd></div>
+    <div><dt>Last success</dt><dd>{{if .Content.Tracker.LastSuccessAt}}<time datetime="{{.Content.Tracker.LastSuccessDateTime}}">{{.Content.Tracker.LastSuccessDisplayTime}}</time>{{else}}No successful refresh yet{{end}}</dd></div>
+  </dl>
+  <form method="post" action="{{.InternalURL "/api/v1/refresh"}}">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-    <button type="submit" disabled aria-describedby="no-running-sessions">Stop selected session</button>
+    <button id="refresh" type="submit"{{if eq .FocusTarget "refresh"}} autofocus{{end}}>Refresh tracker work</button>
   </form>
 </section>
 <aside aria-labelledby="errors-heading">
   <h2 id="errors-heading">Configuration and tracker errors</h2>
-  <p>No persistent errors.</p>
+  {{if or .Content.ConfigError .Content.TrackerError}}
+  <ul>
+    {{if .Content.ConfigError}}<li><strong>Configuration:</strong> {{.Content.Config.Message}}</li>{{end}}
+    {{if .Content.TrackerError}}<li><strong>Tracker:</strong> {{.Content.Tracker.Message}}</li>{{end}}
+  </ul>
+  {{else}}<p>No persistent errors.</p>{{end}}
 </aside>
 {{end}}

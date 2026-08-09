@@ -94,7 +94,7 @@ type startDependencies struct {
 	newLogger       func(observability.Options) (*slog.Logger, *observability.LogStore, error)
 	closeLogs       func(*observability.LogStore) error
 	newRuntime      func(app.QueueOptions) queueRuntime
-	newHandler      func(*app.ConfigService, string, app.RuntimeQueries, app.RuntimeCommands, *observability.LogStore) (http.Handler, web.ErrorResponder, error)
+	newHandler      func(*app.ConfigService, string, app.RuntimeQueries, app.RuntimeCommands, *observability.LogStore, *slog.Logger) (http.Handler, web.ErrorResponder, error)
 	newBootstrap    func() (web.Bootstrap, error)
 	newServer       func(web.Options) (runtimeServer, error)
 	openBrowser     func(string) error
@@ -141,8 +141,15 @@ func defaultStartDependencies() startDependencies {
 		newRuntime: func(options app.QueueOptions) queueRuntime {
 			return app.NewQueueRuntime(options)
 		},
-		newHandler: func(service *app.ConfigService, mode string, _ app.RuntimeQueries, _ app.RuntimeCommands, _ *observability.LogStore) (http.Handler, web.ErrorResponder, error) {
-			handler, err := web.NewConfiguredPageHandler(service, mode)
+		newHandler: func(service *app.ConfigService, mode string, queries app.RuntimeQueries, commands app.RuntimeCommands, logs *observability.LogStore, logger *slog.Logger) (http.Handler, web.ErrorResponder, error) {
+			handler, err := web.NewPageHandlerWithOptions(web.PageOptions{
+				Configuration: service,
+				Mode:          mode,
+				Queries:       queries,
+				Commands:      commands,
+				Logs:          logs,
+				Logger:        logger,
+			})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -307,7 +314,7 @@ func startWithDependencies(ctx context.Context, options Options, _, stderr io.Wr
 		if err := queue.Start(ctx); err != nil {
 			return joinSafe(&StartupError{Code: "queue_runtime_failed", Message: "Symphony could not start the live work queue."}, shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
 		}
-		handler, responder, err := deps.newHandler(service, string(options.Mode), queue, queue, logs)
+		handler, responder, err := deps.newHandler(service, string(options.Mode), queue, queue, logs, logger)
 		if err != nil {
 			return joinSafe(&StartupError{Code: "web_handler_failed", Message: "Symphony could not prepare the local configuration interface."}, shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
 		}

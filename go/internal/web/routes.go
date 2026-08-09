@@ -11,6 +11,18 @@ import (
 
 type csrfContextKey struct{}
 
+// MethodPolicy reports the exact ordered methods for a static route without
+// invoking application dependencies.
+type MethodPolicy interface {
+	AllowedMethods(*http.Request) ([]string, bool)
+}
+
+// RequestErrorResponder optionally renders request-class-aware safe errors.
+// ErrorResponder remains compatible for existing handlers.
+type RequestErrorResponder interface {
+	RespondRequestError(http.ResponseWriter, *http.Request, int)
+}
+
 // CSRFToken returns the current session's CSRF value for trusted handlers that
 // render forms. Session and cookie values are never placed in request context.
 func CSRFToken(ctx context.Context) (string, bool) {
@@ -21,18 +33,18 @@ func CSRFToken(ctx context.Context) (string, bool) {
 func (s *Server) protectedHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.validHost(r.Host) {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			s.respondError(w, r, http.StatusBadRequest, "bad request")
 			return
 		}
 
 		if token, present := bootstrapCandidate(r); present {
 			if r.Method != http.MethodGet || r.URL.Path != "/" || !s.bootstrap.exchange(token, s.now) {
-				s.respondError(w, http.StatusUnauthorized, "unauthorized")
+				s.respondError(w, r, http.StatusUnauthorized, "unauthorized")
 				return
 			}
 			rawSession, err := s.sessions.issue()
 			if err != nil {
-				s.respondError(w, http.StatusInternalServerError, "internal server error")
+				s.respondError(w, r, http.StatusInternalServerError, "internal server error")
 				return
 			}
 			setSessionCookie(w, rawSession)
@@ -51,21 +63,34 @@ func (s *Server) protectedHandler() http.Handler {
 
 		cookie, err := r.Cookie(sessionCookieName)
 		if err != nil {
-			s.respondError(w, http.StatusUnauthorized, "unauthorized")
+			s.respondError(w, r, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		session, ok := s.sessions.authenticate(cookie.Value)
 		if !ok {
-			s.respondError(w, http.StatusUnauthorized, "unauthorized")
+			s.respondError(w, r, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
 		setSecurityHeaders(w.Header())
+		if policy, ok := s.handler.(MethodPolicy); ok {
+			allowed, defined := policy.AllowedMethods(r)
+			if defined && !methodAllowed(r.Method, allowed) {
+				w.Header().Set("Allow", strings.Join(allowed, ", "))
+				s.respondError(w, r, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			if !defined {
+				ctx := context.WithValue(r.Context(), csrfContextKey{}, session.csrf)
+				s.handler.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+		}
 		if status, message := authorizeMethod(r, s.sessions, session); status != 0 {
 			if status == http.StatusMethodNotAllowed {
 				w.Header().Set("Allow", "GET, HEAD, POST")
 			}
-			s.respondError(w, status, message)
+			s.respondError(w, r, status, message)
 			return
 		}
 		ctx := context.WithValue(r.Context(), csrfContextKey{}, session.csrf)
@@ -91,8 +116,12 @@ func isCanonicalPublicStaticRequest(request *http.Request) bool {
 	return path.Clean(request.URL.Path) == request.URL.Path
 }
 
-func (s *Server) respondError(w http.ResponseWriter, status int, fallback string) {
+func (s *Server) respondError(w http.ResponseWriter, request *http.Request, status int, fallback string) {
 	setSecurityHeaders(w.Header())
+	if responder, ok := s.errorResponder.(RequestErrorResponder); ok {
+		responder.RespondRequestError(w, request, status)
+		return
+	}
 	if s.errorResponder != nil {
 		s.errorResponder.RespondError(w, status)
 		return

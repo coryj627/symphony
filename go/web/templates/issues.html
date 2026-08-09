@@ -1,18 +1,27 @@
 {{define "content"}}
-<form class="filter-form" method="get" action="/issues">
-  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-  <div><label for="issue-query">Search issues</label><input id="issue-query" name="query" type="search"></div>
-  <div><label for="issue-sort">Sort issues</label><select id="issue-sort" name="sort"><option value="priority">Priority</option><option value="identifier">Identifier</option></select></div>
+<form class="filter-form" method="get" action="{{.InternalURL "/issues"}}">
+  {{if .Scenario}}<input type="hidden" name="__e2e_scenario" value="{{.Scenario}}">{{end}}
+  <div><label for="issue-query">Search issues</label><input id="issue-query" name="query" type="search" value="{{.Content.Filters.Query}}"></div>
+  <div><label for="issue-state">State</label><select id="issue-state" name="state"><option value="">All states</option>{{range .Content.States}}<option value="{{.}}"{{if eq $.Content.Filters.State .}} selected{{end}}>{{.}}</option>{{end}}</select></div>
+  <div><label for="issue-eligibility">Eligibility</label><select id="issue-eligibility" name="eligibility"><option value="all"{{if eq .Content.Filters.Eligibility "all"}} selected{{end}}>All</option><option value="routable"{{if eq .Content.Filters.Eligibility "routable"}} selected{{end}}>Routable</option><option value="needs_attention"{{if eq .Content.Filters.Eligibility "needs_attention"}} selected{{end}}>Needs attention</option></select></div>
+  <div><label for="issue-sort">Sort issues</label><select id="issue-sort" name="sort"><option value="scheduling"{{if eq .Content.Filters.Sort "scheduling"}} selected{{end}}>Scheduling order</option><option value="identifier"{{if eq .Content.Filters.Sort "identifier"}} selected{{end}}>Identifier</option></select></div>
   <button type="submit">Apply filters</button>
 </form>
-<div class="issue-table">
+{{if .Content.Rows}}
+<div class="issue-table responsive-wide">
   <table>
-    <caption>Issues available to Symphony</caption>
-    <thead><tr><th id="issue-identifier" scope="col">Identifier</th><th id="issue-title" scope="col">Title</th><th id="issue-state" scope="col">State</th></tr></thead>
-    <tbody><tr><td colspan="3" headers="issue-identifier issue-title issue-state">No issues are available.</td></tr></tbody>
+    <caption>Tracker work candidates</caption>
+    <thead><tr><th scope="col">Identifier</th><th scope="col">Title</th><th scope="col">State</th><th scope="col">Eligibility</th></tr></thead>
+    <tbody>{{range .Content.Rows}}<tr>
+      <th scope="row"><a href="{{.DetailURL}}">{{.Identifier}}</a></th>
+      <td>{{.Title}}</td>
+      <td>{{.State}}{{if .Stale}} <span class="muted">(last known)</span>{{end}}</td>
+      <td>{{if .Routable}}Routable{{else}}Needs attention{{range .RoutingReasons}}<span class="reason">{{.Message}}</span>{{end}}{{end}}</td>
+    </tr>{{end}}</tbody>
   </table>
 </div>
-<ul class="issue-list" aria-label="Issues available to Symphony">
-  <li>No issues are available.</li>
-</ul>
+<ul class="issue-list responsive-narrow" aria-label="Tracker work candidates">{{range .Content.Rows}}
+  <li><h2><a href="{{.DetailURL}}">{{.Identifier}}</a></h2><p>{{.Title}}</p><dl><div><dt>State</dt><dd>{{.State}}{{if .Stale}} (last known){{end}}</dd></div><div><dt>Eligibility</dt><dd>{{if .Routable}}Routable{{else}}Needs attention{{range .RoutingReasons}}<span class="reason">{{.Message}}</span>{{end}}{{end}}</dd></div></dl></li>
+{{end}}</ul>
+{{else}}<p>No tracker work candidates match these filters.</p>{{end}}
 {{end}}

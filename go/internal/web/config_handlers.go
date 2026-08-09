@@ -76,9 +76,9 @@ func registerConfigurationRoutes(handler *PageHandler, service *app.ConfigServic
 	}
 	for route, mutation := range routes {
 		handler.mux.HandleFunc("POST "+route, mutation)
-		handler.mux.HandleFunc(route, func(w http.ResponseWriter, _ *http.Request) {
+		handler.mux.HandleFunc(route, func(w http.ResponseWriter, request *http.Request) {
 			w.Header().Set("Allow", http.MethodPost)
-			handler.RespondError(w, http.StatusMethodNotAllowed)
+			handler.respondHTMLRequestError(w, request, http.StatusMethodNotAllowed)
 		})
 	}
 }
@@ -87,7 +87,7 @@ func (handler *PageHandler) configurationGET(service *app.ConfigService, mode st
 	return func(w http.ResponseWriter, request *http.Request) {
 		view, err := service.View(request.Context())
 		if err != nil {
-			handler.RespondError(w, http.StatusInternalServerError)
+			handler.respondHTMLRequestError(w, request, http.StatusInternalServerError)
 			return
 		}
 		page := configurationPage(request, mode, view)
@@ -99,7 +99,7 @@ func (handler *PageHandler) configurationGET(service *app.ConfigService, mode st
 func (handler *PageHandler) configurationValidate(service *app.ConfigService, mode string) http.HandlerFunc {
 	return func(w http.ResponseWriter, request *http.Request) {
 		if !isFormRequest(request) {
-			handler.RespondError(w, http.StatusUnsupportedMediaType)
+			handler.respondHTMLRequestError(w, request, http.StatusUnsupportedMediaType)
 			return
 		}
 		raw, ok := exactFormValue(request.PostForm, "raw_source")
@@ -116,7 +116,7 @@ func (handler *PageHandler) configurationValidate(service *app.ConfigService, mo
 		}
 		view, err := service.View(request.Context())
 		if err != nil {
-			handler.RespondError(w, http.StatusInternalServerError)
+			handler.respondHTMLRequestError(w, request, http.StatusInternalServerError)
 			return
 		}
 		page := configurationPage(request, mode, view)
@@ -132,7 +132,7 @@ func (handler *PageHandler) configurationValidate(service *app.ConfigService, mo
 func (handler *PageHandler) configurationSave(service *app.ConfigService, mode string) http.HandlerFunc {
 	return func(w http.ResponseWriter, request *http.Request) {
 		if !isFormRequest(request) {
-			handler.RespondError(w, http.StatusUnsupportedMediaType)
+			handler.respondHTMLRequestError(w, request, http.StatusUnsupportedMediaType)
 			return
 		}
 		modeValue, modeOK := exactFormValue(request.PostForm, "mode")
@@ -172,7 +172,7 @@ func (handler *PageHandler) configurationSave(service *app.ConfigService, mode s
 		if errors.Is(err, workflow.ErrSaveConflict) {
 			fresh, viewErr := service.View(request.Context())
 			if viewErr != nil {
-				handler.RespondError(w, http.StatusInternalServerError)
+				handler.respondHTMLRequestError(w, request, http.StatusInternalServerError)
 				return
 			}
 			if modeValue == "structured" {
@@ -210,7 +210,7 @@ func (handler *PageHandler) configurationSave(service *app.ConfigService, mode s
 func (handler *PageHandler) credentialReplace(service *app.ConfigService, mode string) http.HandlerFunc {
 	return func(w http.ResponseWriter, request *http.Request) {
 		if !isFormRequest(request) {
-			handler.RespondError(w, http.StatusUnsupportedMediaType)
+			handler.respondHTMLRequestError(w, request, http.StatusUnsupportedMediaType)
 			return
 		}
 		credential, ok := exactFormValue(request.PostForm, "credential")
@@ -252,7 +252,7 @@ func (handler *PageHandler) credentialReplace(service *app.ConfigService, mode s
 func (handler *PageHandler) credentialDelete(service *app.ConfigService, mode string) http.HandlerFunc {
 	return func(w http.ResponseWriter, request *http.Request) {
 		if !isFormRequest(request) {
-			handler.RespondError(w, http.StatusUnsupportedMediaType)
+			handler.respondHTMLRequestError(w, request, http.StatusUnsupportedMediaType)
 			return
 		}
 		request.PostForm.Del("credential")
@@ -273,7 +273,7 @@ func (handler *PageHandler) credentialDelete(service *app.ConfigService, mode st
 					handler.renderSubmittedErrors(w, http.StatusConflict, request, service, mode, app.ConfigValues{}, "", "", []workflow.FieldError{{Field: "request_delete", Code: "credential_conflict", Message: "The workflow changed on disk. Review the selected tracker before requesting deletion again."}}, nil, false)
 					return
 				}
-				handler.RespondError(w, http.StatusInternalServerError)
+				handler.respondHTMLRequestError(w, request, http.StatusInternalServerError)
 				return
 			}
 			page := configurationPage(request, mode, view)
@@ -311,14 +311,14 @@ func configurationPage(request *http.Request, mode string, view app.ConfigView) 
 	content := configurationContent{View: view, Values: view.Config, RawSource: view.Source, Errors: map[string]string{}}
 	return Page{
 		Title: "Configuration — Symphony", Route: "/configuration", Heading: "Configuration", Mode: mode,
-		Status: status, CSRFToken: csrf, Content: content,
+		Status: status, CSRFToken: csrf, Scenario: requestScenario(request), Content: content,
 	}
 }
 
 func (handler *PageHandler) renderSubmittedErrors(w http.ResponseWriter, status int, request *http.Request, service *app.ConfigService, mode string, values app.ConfigValues, rawSource, currentSource string, fieldErrors []workflow.FieldError, globalErrors []workflow.SafeError, deleteConfirmation bool) {
 	view, err := service.View(request.Context())
 	if err != nil {
-		handler.RespondError(w, http.StatusInternalServerError)
+		handler.respondHTMLRequestError(w, request, http.StatusInternalServerError)
 		return
 	}
 	page := configurationPage(request, mode, view)
@@ -586,7 +586,7 @@ func conflictField(mode string) string {
 
 func redirectConfiguration(w http.ResponseWriter, request *http.Request, result, focus string) {
 	query := url.Values{"result": {result}, "focus": {focus}}
-	http.Redirect(w, request, "/configuration?"+query.Encode(), http.StatusSeeOther)
+	http.Redirect(w, request, internalURL("/configuration?"+query.Encode(), requestScenario(request)), http.StatusSeeOther)
 }
 
 func applyResultCode(page *Page, query url.Values) {

@@ -20,7 +20,7 @@ for (const route of routes) {
     await expect(page).toHaveTitle(route.title);
     await expect(page.getByRole('main')).toHaveCount(1);
     await expect(page.getByRole('heading', {level: 1, name: route.heading, exact: true})).toHaveCount(1);
-    await expect(page.getByRole('status')).toHaveCount(1);
+    await expect(page.getByRole('status')).toHaveCount(0);
 
     await expectNoAxeViolations(page);
   });
@@ -35,7 +35,8 @@ test('missing session renders one accessible authorization document', async ({au
     await expect(page).toHaveTitle('Authorization required — Symphony');
     await expect(page.getByRole('main')).toHaveCount(1);
     await expect(page.getByRole('heading', {level: 1, name: 'Authorization required'})).toHaveCount(1);
-    await expect(page.getByRole('status')).toHaveText('This browser session is missing or no longer valid.');
+    await expect(page.getByRole('status')).toHaveCount(0);
+    await expect(page.getByText('This browser session is missing or no longer valid.')).toBeVisible();
     await expect(page.getByText('Return to the terminal and open the newest Symphony launch URL.')).toBeVisible();
     await expectNoAxeViolations(page);
   } finally {
@@ -49,7 +50,8 @@ test('authenticated missing page renders one accessible not-found document', asy
   await expect(page).toHaveTitle('Page not found — Symphony');
   await expect(page.getByRole('main')).toHaveCount(1);
   await expect(page.getByRole('heading', {level: 1, name: 'Page not found'})).toHaveCount(1);
-  await expect(page.getByRole('status')).toHaveText('The requested page is not available.');
+  await expect(page.getByRole('status')).toHaveCount(0);
+  await expect(page.getByText('The requested page is not available.')).toBeVisible();
   await expect(page.getByText('Use the primary navigation to choose an available page.')).toBeVisible();
   await expectNoAxeViolations(page);
 });
@@ -77,13 +79,13 @@ test('skip link is first in focus order and moves focus to main', async ({page})
 });
 
 test('persistent navigation keeps its order and text current state', async ({page}) => {
-  for (const route of routes.filter(({path}) => path !== '/issues/SYM-123')) {
+  for (const route of routes) {
     await authorize(page, route.path);
     const navigation = page.getByRole('navigation', {name: 'Primary'});
     await expect(navigation.getByRole('link')).toHaveText(navigationLabels);
     const current = navigation.locator('[aria-current="page"]');
     await expect(current).toHaveCount(1);
-    await expect(current).toHaveText(route.heading);
+    await expect(current).toHaveText(route.heading.startsWith('Issue ') ? 'Issues' : route.heading);
   }
 });
 
@@ -91,7 +93,7 @@ test('core navigation works when JavaScript is unavailable', async ({page}) => {
   await page.route('**/static/app.js', route => route.abort());
   await authorize(page, '/');
   await page.getByRole('link', {name: 'Configuration'}).click();
-  await expect(page).toHaveURL('/configuration');
+  await expect(page).toHaveURL(/\/configuration\?__e2e_scenario=empty$/);
   await expect(page.getByRole('heading', {level: 1, name: 'Configuration'})).toBeVisible();
 });
 
@@ -99,7 +101,7 @@ test('configuration help fragment is visible and focused without JavaScript', as
   await page.route('**/static/app.js', route => route.abort());
   await authorize(page, '/configuration');
   await page.getByRole('link', {name: 'Configuration documentation'}).click();
-  await expect(page).toHaveURL('/configuration#documentation');
+  await expect(page).toHaveURL(/\/configuration\?__e2e_scenario=empty#documentation$/);
   const help = page.locator('#documentation');
   await expect(help).toBeVisible();
   await expect(help).toBeFocused();
@@ -125,6 +127,31 @@ test('pages reflow at 320 CSS pixels and product controls meet 44 pixel targets'
       expect(box?.width, safeName).toBeGreaterThanOrEqual(44);
       expect(box?.height, safeName).toBeGreaterThanOrEqual(44);
     }
+  }
+});
+
+test('two hundred percent text and WCAG text spacing preserve page content without viewport overflow', async ({page}) => {
+  await page.setViewportSize({width: 640, height: 900});
+  for (const route of routes) {
+    await authorize(page, route.path);
+    await page.evaluate(() => {
+      const sheet = [...document.styleSheets].find(candidate => candidate.href?.endsWith('/static/app.css'));
+      if (!sheet) throw new Error('local application stylesheet was not loaded');
+      for (const rule of [
+        'html { font-size: 200% !important; }',
+        '* { letter-spacing: 0.12em !important; line-height: 1.5 !important; word-spacing: 0.16em !important; }',
+        'p { margin-block-end: 2em !important; }',
+      ]) {
+        sheet.insertRule(rule, sheet.cssRules.length);
+      }
+    });
+
+    await expect(page.getByRole('heading', {level: 1, name: route.heading, exact: true})).toBeVisible();
+    const dimensions = await page.evaluate(() => ({
+      viewport: document.documentElement.clientWidth,
+      page: document.documentElement.scrollWidth,
+    }));
+    expect(dimensions.page, route.path).toBeLessThanOrEqual(dimensions.viewport);
   }
 });
 
@@ -230,4 +257,5 @@ test('forced colors retains current state and visible control boundaries', async
   await page.keyboard.press('Tab');
   await expect(page.getByRole('link', {name: 'Skip to main content'})).toHaveCSS('outline-style', 'solid');
   await expect(page.getByRole('button', {name: 'Save structured settings'})).toHaveCSS('border-style', 'solid');
+  await expect(page.getByLabel('Provider', {exact: true})).toHaveCSS('appearance', 'auto');
 });

@@ -162,6 +162,27 @@ func (journal *Journal) After(cursor domain.EventCursor) domain.EventPage {
 	return page
 }
 
+// Recent returns the newest retained complete events in chronological order.
+// Reset reports only journal eviction; selecting a smaller tail is not a gap.
+func (journal *Journal) Recent(limit int) domain.EventPage {
+	journal.mu.RLock()
+	defer journal.mu.RUnlock()
+
+	page := domain.EventPage{Events: []domain.Event{}, LatestCursor: journal.cursorLocked()}
+	if len(journal.events) > 0 && journal.events[0].event.Sequence > 1 {
+		page.Reset = true
+	}
+	if limit <= 0 || len(journal.events) == 0 {
+		return page
+	}
+	start := max(0, len(journal.events)-limit)
+	page.Events = make([]domain.Event, 0, len(journal.events)-start)
+	for _, retained := range journal.events[start:] {
+		page.Events = append(page.Events, cloneJournalEvent(retained.event))
+	}
+	return page
+}
+
 func (journal *Journal) Subscribe(cursor domain.EventCursor) <-chan struct{} {
 	journal.mu.RLock()
 	defer journal.mu.RUnlock()

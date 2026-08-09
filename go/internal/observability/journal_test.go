@@ -253,6 +253,123 @@ func TestJournalConcurrentPublishReadAndSubscribe(t *testing.T) {
 	}
 }
 
+func TestJournalRecentReturnsBoundedImmutableTailAndExactResetState(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty", func(t *testing.T) {
+		journal := NewJournal(JournalOptions{})
+		t.Cleanup(journal.Close)
+
+		page := journal.Recent(20)
+		if page.Events == nil || len(page.Events) != 0 || page.Reset || page.LatestCursor != journal.Cursor() {
+			t.Fatalf("empty recent page = %#v", page)
+		}
+	})
+
+	t.Run("partial and capped", func(t *testing.T) {
+		journal := NewJournal(JournalOptions{})
+		t.Cleanup(journal.Close)
+		for _, kind := range []string{"one", "two", "three"} {
+			publishEvent(t, journal, kind, map[string]any{"kind": kind})
+		}
+
+		page := journal.Recent(2)
+		if page.Reset || page.LatestCursor != journal.Cursor() || len(page.Events) != 2 || page.Events[0].Sequence != 2 || page.Events[1].Sequence != 3 {
+			t.Fatalf("bounded recent page = %#v", page)
+		}
+		all := journal.Recent(100)
+		if all.Reset || len(all.Events) != 3 || all.Events[0].Sequence != 1 || all.Events[2].Sequence != 3 {
+			t.Fatalf("uncapped recent page = %#v", all)
+		}
+	})
+
+	t.Run("count eviction", func(t *testing.T) {
+		journal := NewJournal(JournalOptions{MaxEvents: 2, MaxBytes: 4096})
+		t.Cleanup(journal.Close)
+		for _, kind := range []string{"one", "two", "three"} {
+			publishEvent(t, journal, kind, map[string]any{})
+		}
+
+		page := journal.Recent(100)
+		if !page.Reset || len(page.Events) != 2 || page.Events[0].Sequence != 2 || page.Events[1].Sequence != 3 || page.LatestCursor.Sequence != 3 {
+			t.Fatalf("count-evicted recent page = %#v", page)
+		}
+	})
+
+	t.Run("byte eviction", func(t *testing.T) {
+		clock := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+		measure := newJournalWithDependencies(JournalOptions{MaxEvents: 8, MaxBytes: 4096}, journalDependencies{
+			now: func() time.Time { return clock }, random: fixedJournalRandom(20),
+		})
+		encoded, err := json.Marshal(publishEvent(t, measure, "one", map[string]any{"value": "a"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		measure.Close()
+
+		journal := newJournalWithDependencies(JournalOptions{MaxEvents: 8, MaxBytes: len(encoded)}, journalDependencies{
+			now: func() time.Time { return clock }, random: fixedJournalRandom(21),
+		})
+		t.Cleanup(journal.Close)
+		publishEvent(t, journal, "one", map[string]any{"value": "a"})
+		publishEvent(t, journal, "two", map[string]any{"value": "b"})
+
+		page := journal.Recent(100)
+		if !page.Reset || len(page.Events) != 1 || page.Events[0].Sequence != 2 || page.LatestCursor.Sequence != 2 {
+			t.Fatalf("byte-evicted recent page = %#v", page)
+		}
+	})
+
+	t.Run("immutable and readable after close", func(t *testing.T) {
+		journal := NewJournal(JournalOptions{})
+		publishEvent(t, journal, "copy", map[string]any{"nested": map[string]any{"value": "original"}})
+		journal.Close()
+
+		page := journal.Recent(1)
+		page.Events[0].Data["nested"].(map[string]any)["value"] = "mutated"
+		again := journal.Recent(1)
+		if got := again.Events[0].Data["nested"].(map[string]any)["value"]; got != "original" {
+			t.Fatalf("recent page retained an aliased value: %v", got)
+		}
+	})
+}
+
+func TestJournalRecentIsConcurrentAndInvokesNoEventCallbacks(t *testing.T) {
+	journal := NewJournal(JournalOptions{MaxEvents: 512, MaxBytes: 8 << 20})
+	t.Cleanup(journal.Close)
+
+	const publishers = 4
+	const perPublisher = 50
+	var group sync.WaitGroup
+	for publisher := range publishers {
+		group.Add(1)
+		go func(publisher int) {
+			defer group.Done()
+			for sequence := range perPublisher {
+				if _, err := journal.Publish(domain.Event{Type: "concurrent", Data: map[string]any{"publisher": publisher, "sequence": sequence}}); err != nil {
+					t.Errorf("publish: %v", err)
+					return
+				}
+				_ = journal.Recent(20)
+			}
+		}(publisher)
+	}
+	group.Wait()
+
+	page := journal.Recent(20)
+	if len(page.Events) != 20 || page.LatestCursor.Sequence != publishers*perPublisher || page.Events[0].Sequence != publishers*perPublisher-19 {
+		t.Fatalf("concurrent recent page = %#v", page)
+	}
+
+	journal.mu.Lock()
+	journal.events[len(journal.events)-1].event.Data = map[string]any{"callback": panicJSONMarshaler{}}
+	journal.mu.Unlock()
+	callbackSafe := journal.Recent(1)
+	if got := callbackSafe.Events[0].Data["status"]; got != "invalid_event_data" {
+		t.Fatalf("callback data marker = %#v", callbackSafe.Events[0].Data)
+	}
+}
+
 type panicJSONMarshaler struct{}
 
 func (panicJSONMarshaler) MarshalJSON() ([]byte, error) { panic("must not be invoked") }

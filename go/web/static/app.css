@@ -231,6 +231,12 @@ dd {
   overflow-wrap: anywhere;
 }
 
+.provider-text,
+.provider-text strong {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
 .metric-list li {
   flex: 1 1 9rem;
   padding: 1rem;
@@ -371,7 +377,8 @@ button:disabled {
   gap: 0.4rem;
 }
 
-.issue-table table {
+.issue-table table,
+.log-table table {
   inline-size: 100%;
   table-layout: fixed;
   border-collapse: collapse;
@@ -397,8 +404,20 @@ th {
   background: var(--color-surface-3);
 }
 
-.issue-list {
+.responsive-narrow {
   display: none;
+}
+
+.reason {
+  display: block;
+  margin-block-start: 0.35rem;
+  color: var(--color-muted);
+}
+
+.muted,
+.notice,
+.persistent-warning {
+  color: var(--color-muted);
 }
 
 .timeline,
@@ -448,12 +467,16 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .issue-table {
+  .responsive-wide {
     display: none;
   }
 
-  .issue-list {
+  .responsive-narrow {
     display: block;
+  }
+
+  .issue-list,
+  .log-list.responsive-narrow {
     padding: 1rem 1rem 1rem 2rem;
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -524,6 +547,8 @@ pre {
   }
 
   select {
+    appearance: auto;
+    padding-inline-end: 0.75rem;
     background-image: none;
   }
 }

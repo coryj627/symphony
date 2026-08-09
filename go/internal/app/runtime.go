@@ -16,6 +16,7 @@ type RuntimeQueries interface {
 	Snapshot(context.Context) (domain.Snapshot, error)
 	Issue(context.Context, string) (domain.IssueDetail, error)
 	EventsAfter(context.Context, domain.EventCursor) (domain.EventPage, error)
+	RecentEvents(context.Context, int) (domain.EventPage, error)
 	SubscribeEvents(domain.EventCursor) <-chan struct{}
 }
 

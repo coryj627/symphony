@@ -5,7 +5,7 @@
   <pre class="code-scroll"><code>{{.Content.CurrentSource}}</code></pre>
 </section>{{end}}
 
-<form id="structured-settings-form" method="post" action="/api/v1/config/save">
+<form id="structured-settings-form" method="post" action="{{.InternalURL "/api/v1/config/save"}}">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <input type="hidden" name="mode" value="structured">
   <input type="hidden" name="base_digest" value="{{.Content.View.Digest}}">
@@ -142,14 +142,14 @@
     <label for="server-operator-response-timeout-ms">Operator response timeout</label><p id="server-operator-response-timeout-ms-description">Milliseconds; at least 30000.</p>
     <input id="server-operator-response-timeout-ms" name="server_operator_response_timeout_ms" type="number" min="30000" step="1" value="{{.Content.Values.ServerOperatorResponseTimeoutMS}}" aria-describedby="server-operator-response-timeout-ms-description{{with index .Content.Errors "server-operator-response-timeout-ms"}} server-operator-response-timeout-ms-error{{end}}"{{with index .Content.Errors "server-operator-response-timeout-ms"}} aria-invalid="true"{{end}}>{{with index .Content.Errors "server-operator-response-timeout-ms"}}<p class="field-error" id="server-operator-response-timeout-ms-error">{{.}}</p>{{end}}
   </fieldset>
-  <button id="save-structured" type="submit">Save structured settings</button>
+  <button id="save-structured" type="submit"{{if eq .FocusTarget "save-structured"}} autofocus{{end}}>Save structured settings</button>
 </form>
 
 <section aria-labelledby="credential-heading">
   <h2 id="credential-heading">Credential management</h2>
   <p>Credentials are stored by the operating system and never displayed here.</p>
   <p>Current state: <strong>{{if .Content.Credential.Label}}{{.Content.Credential.Label}}{{else}}Not configured{{end}}</strong></p>
-  <form id="credential-form" method="post" action="/api/v1/config/credential">
+  <form id="credential-form" method="post" action="{{.InternalURL "/api/v1/config/credential"}}">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <input type="hidden" name="submit_action" value="replace-credential">
     <input type="hidden" name="credential_tracker_kind" value="{{.Content.View.Tracker.Kind}}">
@@ -159,8 +159,8 @@
     <input id="credential" name="credential" type="password" autocomplete="new-password" aria-describedby="credential-description{{with index .Content.Errors "credential"}} credential-error{{end}}"{{with index .Content.Errors "credential"}} aria-invalid="true"{{end}}{{if or .Content.Credential.EnvironmentManaged (not .Content.View.StructuredAvailable)}} disabled{{end}}>
     {{with index .Content.Errors "credential"}}<p class="field-error" id="credential-error">{{.}}</p>{{end}}
     <div class="button-row">
-      <button id="replace-credential" type="submit"{{if or .Content.Credential.EnvironmentManaged (not .Content.View.StructuredAvailable)}} disabled{{end}}>Replace credential</button>
-      <button id="delete-credential" type="submit" formaction="/api/v1/config/credential/delete" name="request_delete" value="1"{{if or .Content.Credential.EnvironmentManaged (not .Content.View.StructuredAvailable)}} disabled{{end}}>Delete credential</button>
+      <button id="replace-credential" type="submit"{{if eq .FocusTarget "replace-credential"}} autofocus{{end}}{{if or .Content.Credential.EnvironmentManaged (not .Content.View.StructuredAvailable)}} disabled{{end}}>Replace credential</button>
+      <button id="delete-credential" type="submit" formaction="{{.InternalURL "/api/v1/config/credential/delete"}}" name="request_delete" value="1"{{if eq .FocusTarget "delete-credential"}} autofocus{{end}}{{if or .Content.Credential.EnvironmentManaged (not .Content.View.StructuredAvailable)}} disabled{{end}}>Delete credential</button>
     </div>
   </form>
 </section>
@@ -171,12 +171,12 @@
   {{if .ErrorSummaryInDialog}}{{template "error-summary" .}}{{end}}
   {{with index .Content.Errors "credential-delete-confirm"}}<p class="field-error" id="credential-delete-confirm-error">{{.}}</p>{{end}}
   <div class="button-row">
-    <a class="button-link" id="credential-delete-cancel" href="/configuration#delete-credential" tabindex="0">Cancel</a>
-    <button id="credential-delete-confirm" type="submit" form="credential-form" formaction="/api/v1/config/credential/delete" name="confirm_delete" value="Delete credential"{{with index .Content.Errors "credential-delete-confirm"}} aria-invalid="true" aria-describedby="credential-delete-confirm-error"{{end}}>Delete credential</button>
+    <a class="button-link" id="credential-delete-cancel" href="{{.InternalURL "/configuration#delete-credential"}}" tabindex="0">Cancel</a>
+    <button id="credential-delete-confirm" type="submit" form="credential-form" formaction="{{.InternalURL "/api/v1/config/credential/delete"}}" name="confirm_delete" value="Delete credential"{{with index .Content.Errors "credential-delete-confirm"}} aria-invalid="true" aria-describedby="credential-delete-confirm-error"{{end}}>Delete credential</button>
   </div>
 </dialog>
 
-<form id="complete-workflow-form" method="post" action="/api/v1/config/save">
+<form id="complete-workflow-form" method="post" action="{{.InternalURL "/api/v1/config/save"}}">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <input type="hidden" name="mode" value="raw">
   <input type="hidden" name="base_digest" value="{{.Content.View.Digest}}">
@@ -190,12 +190,12 @@
     {{with index .Content.Errors "raw-source"}}<p class="field-error" id="raw-source-error">{{.}}</p>{{end}}
   </fieldset>
   <div class="button-row">
-    <button id="validate-raw" type="submit" formaction="/api/v1/config/validate">Validate complete workflow</button>
-    <button id="save-raw" type="submit">Save complete workflow</button>
+    <button id="validate-raw" type="submit" formaction="{{.InternalURL "/api/v1/config/validate"}}"{{if eq .FocusTarget "validate-raw"}} autofocus{{end}}>Validate complete workflow</button>
+    <button id="save-raw" type="submit"{{if eq .FocusTarget "save-raw"}} autofocus{{end}}>Save complete workflow</button>
   </div>
 </form>
 
-<p><a href="/configuration#documentation">Configuration documentation</a></p>
+<p><a href="{{.InternalURL "/configuration#documentation"}}">Configuration documentation</a></p>
 <section id="documentation" tabindex="-1" aria-labelledby="configuration-help-heading">
   <h2 id="configuration-help-heading">Configuration help</h2>
   <p>Use structured settings for known fields and the complete editor to create, repair, or review every byte. Validation never saves changes.</p>

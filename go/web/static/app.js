@@ -19,6 +19,7 @@ const allowedFocusTargets = new Set([
   'replace-credential',
   'delete-credential',
   'credential-delete-cancel',
+  'refresh',
 ]);
 
 if (focusTarget && allowedFocusTargets.has(focusTarget)) {

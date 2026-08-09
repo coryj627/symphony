@@ -72,7 +72,7 @@ test('successful validation retains unsaved source and does not write it', async
   const unsaved = validGitHubWorkflow.replace('repository: symphony', 'repository: validated-unsaved');
   await page.getByLabel('Complete WORKFLOW.md').fill(unsaved);
   const response = await Promise.all([
-    page.waitForResponse(result => result.url().endsWith('/api/v1/config/validate')),
+    page.waitForResponse(result => new URL(result.url()).pathname === '/api/v1/config/validate'),
     page.getByRole('button', {name: 'Validate complete workflow'}).click(),
   ]).then(([result]) => result);
   expect(response.status()).toBe(200);
@@ -85,7 +85,7 @@ test('invalid raw workflow focuses linked summary and retains submitted bytes', 
   const invalid = '---\ntracker: []\n---\nRetained browser input';
   await page.getByLabel('Complete WORKFLOW.md').fill(invalid);
   const response = await Promise.all([
-    page.waitForResponse(res => res.url().endsWith('/api/v1/config/save')),
+    page.waitForResponse(res => new URL(res.url()).pathname === '/api/v1/config/save'),
     page.getByRole('button', {name: 'Save complete workflow'}).click(),
   ]).then(([res]) => res);
   expect(response.status()).toBe(422);
@@ -102,7 +102,7 @@ test('conflict retains unsaved source and shows freshly read disk source', async
   await page.getByLabel('Complete WORKFLOW.md').fill(unsaved);
   await writeFile(manualWorkflowPath, external, {mode: 0o600});
   const response = await Promise.all([
-    page.waitForResponse(res => res.url().endsWith('/api/v1/config/save')),
+    page.waitForResponse(res => new URL(res.url()).pathname === '/api/v1/config/save'),
     page.getByRole('button', {name: 'Save complete workflow'}).click(),
   ]).then(([res]) => res);
   expect(response.status()).toBe(409);
@@ -201,18 +201,20 @@ test('validation save cancel and confirmed deletion work without application Jav
   await page.getByRole('button', {name: 'Save complete workflow'}).click();
   await expect(page.getByRole('status')).toContainText('Configuration saved');
   await expect(page.getByLabel('Repository')).toHaveValue('no-js-saved');
+  await expect(page.getByRole('button', {name: 'Save complete workflow'})).toBeFocused();
 
   await page.getByRole('button', {name: 'Delete credential'}).click();
   let dialog = page.getByRole('dialog', {name: 'Delete credential?'});
   await expect(dialog).toHaveAttribute('open', '');
   await expect(dialog.getByRole('button', {name: 'Delete credential'})).toBeVisible();
   await dialog.getByRole('link', {name: 'Cancel'}).click();
-  await expect(page).toHaveURL(/\/configuration#delete-credential$/);
+  await expect(page).toHaveURL(/\/configuration\?__e2e_scenario=empty#delete-credential$/);
   await expect(page.locator('#credential-delete-dialog')).not.toHaveAttribute('open', '');
 
   await page.getByRole('button', {name: 'Delete credential'}).click();
   dialog = page.getByRole('dialog', {name: 'Delete credential?'});
   await dialog.getByRole('button', {name: 'Delete credential'}).click();
   await expect(page.getByRole('status')).toHaveText('Credential deleted.');
+  await expect(page.getByRole('button', {name: 'Delete credential'}).first()).toBeFocused();
   await expectNoAxeViolations(page);
 });

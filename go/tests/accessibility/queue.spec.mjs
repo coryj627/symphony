@@ -1,0 +1,153 @@
+import AxeBuilder from '@axe-core/playwright';
+import {test, expect, authorize, scenarioPath} from './fixtures.mjs';
+
+async function expectNoAxeViolations(page) {
+  const results = await new AxeBuilder({page})
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
+    .analyze();
+  expect(results.violations.map(({id, nodes}) => ({id, targets: nodes.map(node => node.target)}))).toEqual([]);
+}
+
+for (const [name, path] of [
+  ['empty', scenarioPath('/', 'empty')],
+  ['populated', scenarioPath('/issues', 'populated')],
+  ['stale error', scenarioPath('/', 'stale-error')],
+  ['filtered empty', `${scenarioPath('/issues', 'filtered-empty')}&state=Open`],
+  ['malicious provider text', scenarioPath('/issues/MAL-1', 'malicious-text')],
+  ['encoded identifier', scenarioPath('/issues/TEAM%2F%2342', 'encoded-identifier')],
+]) {
+  test(`${name} queue state has no axe violations`, async ({page}) => {
+    await authorize(page, path);
+    await expect(page.getByRole('status')).toHaveCount(0);
+    await expectNoAxeViolations(page);
+  });
+}
+
+test('wide table and narrow list expose the same candidate links exclusively', async ({page}) => {
+  await page.setViewportSize({width: 1100, height: 800});
+  await authorize(page, scenarioPath('/issues', 'populated'));
+  const table = page.getByRole('table', {name: 'Tracker work candidates'});
+  const list = page.getByRole('list', {name: 'Tracker work candidates'});
+  await expect(table).toBeVisible();
+  await expect(list).toBeHidden();
+  const wideIdentifiers = await table.getByRole('link').allTextContents();
+
+  await page.setViewportSize({width: 320, height: 900});
+  await expect(table).toBeHidden();
+  await expect(list).toBeVisible();
+  expect(await list.getByRole('link').allTextContents()).toEqual(wideIdentifiers);
+  const reflow = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+  expect(reflow[0]).toBeLessThanOrEqual(reflow[1]);
+});
+
+test('no-JavaScript issue filters survive list detail and return journeys', async ({page}) => {
+  await page.route('**/static/app.js', route => route.abort());
+  await authorize(page, scenarioPath('/issues', 'populated'));
+  await page.getByLabel('Search issues').fill('Improve');
+  await page.getByLabel('State').selectOption('Open');
+  await page.getByLabel('Eligibility').selectOption('routable');
+  await page.getByLabel('Sort issues').selectOption('identifier');
+  await page.getByRole('button', {name: 'Apply filters'}).click();
+  await page.getByRole('link', {name: 'SYM-123'}).first().click();
+  let current = new URL(page.url());
+  expect(Object.fromEntries(current.searchParams)).toMatchObject({
+    __e2e_scenario: 'populated', query: 'Improve', state: 'Open', eligibility: 'routable', sort: 'identifier',
+  });
+  await page.getByRole('link', {name: 'Return to filtered issues'}).click();
+  current = new URL(page.url());
+  expect(Object.fromEntries(current.searchParams)).toMatchObject({
+    __e2e_scenario: 'populated', query: 'Improve', state: 'Open', eligibility: 'routable', sort: 'identifier',
+  });
+  await expect(page.getByLabel('Search issues')).toHaveValue('Improve');
+  await expect(page.getByRole('link', {name: 'SYM-123'}).first()).toBeVisible();
+  await expect(page.getByRole('link', {name: 'SYM-124'})).toHaveCount(0);
+});
+
+test('encoded opaque identifier survives list link, detail, and navigation', async ({page}) => {
+  await page.route('**/static/app.js', route => route.abort());
+  await authorize(page, scenarioPath('/issues', 'encoded-identifier'));
+  await page.getByRole('link', {name: 'TEAM/#42'}).first().click();
+  await expect(page.getByRole('heading', {level: 1, name: 'Issue TEAM/#42'})).toBeVisible();
+  const current = new URL(page.url());
+  expect(current.pathname).toBe('/issues/TEAM%2F%2342');
+  expect(current.searchParams.get('__e2e_scenario')).toBe('encoded-identifier');
+  await page.getByRole('link', {name: 'Activity'}).click();
+  expect(new URL(page.url()).searchParams.get('__e2e_scenario')).toBe('encoded-identifier');
+});
+
+test('malicious provider text is text-only and unsafe URL is never linked', async ({page}) => {
+  await authorize(page, scenarioPath('/issues/MAL-1', 'malicious-text'));
+  await expect(page.getByText('<script>fixture-title-canary</script>', {exact: true})).toBeVisible();
+  await expect(page.getByText('<img src=x onerror=fixture-description-canary>', {exact: true})).toBeVisible();
+  await expect(page.locator('script', {hasText: 'fixture-title-canary'})).toHaveCount(0);
+  await expect(page.locator('img')).toHaveCount(0);
+  await expect(page.locator('a[href^="javascript:"]')).toHaveCount(0);
+  await expect(page.getByText('Routing details are unavailable.')).toBeVisible();
+});
+
+test('stale and provider failures remain persistent ordinary text', async ({page}) => {
+  await authorize(page, scenarioPath('/', 'stale-error'));
+  await expect(page.getByText(/last known/)).toBeVisible();
+  await expect(page.getByText('Configuration needs attention.')).toBeVisible();
+  await expect(page.getByText('Tracker is temporarily unavailable.')).toBeVisible();
+  await expect(page.getByRole('status')).toHaveCount(0);
+});
+
+test('refresh preserves scenario, restores focus, and announces one concise status', async ({page}) => {
+  await authorize(page, scenarioPath('/', 'populated'));
+  await page.getByRole('button', {name: 'Refresh tracker work'}).click();
+  const current = new URL(page.url());
+  expect(current.searchParams.get('__e2e_scenario')).toBe('populated');
+  expect(current.searchParams.get('result')).toBe('refresh-requested');
+  await expect(page.getByRole('status')).toHaveText('Refresh requested');
+  await expect(page.getByRole('status')).toHaveCount(1);
+  await expect(page.getByRole('button', {name: 'Refresh tracker work'})).toBeFocused();
+});
+
+test('refresh remains an ordinary form journey without JavaScript', async ({page}) => {
+  await page.route('**/static/app.js', route => route.abort());
+  await authorize(page, scenarioPath('/', 'populated'));
+  await page.getByRole('button', {name: 'Refresh tracker work'}).click();
+  const current = new URL(page.url());
+  expect(current.searchParams.get('__e2e_scenario')).toBe('populated');
+  expect(current.searchParams.get('result')).toBe('refresh-requested');
+  await expect(page.getByRole('status')).toHaveText('Refresh requested');
+  await expect(page.getByRole('button', {name: 'Refresh tracker work'})).toBeFocused();
+});
+
+test('maximum-length provider labels and operator request text reflow at 320 pixels', async ({page}) => {
+  await page.setViewportSize({width: 320, height: 900});
+  await authorize(page, scenarioPath('/issues/MAL-1', 'malicious-text'));
+  await expect(page.getByText('W'.repeat(512), {exact: true}).first()).toBeVisible();
+  const dimensions = await page.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    page: document.documentElement.scrollWidth,
+  }));
+  expect(dimensions.page).toBeLessThanOrEqual(dimensions.viewport);
+});
+
+test('valid scenario remains on navigation rendered inside an issue not-found document', async ({page}) => {
+  const response = await page.goto(scenarioPath('/issues/MISSING-1', 'issue-not-found'));
+  expect(response?.status()).toBe(404);
+  const activity = page.getByRole('link', {name: 'Activity'});
+  await expect(activity).toHaveAttribute('href', '/activity?__e2e_scenario=issue-not-found');
+  await activity.click();
+  expect(new URL(page.url()).searchParams.get('__e2e_scenario')).toBe('issue-not-found');
+  await expect(page.getByRole('heading', {level: 1, name: 'Activity'})).toBeVisible();
+});
+
+test('invalid and multiple scenario selectors fail closed for HTML and JSON', async ({page}) => {
+  for (const path of [
+    '/issues?__e2e_scenario=unknown',
+    '/issues?__e2e_scenario=empty&__e2e_scenario=populated',
+    `/issues?__e2e_scenario=${'x'.repeat(33)}`,
+    '/issues?__e2e_scenario=%ZZ',
+  ]) {
+    const response = await page.goto(path);
+    expect(response?.status()).toBe(404);
+    await expect(page).toHaveTitle('Page not found — Symphony');
+  }
+  const response = await page.request.get('/api/v1/state?__e2e_scenario=unknown');
+  expect(response.status()).toBe(404);
+  expect(await response.json()).toMatchObject({error: {code: 'not_found', retryable: false}});
+});
