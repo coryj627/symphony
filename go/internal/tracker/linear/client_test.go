@@ -71,7 +71,7 @@ func TestNewClonesTokenConfigAndCallerHTTPClient(t *testing.T) {
 func TestRequestUsesExactHeadersAndJSONEnvelopeWithClonedToken(t *testing.T) {
 	// Break caught: a Bearer prefix, missing content negotiation, or extra JSON
 	// field violates Linear's captured request/auth contract.
-	server := linearFixtureServer(t, fixtureResponse{Body: graphQLPage(nil, false, nil)})
+	server := linearScopedFixtureServer(t, fixtureResponse{Body: graphQLPage(nil, false, nil)})
 	token := []byte(tokenCanary)
 	adapter, err := New(defaultLinearConfig(server.URL()), token, server.Client(), nil)
 	if err != nil {
@@ -83,7 +83,7 @@ func TestRequestUsesExactHeadersAndJSONEnvelopeWithClonedToken(t *testing.T) {
 	if _, err := adapter.FetchIssuesByStates(context.Background(), []string{"Todo"}); err != nil {
 		t.Fatal(err)
 	}
-	request := server.Requests()[0]
+	request := issueRequests(server.Requests())[0]
 	if request.Header.Get("Authorization") != tokenCanary {
 		t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
 	}
@@ -115,7 +115,7 @@ func TestHTTPStatusesMapToPortableSafeErrors(t *testing.T) {
 		{name: "server error", status: http.StatusBadGateway, category: tracker.CategoryResponse, retryable: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := linearFixtureServer(t, fixtureResponse{Status: test.status, Body: tokenCanary})
+			server := linearScopedFixtureServer(t, fixtureResponse{Status: test.status, Body: tokenCanary})
 			_, err := newLinearAdapter(t, server).FetchIssuesByStates(context.Background(), []string{"Todo"})
 			portable := requireTrackerError(t, err, test.category)
 			if portable.Status != test.status || portable.Retryable != test.retryable {
@@ -183,7 +183,7 @@ func TestGraphQLErrorsRejectPartialDataAndUseOnlyStableExtensionCodes(t *testing
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := `{"data":{"issues":{"nodes":[` + rawFixtureIssue(t, fixtureIssue("LIN-12", "Todo", nil)) + `],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"errors":[{"message":"` + tokenCanary + ` provider detail","extensions":{"code":"` + test.code + `"}}]}`
-			server := linearFixtureServer(t, fixtureResponse{Status: test.status, Body: body})
+			server := linearScopedFixtureServer(t, fixtureResponse{Status: test.status, Body: body})
 			got, err := newLinearAdapter(t, server).FetchIssuesByStates(context.Background(), []string{"Todo"})
 			if got == nil || len(got) != 0 {
 				t.Fatalf("partial data returned: %#v", got)
@@ -202,7 +202,7 @@ func TestGraphQLErrorsRejectPartialDataAndUseOnlyStableExtensionCodes(t *testing
 func TestGraphQLErrorFixtureFailsWithoutPartialData(t *testing.T) {
 	// Break caught: the recorded provider contract fixture must exercise the
 	// same top-level error path as synthetic adversarial cases.
-	server := linearFixtureServer(t, fixtureResponse{File: "graphql-errors.json"})
+	server := linearScopedFixtureServer(t, fixtureResponse{File: "graphql-errors.json"})
 	got, err := newLinearAdapter(t, server).FetchIssuesByStates(context.Background(), []string{"Todo"})
 	if got == nil || len(got) != 0 {
 		t.Fatalf("partial result = %#v", got)
@@ -237,7 +237,7 @@ func TestRateLimitResetHeadersChooseLatestFutureAndCapDelay(t *testing.T) {
 func TestHTTP429UsesBoundedResetMetadata(t *testing.T) {
 	// Break caught: a 429 without a usable provider reset must still back off for
 	// a bounded nonzero interval rather than immediately hot-looping.
-	server := linearFixtureServer(t, fixtureResponse{Status: http.StatusTooManyRequests, Body: `{}`})
+	server := linearScopedFixtureServer(t, fixtureResponse{Status: http.StatusTooManyRequests, Body: `{}`})
 	_, err := newLinearAdapter(t, server).FetchIssuesByStates(context.Background(), []string{"Todo"})
 	portable := requireTrackerError(t, err, tracker.CategoryRateLimited)
 	if portable.Status != 429 || !portable.Retryable || portable.RetryAfter != time.Minute {
@@ -261,7 +261,7 @@ func TestResponseRequiresBoundedSingleCompleteSchemaEnvelope(t *testing.T) {
 		{name: "oversized", body: strings.Repeat("x", (4<<20)+1)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := linearFixtureServer(t, fixtureResponse{Body: test.body})
+			server := linearScopedFixtureServer(t, fixtureResponse{Body: test.body})
 			got, err := newLinearAdapter(t, server).FetchIssuesByStates(context.Background(), []string{"Todo"})
 			if got == nil || len(got) != 0 {
 				t.Fatalf("partial result = %#v", got)
@@ -304,7 +304,7 @@ func TestTransportCancellationAndReadFailuresAreSafeAndCloseBodies(t *testing.T)
 func TestRedirectIsNotFollowedAndAuthorizationNeverMoves(t *testing.T) {
 	// Break caught: even a same-origin redirect can move the captured
 	// authorization to an unapproved path; Task 3 disables all redirects.
-	server := linearFixtureServer(t, fixtureResponse{
+	server := linearScopedFixtureServer(t, fixtureResponse{
 		Status: http.StatusFound, Body: "redirect",
 		Headers: http.Header{"Location": []string{"/other"}},
 	})
@@ -319,7 +319,7 @@ func TestAdapterNeverReturnsOrLogsTokenCanary(t *testing.T) {
 	// Break caught: raw request/header/body/error logging creates a credential
 	// path before the centralized redactor is available.
 	buffer := &lockedBuffer{}
-	server := linearFixtureServer(t, fixtureResponse{Status: http.StatusInternalServerError, Body: tokenCanary})
+	server := linearScopedFixtureServer(t, fixtureResponse{Status: http.StatusInternalServerError, Body: tokenCanary})
 	adapter := mustNewLinearAdapter(t, defaultLinearConfig(server.URL()), server.Client(), slog.New(slog.NewTextHandler(buffer, nil)))
 	_, err := adapter.FetchIssuesByStates(context.Background(), []string{"Todo"})
 	if err == nil {
@@ -384,10 +384,14 @@ func TestCallerClientCookieJarIsNeverReadOrWritten(t *testing.T) {
 	// Break caught: sharing a caller-owned jar can attach unrelated cookies to
 	// Linear or let provider responses mutate caller state across adapters.
 	jar := &recordingJar{}
-	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := successfulBodyForLinearRequest(request, graphQLPage(nil, false, nil))
+		if err != nil {
+			return nil, err
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK, Header: http.Header{"Set-Cookie": []string{"session=provider"}},
-			Body: io.NopCloser(strings.NewReader(graphQLPage(nil, false, nil))),
+			Body: io.NopCloser(strings.NewReader(body)),
 		}, nil
 	})
 	caller := &http.Client{Transport: transport, Jar: jar}
@@ -409,9 +413,13 @@ func TestClientCloneRetainsCallerTransport(t *testing.T) {
 	// Break caught: rebuilding instead of cloning the supplied client discards
 	// TLS/test transports and makes endpoint verification unusable.
 	called := false
-	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		called = true
-		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(graphQLPage(nil, false, nil)))}, nil
+		body, err := successfulBodyForLinearRequest(request, graphQLPage(nil, false, nil))
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	})
 	caller := &http.Client{Transport: transport}
 	adapter := mustNewLinearAdapter(t, defaultLinearConfig("https://linear.example/graphql"), caller, nil)

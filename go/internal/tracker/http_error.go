@@ -23,6 +23,9 @@ const (
 	CategoryPagination Category = "tracker_pagination"
 	// CategoryRateLimited maps provider rate limiting and retry metadata.
 	CategoryRateLimited Category = "tracker_rate_limited"
+	// CategoryScope maps a configured provider repository or project that is
+	// missing or inaccessible to the selected credential.
+	CategoryScope Category = "tracker_scope"
 )
 
 const maxPortableErrorBytes = 1024

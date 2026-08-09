@@ -63,17 +63,17 @@ func cloneHTTPClient(client *http.Client) *http.Client {
 	return clone
 }
 
-func (adapter *Adapter) request(ctx context.Context, query string, variables map[string]any) (issuePage, error) {
+func (adapter *Adapter) request(ctx context.Context, query string, variables map[string]any) (json.RawMessage, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	payload, err := json.Marshal(graphQLRequest{Query: query, Variables: variables})
 	if err != nil {
-		return issuePage{}, configError("Linear request variables were invalid")
+		return nil, configError("Linear request variables were invalid")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, adapter.endpoint.String(), bytes.NewReader(payload))
 	if err != nil {
-		return issuePage{}, transportError(ctx, "Linear request could not be created")
+		return nil, transportError(ctx, "Linear request could not be created")
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
@@ -82,47 +82,55 @@ func (adapter *Adapter) request(ctx context.Context, query string, variables map
 
 	response, err := adapter.client.Do(request)
 	if err != nil {
-		return issuePage{}, transportError(ctx, "Linear request failed")
+		return nil, transportError(ctx, "Linear request failed")
 	}
 	defer response.Body.Close()
 
 	switch response.StatusCode {
 	case http.StatusUnauthorized:
-		return issuePage{}, &tracker.Error{Category: tracker.CategoryAuth, Message: "Linear authentication failed", Status: response.StatusCode}
+		return nil, &tracker.Error{Category: tracker.CategoryAuth, Message: "Linear authentication failed", Status: response.StatusCode}
 	case http.StatusForbidden:
-		return issuePage{}, &tracker.Error{Category: tracker.CategoryAuth, Message: "Linear authorization failed", Status: response.StatusCode}
+		return nil, &tracker.Error{Category: tracker.CategoryAuth, Message: "Linear authorization failed", Status: response.StatusCode}
 	case http.StatusTooManyRequests:
-		return issuePage{}, rateLimitError(response.StatusCode, response.Header, time.Now())
+		return nil, rateLimitError(response.StatusCode, response.Header, time.Now())
 	}
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusBadRequest {
-		return issuePage{}, statusError(response.StatusCode)
+		return nil, statusError(response.StatusCode)
 	}
 
 	if response.ContentLength > maxResponseBodyBytes {
-		return issuePage{}, payloadError("Linear response exceeded the size limit")
+		return nil, payloadError("Linear response exceeded the size limit")
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBodyBytes+1))
 	if err != nil {
-		return issuePage{}, transportError(ctx, "Linear response could not be read")
+		return nil, transportError(ctx, "Linear response could not be read")
 	}
 	if len(body) > maxResponseBodyBytes {
-		return issuePage{}, payloadError("Linear response exceeded the size limit")
+		return nil, payloadError("Linear response exceeded the size limit")
 	}
 
 	envelope, validEnvelope := decodeGraphQLEnvelope(body)
 	if response.StatusCode != http.StatusOK {
 		if response.StatusCode == http.StatusBadRequest && validEnvelope && len(envelope.errors) > 0 {
-			return issuePage{}, graphQLError(envelope.errors, response.StatusCode, response.Header, time.Now())
+			return nil, graphQLError(envelope.errors, response.StatusCode, response.Header, time.Now())
 		}
-		return issuePage{}, statusError(response.StatusCode)
+		return nil, statusError(response.StatusCode)
 	}
 	if !validEnvelope {
-		return issuePage{}, payloadError("Linear returned a malformed GraphQL envelope")
+		return nil, payloadError("Linear returned a malformed GraphQL envelope")
 	}
 	if len(envelope.errors) > 0 {
-		return issuePage{}, graphQLError(envelope.errors, response.StatusCode, response.Header, time.Now())
+		return nil, graphQLError(envelope.errors, response.StatusCode, response.Header, time.Now())
 	}
-	page, ok := decodeIssuePage(envelope.data)
+	return append(json.RawMessage(nil), envelope.data...), nil
+}
+
+func (adapter *Adapter) requestIssuePage(ctx context.Context, query string, variables map[string]any) (issuePage, error) {
+	data, err := adapter.request(ctx, query, variables)
+	if err != nil {
+		return issuePage{}, err
+	}
+	page, ok := decodeIssuePage(data)
 	if !ok {
 		return issuePage{}, payloadError("Linear returned a malformed issue payload")
 	}

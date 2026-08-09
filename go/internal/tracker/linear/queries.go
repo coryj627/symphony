@@ -1,5 +1,15 @@
 package linear
 
+const SymphonyProjectScope = `query SymphonyProjectScope(
+  $projectSlug: String!
+  $first: Int!
+) {
+  projects(filter: { slugId: { eq: $projectSlug } }, first: $first) {
+    nodes { id slugId }
+    pageInfo { hasNextPage }
+  }
+}`
+
 const SymphonyIssuesByStates = `query SymphonyIssuesByStates(
   $projectSlug: String!
   $stateNames: [String!]!

@@ -142,6 +142,8 @@ func statusError(status int, header http.Header) error {
 	switch status {
 	case http.StatusUnauthorized:
 		return &tracker.Error{Category: tracker.CategoryAuth, Message: "GitHub authentication failed", Status: status}
+	case http.StatusNotFound:
+		return &tracker.Error{Category: tracker.CategoryScope, Message: "GitHub repository is missing or inaccessible", Status: status}
 	case http.StatusForbidden:
 		if isRateLimited(header) {
 			return &tracker.Error{

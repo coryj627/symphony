@@ -382,26 +382,36 @@ func TestStateAPIKeepsWholeSnapshotRequestsAndCountsUnknownSourceErrors(t *testi
 }
 
 func TestStateAPIEmitsCommittedTrackerErrorCodeAndCountsIt(t *testing.T) {
-	runtime := &pageRuntimeFake{snapshot: domain.Snapshot{
-		EventCursor: domain.EventCursor{Epoch: "epoch-a"},
-		Tracker:     domain.TrackerStatus{ErrorCode: "tracker_error", Message: "Tracker operation failed."},
-	}, recent: domain.EventPage{LatestCursor: domain.EventCursor{Epoch: "epoch-a"}, Events: []domain.Event{}}}
-	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
-	recorder := serveDirect(t, handler, http.MethodGet, "/api/v1/state", "", nil)
-	var response struct {
-		Counts struct {
-			Errors int `json:"errors"`
-		} `json:"counts"`
-		Tracker struct {
-			ErrorCode string `json:"error_code"`
-			Message   string `json:"message"`
-		} `json:"tracker"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
-	if response.Counts.Errors != 1 || response.Tracker.ErrorCode != "tracker_error" || response.Tracker.Message != "Tracker operation failed." {
-		t.Fatalf("tracker failure = %d/%#v", response.Counts.Errors, response.Tracker)
+	for _, test := range []struct {
+		code    string
+		message string
+	}{
+		{code: "tracker_error", message: "Tracker operation failed."},
+		{code: "tracker_scope", message: "Tracker scope is unavailable."},
+	} {
+		t.Run(test.code, func(t *testing.T) {
+			runtime := &pageRuntimeFake{snapshot: domain.Snapshot{
+				EventCursor: domain.EventCursor{Epoch: "epoch-a"},
+				Tracker:     domain.TrackerStatus{ErrorCode: test.code, Message: test.message},
+			}, recent: domain.EventPage{LatestCursor: domain.EventCursor{Epoch: "epoch-a"}, Events: []domain.Event{}}}
+			handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+			recorder := serveDirect(t, handler, http.MethodGet, "/api/v1/state", "", nil)
+			var response struct {
+				Counts struct {
+					Errors int `json:"errors"`
+				} `json:"counts"`
+				Tracker struct {
+					ErrorCode string `json:"error_code"`
+					Message   string `json:"message"`
+				} `json:"tracker"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Counts.Errors != 1 || response.Tracker.ErrorCode != test.code || response.Tracker.Message != test.message {
+				t.Fatalf("tracker failure = %d/%#v", response.Counts.Errors, response.Tracker)
+			}
+		})
 	}
 }
 

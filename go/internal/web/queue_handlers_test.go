@@ -198,7 +198,7 @@ func TestOverviewShowsSafeScopeCountsSchedulerAndPersistentFailures(t *testing.T
 		Running: []domain.RunningRow{{IssueIdentifier: "ONE"}}, Retrying: []domain.RetryRow{{IssueIdentifier: "TWO"}}, Requests: []domain.OperatorRequest{{ID: "request"}},
 		Scheduler: domain.SchedulerStatus{Available: false, State: "unavailable", Message: "Scheduler unavailable"},
 		Config:    domain.ConfigStatus{State: "invalid", ErrorCode: "invalid_workflow", Message: "Configuration needs attention.", ChangedAt: now},
-		Tracker:   domain.TrackerStatus{Kind: "github", Scope: "safe/example", State: "failed", Stale: true, ErrorCode: "tracker_transport", Message: "Tracker is unavailable.", LastAttemptAt: &now},
+		Tracker:   domain.TrackerStatus{Kind: "github", Scope: "safe/example", State: "failed", Stale: true, ErrorCode: "tracker_scope", Message: "Tracker scope is unavailable.", LastAttemptAt: &now},
 	}}
 	handler := newTestPageHandler(t, PageOptions{Mode: "run", Queries: runtime, Commands: runtime})
 	recorder := serveDirect(t, handler, http.MethodGet, "/", "", nil)
@@ -206,7 +206,7 @@ func TestOverviewShowsSafeScopeCountsSchedulerAndPersistentFailures(t *testing.T
 		t.Fatalf("overview status = %d", recorder.Code)
 	}
 	html := recorder.Body.String()
-	for _, want := range []string{"Tracker scope", "safe/example", "Unavailable", "2", "1", "Configuration needs attention.", "Tracker is unavailable.", "last known", "Refresh tracker work"} {
+	for _, want := range []string{"Tracker scope", "safe/example", "Unavailable", "2", "1", "Configuration needs attention.", "Tracker scope is unavailable.", "last known", "Refresh tracker work"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("overview omitted %q", want)
 		}

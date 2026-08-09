@@ -18,6 +18,7 @@ func TestTrackerErrorCategoriesMatchPortableConcepts(t *testing.T) {
 		CategoryPayload,
 		CategoryPagination,
 		CategoryRateLimited,
+		CategoryScope,
 	}
 	want := []Category{
 		"tracker_config",
@@ -27,6 +28,7 @@ func TestTrackerErrorCategoriesMatchPortableConcepts(t *testing.T) {
 		"tracker_payload",
 		"tracker_pagination",
 		"tracker_rate_limited",
+		"tracker_scope",
 	}
 	for index := range want {
 		if got[index] != want[index] {

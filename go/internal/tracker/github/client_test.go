@@ -228,6 +228,7 @@ func TestClientMapsHTTPFailuresToPortableSafeCategoriesAndRetryMetadata(t *testi
 			name: "bounded retry after", status: http.StatusTooManyRequests, category: tracker.CategoryRateLimited, retryable: true,
 			headers: http.Header{"Retry-After": {"999999999999"}}, retryAfterAtMost: 24 * time.Hour,
 		},
+		{name: "missing repository scope", status: http.StatusNotFound, category: tracker.CategoryScope, messageContains: "missing or inaccessible"},
 		{name: "request timeout", status: http.StatusRequestTimeout, category: tracker.CategoryResponse, retryable: true},
 		{name: "server failure", status: http.StatusServiceUnavailable, category: tracker.CategoryResponse, retryable: true},
 		{name: "ordinary response", status: http.StatusUnprocessableEntity, category: tracker.CategoryResponse},
@@ -264,6 +265,39 @@ func TestClientMapsHTTPFailuresToPortableSafeCategoriesAndRetryMetadata(t *testi
 				}
 			}
 		})
+	}
+}
+
+func TestCollection404IsStaticScopeFailureButIssue404IsOmitted(t *testing.T) {
+	// Break caught: GitHub deliberately uses 404 for both invisible repositories
+	// and missing issues. Only the collection endpoint proves repository scope.
+	const bodyCanary = "provider-body-scope-canary"
+	collection := githubFixtureServer(t, []fixtureResponse{{
+		Path: "/repos/coryj627/symphony/issues", Query: "state=all&per_page=100&page=1",
+		Status: http.StatusNotFound, Body: bodyCanary,
+	}})
+	adapter := mustNewGitHubAdapter(t, defaultGitHubConfig(collection.URL), collection.Client(), nil)
+	issues, err := adapter.FetchIssuesByStates(context.Background(), []string{"open"})
+	if issues == nil || len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+	portable := requireTrackerError(t, err, tracker.CategoryScope)
+	if portable.Message != "GitHub repository is missing or inaccessible" || portable.Retryable || portable.Status != http.StatusNotFound {
+		t.Fatalf("scope error = %#v", portable)
+	}
+	for _, forbidden := range []string{bodyCanary, tokenCanary, collection.URL} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Fatalf("scope error leaked %q: %v", forbidden, err)
+		}
+	}
+
+	issue := githubFixtureServer(t, []fixtureResponse{{
+		Path: "/repos/coryj627/symphony/issues/42", Status: http.StatusNotFound, Body: bodyCanary,
+	}})
+	adapter = mustNewGitHubAdapter(t, defaultGitHubConfig(issue.URL), issue.Client(), nil)
+	issues, err = adapter.FetchIssuesByIDs(context.Background(), []string{"github:coryj627/symphony#42"})
+	if err != nil || issues == nil || len(issues) != 0 {
+		t.Fatalf("missing issue result = %#v, %v", issues, err)
 	}
 }
 

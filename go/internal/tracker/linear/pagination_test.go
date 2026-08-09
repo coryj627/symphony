@@ -23,7 +23,7 @@ func TestStatePaginationRejectsContinuingMissingNullOrBlankCursorAsPagination(t 
 		{name: "blank", body: graphQLPage(nil, true, " ")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := linearFixtureServer(t, fixtureResponse{Body: test.body})
+			server := linearScopedFixtureServer(t, fixtureResponse{Body: test.body})
 			got, err := newLinearAdapter(t, server).FetchIssuesByStates(context.Background(), []string{"Todo"})
 			if got == nil || len(got) != 0 {
 				t.Fatalf("partial result = %#v", got)
@@ -42,7 +42,7 @@ func TestIssuePageRejectsNumericCursorAsPayload(t *testing.T) {
 			name = "continuing"
 		}
 		t.Run(name, func(t *testing.T) {
-			server := linearFixtureServer(t, fixtureResponse{Body: graphQLPage(nil, hasNext, 123)})
+			server := linearScopedFixtureServer(t, fixtureResponse{Body: graphQLPage(nil, hasNext, 123)})
 			got, err := newLinearAdapter(t, server).FetchIssuesByStates(context.Background(), []string{"Todo"})
 			if got == nil || len(got) != 0 {
 				t.Fatalf("partial result = %#v", got)
@@ -55,7 +55,7 @@ func TestIssuePageRejectsNumericCursorAsPayload(t *testing.T) {
 func TestStatePaginationRejectsRepeatedCursorWithoutPartialOutput(t *testing.T) {
 	// Break caught: accepting a repeated cursor loops until resource exhaustion
 	// and may duplicate issues in the visible queue.
-	server := linearFixtureServer(t,
+	server := linearScopedFixtureServer(t,
 		fixtureResponse{Body: graphQLPage([]map[string]any{fixtureIssue("LIN-1", "Todo", nil)}, true, "cursor-a")},
 		fixtureResponse{Body: graphQLPage([]map[string]any{fixtureIssue("LIN-2", "Todo", nil)}, true, "cursor-a")},
 	)
@@ -73,7 +73,7 @@ func TestStatePaginationCapsOneHundredPages(t *testing.T) {
 	for request := 1; request <= 200; request++ {
 		responses[request-1] = fixtureResponse{Body: graphQLPage(nil, true, fmt.Sprintf("cursor-%d", request))}
 	}
-	server := linearFixtureServer(t, responses...)
+	server := linearScopedFixtureServer(t, responses...)
 	got, err := newLinearAdapter(t, server).FetchIssuesByStates(context.Background(), []string{"Todo"})
 	if got == nil || len(got) != 0 {
 		t.Fatalf("partial result = %#v", got)
@@ -85,7 +85,7 @@ func TestEveryLinearGraphQLRequestStaysBelowComplexityCeiling(t *testing.T) {
 	// Break caught: restoring a root first=50 makes both fixed query documents
 	// exceed Linear's hard 10,000-point per-query complexity limit.
 	t.Run("state logical page", func(t *testing.T) {
-		server := linearFixtureServer(t,
+		server := linearScopedFixtureServer(t,
 			fixtureResponse{Body: graphQLPage(nil, true, "cursor-40")},
 			fixtureResponse{Body: graphQLPage(nil, false, nil)},
 		)
@@ -93,7 +93,7 @@ func TestEveryLinearGraphQLRequestStaysBelowComplexityCeiling(t *testing.T) {
 		if err != nil || got == nil || len(got) != 0 {
 			t.Fatalf("result = %#v, %v", got, err)
 		}
-		assertComplexitySafeRequests(t, server.Requests(), SymphonyIssuesByStates, []int{40, 10})
+		assertComplexitySafeRequests(t, issueRequests(server.Requests()), SymphonyIssuesByStates, []int{40, 10})
 	})
 
 	t.Run("ID logical batch", func(t *testing.T) {
@@ -101,7 +101,7 @@ func TestEveryLinearGraphQLRequestStaysBelowComplexityCeiling(t *testing.T) {
 		for index := range ids {
 			ids[index] = "issue-" + strconv.Itoa(index+1)
 		}
-		server := linearFixtureServer(t,
+		server := linearScopedFixtureServer(t,
 			fixtureResponse{Body: graphQLPage(nil, false, nil)},
 			fixtureResponse{Body: graphQLPage(nil, false, nil)},
 		)
@@ -109,14 +109,14 @@ func TestEveryLinearGraphQLRequestStaysBelowComplexityCeiling(t *testing.T) {
 		if err != nil || got == nil || len(got) != 0 {
 			t.Fatalf("result = %#v, %v", got, err)
 		}
-		assertComplexitySafeRequests(t, server.Requests(), SymphonyIssuesByIDs, []int{40, 10})
+		assertComplexitySafeRequests(t, issueRequests(server.Requests()), SymphonyIssuesByIDs, []int{40, 10})
 	})
 }
 
 func TestStatePaginationLateFailureReturnsNoEarlierPages(t *testing.T) {
 	// Break caught: state polling is one logical atomic read; page one must not
 	// reach the scheduler when page two fails.
-	server := linearFixtureServer(t,
+	server := linearScopedFixtureServer(t,
 		fixtureResponse{Body: graphQLPage([]map[string]any{fixtureIssue("LIN-1", "Todo", nil)}, true, "cursor-a")},
 		fixtureResponse{Status: 502, Body: "provider detail"},
 	)
@@ -130,7 +130,7 @@ func TestStatePaginationLateFailureReturnsNoEarlierPages(t *testing.T) {
 func TestStatePaginationPreservesProviderPageOrder(t *testing.T) {
 	// Break caught: sorting or set-based accumulation inside the adapter changes
 	// provider page order before orchestration applies its own stable sort.
-	server := linearFixtureServer(t,
+	server := linearScopedFixtureServer(t,
 		fixtureResponse{Body: graphQLPage([]map[string]any{fixtureIssue("LIN-3", "Todo", nil), fixtureIssue("LIN-1", "Todo", nil)}, true, "cursor-a")},
 		fixtureResponse{Body: graphQLPage([]map[string]any{fixtureIssue("LIN-2", "Todo", nil)}, false, nil)},
 	)
@@ -157,7 +157,7 @@ func TestStatePaginationRejectsDuplicateDispatchIdentityOrIdentifier(t *testing.
 		}()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := linearFixtureServer(t, fixtureResponse{Body: graphQLPage(test.nodes, false, nil)})
+			server := linearScopedFixtureServer(t, fixtureResponse{Body: graphQLPage(test.nodes, false, nil)})
 			got, err := newLinearAdapter(t, server).FetchIssuesByStates(context.Background(), []string{"Todo"})
 			if got == nil || len(got) != 0 {
 				t.Fatalf("partial result = %#v", got)

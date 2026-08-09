@@ -1545,9 +1545,15 @@ func safeTrackerFailure(err error) (tracker.Error, error) {
 			fallback := tracker.Error{Message: "Tracker operation failed."}
 			return fallback, errors.New("tracker_error")
 		}
+		retryable := portable.Retryable
+		retryAfter := portable.RetryAfter
+		if portable.Category == tracker.CategoryScope {
+			retryable = false
+			retryAfter = 0
+		}
 		clone := tracker.Error{
-			Category: portable.Category, Retryable: portable.Retryable,
-			RetryAfter: portable.RetryAfter,
+			Category: portable.Category, Retryable: retryable,
+			RetryAfter: retryAfter,
 			Message:    trackerFailureMessage(portable.Category),
 		}
 		return clone, &clone
@@ -1564,7 +1570,8 @@ func knownTrackerCategory(category tracker.Category) bool {
 		tracker.CategoryResponse,
 		tracker.CategoryPayload,
 		tracker.CategoryPagination,
-		tracker.CategoryRateLimited:
+		tracker.CategoryRateLimited,
+		tracker.CategoryScope:
 		return true
 	default:
 		return false
@@ -1587,6 +1594,8 @@ func trackerFailureMessage(category tracker.Category) string {
 		return "Tracker pagination could not be completed."
 	case tracker.CategoryRateLimited:
 		return "Tracker rate limit is active."
+	case tracker.CategoryScope:
+		return "Tracker scope is unavailable."
 	default:
 		return "Tracker operation failed."
 	}

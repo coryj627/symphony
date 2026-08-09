@@ -1,4 +1,4 @@
-name: Go Phase 1
+name: Go CI
 
 on:
   pull_request:
@@ -10,15 +10,16 @@ permissions:
   contents: read
 
 jobs:
-  phase-1:
-    name: Phase 1 (${{ matrix.os }})
+  build-test:
+    name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         os:
-          - windows-latest
-          - macos-latest
+          - macos-15
+          - windows-2025
     defaults:
       run:
         working-directory: go
@@ -33,14 +34,15 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          cache: false
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.18.0
-          cache: npm
-          cache-dependency-path: go/package-lock.json
+
+      - name: Build Symphony
+        run: go build ./cmd/symphony
 
       - name: Test Go
         run: go test ./...
@@ -51,6 +53,42 @@ jobs:
       - name: Test Go with the race detector
         if: runner.os == 'macOS'
         run: go test -race ./...
+
+      - name: Verify disabled GitHub live profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/github 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 0
+          case "$output" in
+            *"SKIPPED: GitHub live profile not enabled"*) ;;
+            *)
+              echo "::error::GitHub disabled profile did not emit its exact sentinel" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Verify disabled Linear live profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/linear 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 0
+          case "$output" in
+            *"SKIPPED: Linear live profile not enabled"*) ;;
+            *)
+              echo "::error::Linear disabled profile did not emit its exact sentinel" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Install Node dependencies
         run: npm ci
@@ -69,7 +107,7 @@ jobs:
 
   source-accessibility:
     name: Source accessibility
-    runs-on: macos-latest
+    runs-on: macos-15
     defaults:
       run:
         working-directory: go

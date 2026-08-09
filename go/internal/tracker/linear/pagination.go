@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/coryj627/symphony/go/internal/tracker"
 )
@@ -37,7 +39,7 @@ func (adapter *Adapter) fetchStatePages(ctx context.Context, stateNames []string
 		remaining := linearLogicalPageSize
 		for remaining > 0 {
 			first := min(linearRequestPageSize, remaining)
-			page, err := adapter.request(ctx, SymphonyIssuesByStates, map[string]any{
+			page, err := adapter.requestIssuePage(ctx, SymphonyIssuesByStates, map[string]any{
 				"projectSlug":   adapter.config.ProjectSlug,
 				"stateNames":    append([]string(nil), stateNames...),
 				"first":         first,
@@ -78,7 +80,7 @@ func (adapter *Adapter) fetchIDBatches(ctx context.Context, ids []string) ([]idB
 		for start := logicalStart; start < logicalEnd; start += linearRequestPageSize {
 			end := min(start+linearRequestPageSize, logicalEnd)
 			batchIDs := append([]string(nil), ids[start:end]...)
-			page, err := adapter.request(ctx, SymphonyIssuesByIDs, map[string]any{
+			page, err := adapter.requestIssuePage(ctx, SymphonyIssuesByIDs, map[string]any{
 				"ids":           batchIDs,
 				"projectSlug":   adapter.config.ProjectSlug,
 				"first":         len(batchIDs),
@@ -134,8 +136,13 @@ func uniqueOpaqueIDs(ids []string) ([]string, error) {
 	seen := make(map[string]struct{}, len(ids))
 	unique := make([]string, 0, len(ids))
 	for _, id := range ids {
-		if strings.TrimSpace(id) == "" {
-			return nil, configError("Linear issue IDs must be nonblank opaque strings")
+		if id == "" || len(id) > 256 || !utf8.ValidString(id) || strings.TrimSpace(id) != id {
+			return nil, configError("Linear issue IDs must be valid opaque strings")
+		}
+		for _, current := range id {
+			if unicode.IsControl(current) {
+				return nil, configError("Linear issue IDs must be valid opaque strings")
+			}
 		}
 		if _, found := seen[id]; found {
 			continue

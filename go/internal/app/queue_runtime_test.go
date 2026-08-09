@@ -490,6 +490,7 @@ func TestKnownTrackerCategoriesRetainOnlyStableRetryFields(t *testing.T) {
 		tracker.CategoryPayload,
 		tracker.CategoryPagination,
 		tracker.CategoryRateLimited,
+		tracker.CategoryScope,
 	} {
 		category := category
 		t.Run(string(category), func(t *testing.T) {
@@ -497,13 +498,90 @@ func TestKnownTrackerCategoriesRetainOnlyStableRetryFields(t *testing.T) {
 				Category: category, Message: "raw-known-message-canary", Retryable: true,
 				RetryAfter: 17 * time.Second, Status: 599,
 			})
-			if portable.Category != category || portable.Message != trackerFailureMessage(category) || !portable.Retryable || portable.RetryAfter != 17*time.Second || portable.Status != 0 {
+			wantRetryable := true
+			wantRetryAfter := 17 * time.Second
+			if category == tracker.CategoryScope {
+				wantRetryable = false
+				wantRetryAfter = 0
+			}
+			if portable.Category != category || portable.Message != trackerFailureMessage(category) || portable.Retryable != wantRetryable || portable.RetryAfter != wantRetryAfter || portable.Status != 0 {
 				t.Fatalf("known category %q normalization = %#v", category, portable)
 			}
 			if returned == nil || !strings.Contains(returned.Error(), string(category)) || strings.Contains(returned.Error(), "raw-known-message-canary") || strings.Contains(returned.Error(), "599") {
 				t.Fatalf("known category %q returned error = %v", category, returned)
 			}
 		})
+	}
+}
+
+func TestTrackerScopeFailureReachesStatusEventAndLogWithFixedMessage(t *testing.T) {
+	t.Parallel()
+	const rawMessageCanary = "provider-scope-detail-canary"
+	adapter := &fakeAdapter{fetches: []fakeFetch{
+		{issues: []domain.Issue{validIssue("GH-1")}},
+		{err: &tracker.Error{Category: tracker.CategoryScope, Message: rawMessageCanary, Retryable: true, RetryAfter: 12 * time.Hour, Status: 404}},
+	}}
+	factory := &fakeFactory{adapters: []tracker.Adapter{adapter}}
+	store := &fakeWorkflowStore{current: validQueueSnapshot("github", "", "digest-1"), hasCurrent: true, changes: make(chan workflow.Change, 1)}
+	clock := newFakeQueueClock()
+	journal := observability.NewJournal(observability.JournalOptions{})
+	logger, logs, err := observability.NewLogger(observability.Options{DataDir: t.TempDir(), Stderr: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := newQueueRuntimeWithDependencies(QueueOptions{
+		Enabled: true, Store: store, Factory: factory, Resolver: &fakeResolver{value: []byte("test-token")},
+		Journal: journal, Logger: logger,
+	}, queueDependencies{now: clock.Now, after: clock.After, jitter: func(time.Duration) time.Duration { return 0 }})
+	t.Cleanup(func() {
+		_ = runtime.Shutdown(context.Background())
+		_ = logs.Close()
+	})
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, refreshErr := runtime.Refresh(context.Background())
+	if refreshErr == nil || refreshErr.Error() != "tracker_scope: Tracker scope is unavailable." {
+		t.Fatalf("refresh error = %v", refreshErr)
+	}
+	snapshot, err := runtime.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := journal.After(domain.EventCursor{Epoch: journal.Epoch(), Sequence: 0})
+	logPage, err := logs.Query(context.Background(), observability.LogQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(struct {
+		Snapshot domain.Snapshot
+		Events   domain.EventPage
+		Logs     observability.LogPage
+	}{snapshot, page, logPage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Tracker.ErrorCode != "tracker_scope" || snapshot.Tracker.Message != "Tracker scope is unavailable." || snapshot.Tracker.Retryable || snapshot.Tracker.RetryAt != nil {
+		t.Fatalf("scope status = %#v", snapshot.Tracker)
+	}
+	if len(page.Events) != 2 || page.Events[1].Data["error_code"] != "tracker_scope" || page.Events[1].Data["retryable"] != false {
+		t.Fatalf("scope events = %#v", page)
+	}
+	foundScopeLog := false
+	for _, record := range logPage.Records {
+		if record.Message != "queue_refresh_failed" {
+			continue
+		}
+		if record.Fields["error_code"] != "tracker_scope" {
+			t.Fatalf("scope log fields = %#v", record.Fields)
+		}
+		foundScopeLog = true
+	}
+	if !foundScopeLog {
+		t.Fatalf("scope failure log missing: %#v", logPage.Records)
+	}
+	if strings.Contains(string(encoded), rawMessageCanary) {
+		t.Fatalf("scope evidence was unsafe: %s", encoded)
 	}
 }
 

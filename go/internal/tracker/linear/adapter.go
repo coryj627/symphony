@@ -52,6 +52,9 @@ func (adapter *Adapter) FetchIssuesByStates(ctx context.Context, states []string
 	if len(stateNames) == 0 {
 		return emptyIssues(), nil
 	}
+	if err := adapter.verifyProjectScope(ctx); err != nil {
+		return emptyIssues(), err
+	}
 	pages, err := adapter.fetchStatePages(ctx, stateNames)
 	if err != nil {
 		return emptyIssues(), err
@@ -96,6 +99,9 @@ func (adapter *Adapter) FetchIssuesByIDs(ctx context.Context, ids []string) ([]d
 	}
 	unique, err := uniqueOpaqueIDs(ids)
 	if err != nil {
+		return emptyIssues(), err
+	}
+	if err := adapter.verifyProjectScope(ctx); err != nil {
 		return emptyIssues(), err
 	}
 	batches, err := adapter.fetchIDBatches(ctx, unique)

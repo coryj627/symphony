@@ -434,7 +434,7 @@ func cleanCode(value string) string {
 		}
 	}
 	switch value {
-	case "tracker_config", "tracker_auth", "tracker_transport", "tracker_response", "tracker_payload", "tracker_pagination", "tracker_rate_limited", "tracker_error", "invalid_workflow", "refresh_failed":
+	case "tracker_config", "tracker_auth", "tracker_transport", "tracker_response", "tracker_payload", "tracker_pagination", "tracker_rate_limited", "tracker_scope", "tracker_error", "invalid_workflow", "refresh_failed":
 		return value
 	default:
 		return ""

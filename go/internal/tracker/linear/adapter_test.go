@@ -48,7 +48,7 @@ func TestAdapterImplementsLiveTaskOneContract(t *testing.T) {
 func TestFetchIssuesByStatesFollowsCursorAndLocksEveryScopeVariable(t *testing.T) {
 	// Break caught: omitting a cursor or scope/state variable can return only the
 	// first page or mix another Linear project into the candidate set.
-	server := linearFixtureServer(t,
+	server := linearScopedFixtureServer(t,
 		fixtureResponse{File: "candidates-page-1.json"},
 		fixtureResponse{File: "candidates-page-2.json"},
 	)
@@ -61,7 +61,7 @@ func TestFetchIssuesByStatesFollowsCursorAndLocksEveryScopeVariable(t *testing.T
 		t.Fatalf("valid page results lost dispatchability: %#v", got)
 	}
 
-	requests := server.Requests()
+	requests := issueRequests(server.Requests())
 	if len(requests) != 2 {
 		t.Fatalf("requests = %d, want 2", len(requests))
 	}
@@ -96,13 +96,13 @@ func TestFetchIssuesByStatesSupportsArbitraryRequestedProviderStates(t *testing.
 	// Break caught: hardcoding the default active states prevents the same read
 	// operation from serving terminal startup cleanup and authored workflows.
 	node := fixtureIssue("LIN-40", "Archived", nil)
-	server := linearFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{node}, false, nil)})
+	server := linearScopedFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{node}, false, nil)})
 	got, err := newLinearAdapter(t, server).FetchIssuesByStates(context.Background(), []string{" Archived "})
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertIdentifiers(t, got, []string{"LIN-40"})
-	if values := server.Requests()[0].Variables["stateNames"]; !reflect.DeepEqual(values, []any{"Archived"}) {
+	if values := issueRequests(server.Requests())[0].Variables["stateNames"]; !reflect.DeepEqual(values, []any{"Archived"}) {
 		t.Fatalf("stateNames = %#v", values)
 	}
 }
@@ -126,7 +126,7 @@ func TestFetchIssuesByStatesOmitsMalformedRecordsWithStaticSafeWarning(t *testin
 	malformed["description"] = tokenCanary
 	buffer := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(buffer, nil))
-	server := linearFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{valid, malformed}, false, nil)})
+	server := linearScopedFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{valid, malformed}, false, nil)})
 	adapter := mustNewLinearAdapter(t, defaultLinearConfig(server.URL()), server.Client(), logger)
 	got, err := adapter.FetchIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
@@ -157,7 +157,7 @@ func TestFetchIssuesByStatesOmitsOutOfScopeUnexpectedStateAndTruncatedLabels(t *
 	wrongState := fixtureIssue("LIN-14", "Done", nil)
 	truncated := fixtureIssue("LIN-15", "Todo", nil)
 	truncated["labels"].(map[string]any)["pageInfo"] = map[string]any{"hasNextPage": true}
-	server := linearFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{valid, outOfScope, wrongState, truncated}, false, nil)})
+	server := linearScopedFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{valid, outOfScope, wrongState, truncated}, false, nil)})
 	got, err := newLinearAdapter(t, server).FetchIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func TestFetchIssuesByIDsBatchesFiftyDeduplicatesAndPreservesFirstSeenInputs(t *
 	}
 	ids = append(ids, "issue-1", "issue-51")
 	lastNode := fixtureIssue("LIN-51", "Done", nil)
-	server := linearFixtureServer(t,
+	server := linearScopedFixtureServer(t,
 		fixtureResponse{Body: graphQLPage(logicalNodes[:40], false, nil)},
 		fixtureResponse{Body: graphQLPage(logicalNodes[40:], false, nil)},
 		fixtureResponse{Body: graphQLPage([]map[string]any{lastNode}, false, nil)},
@@ -189,7 +189,7 @@ func TestFetchIssuesByIDsBatchesFiftyDeduplicatesAndPreservesFirstSeenInputs(t *
 	if len(got) != 51 {
 		t.Fatalf("issues = %d, want 51", len(got))
 	}
-	requests := server.Requests()
+	requests := issueRequests(server.Requests())
 	if len(requests) != 3 {
 		t.Fatalf("requests = %d", len(requests))
 	}
@@ -239,7 +239,7 @@ func TestFetchIssuesByIDsRejectsIssueFromDifferentInternalRequest(t *testing.T) 
 	for index := range ids {
 		ids[index] = "issue-" + jsonNumber(index+1)
 	}
-	server := linearFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{
+	server := linearScopedFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{
 		fixtureIssue("LIN-41", "In Progress", nil),
 	}, false, nil)})
 	got, err := newLinearAdapter(t, server).FetchIssuesByIDs(context.Background(), ids)
@@ -254,7 +254,7 @@ func TestFetchIssuesByIDsOmitsMissingAndOutOfProjectRequestedIDs(t *testing.T) {
 	// match changes reconciliation meaning and crosses configured scope.
 	outOfProject := fixtureIssue("LIN-2", "In Progress", nil)
 	outOfProject["project"].(map[string]any)["slugId"] = "other"
-	server := linearFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{outOfProject}, false, nil)})
+	server := linearScopedFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{outOfProject}, false, nil)})
 	got, err := newLinearAdapter(t, server).FetchIssuesByIDs(context.Background(), []string{"issue-1", "issue-2"})
 	if err != nil {
 		t.Fatal(err)
@@ -282,7 +282,7 @@ func TestFetchIssuesByIDsRejectsUnexpectedDuplicateAndIdentifierCollision(t *tes
 		}()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := linearFixtureServer(t, fixtureResponse{Body: graphQLPage(test.nodes, false, nil)})
+			server := linearScopedFixtureServer(t, fixtureResponse{Body: graphQLPage(test.nodes, false, nil)})
 			got, err := newLinearAdapter(t, server).FetchIssuesByIDs(context.Background(), test.ids)
 			if got == nil || len(got) != 0 {
 				t.Fatalf("partial result = %#v", got)
@@ -315,7 +315,7 @@ func TestFetchIssuesByIDsFailsAtomicallyOnLateMalformedBatch(t *testing.T) {
 	ids[50] = "issue-51"
 	bad := fixtureIssue("LIN-51", "In Progress", nil)
 	bad["title"] = nil
-	server := linearFixtureServer(t,
+	server := linearScopedFixtureServer(t,
 		fixtureResponse{Body: graphQLPage(logicalNodes[:40], false, nil)},
 		fixtureResponse{Body: graphQLPage(logicalNodes[40:], false, nil)},
 		fixtureResponse{Body: graphQLPage([]map[string]any{bad}, false, nil)},
@@ -331,7 +331,7 @@ func TestFetchIssuesByIDsRejectsBatchThatClaimsAnotherPage(t *testing.T) {
 	// Break caught: silently ignoring hasNextPage loses requested refresh rows
 	// while reporting a complete ID batch.
 	node := fixtureIssue("LIN-1", "In Progress", nil)
-	server := linearFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{node}, true, "next")})
+	server := linearScopedFixtureServer(t, fixtureResponse{Body: graphQLPage([]map[string]any{node}, true, "next")})
 	got, err := newLinearAdapter(t, server).FetchIssuesByIDs(context.Background(), []string{"issue-1"})
 	if got == nil || len(got) != 0 {
 		t.Fatalf("partial result = %#v", got)
@@ -362,10 +362,18 @@ func TestAdapterConcurrentReadsAreRaceSafe(t *testing.T) {
 	const readers = 24
 	responseBody := graphQLPage([]map[string]any{fixtureIssue("LIN-1", "Todo", nil)}, false, nil)
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body := responseBody
+		var operation graphQLRequest
+		if err := json.NewDecoder(request.Body).Decode(&operation); err != nil {
+			return nil, err
+		}
+		if operation.Query == SymphonyProjectScope {
+			body = projectScopeBody([]projectScopeFixture{{ID: "project-1", Slug: "symphony"}}, false)
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(responseBody)),
+			Body:       io.NopCloser(strings.NewReader(body)),
 			Request:    request,
 		}, nil
 	})}

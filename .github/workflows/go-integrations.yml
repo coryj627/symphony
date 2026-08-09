@@ -1,0 +1,229 @@
+name: Go provider integrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      github:
+        description: Run the GitHub live integration profile
+        required: true
+        type: boolean
+        default: false
+      linear:
+        description: Run the Linear live integration profile
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  selected-ref-guard:
+    name: Reject selected providers outside main
+    if: ${{ (inputs.github == true || inputs.linear == true) && github.ref != 'refs/heads/main' }}
+    runs-on: macos-15
+
+    steps:
+      - name: Reject selected providers outside main
+        shell: bash
+        run: |
+          echo "::error::Selected provider integrations require refs/heads/main."
+          exit 1
+
+  github-live:
+    name: GitHub live (${{ matrix.os }})
+    if: ${{ inputs.github == true && github.ref == 'refs/heads/main' }}
+    environment: github-live
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os:
+          - macos-15
+          - windows-2025
+    defaults:
+      run:
+        working-directory: go
+
+    steps:
+      - name: Checkout dispatched SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
+      - name: Verify GitHub live prerequisites
+        shell: bash
+        env:
+          SYMPHONY_GITHUB_TEST_REPO: ${{ secrets.SYMPHONY_GITHUB_TEST_REPO }}
+          SYMPHONY_GITHUB_TEST_TOKEN: ${{ secrets.SYMPHONY_GITHUB_TEST_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SYMPHONY_GITHUB_TEST_REPO:-}" ]]; then
+            echo "::error::SYMPHONY_GITHUB_TEST_REPO is required"
+            exit 1
+          fi
+          if [[ -z "${SYMPHONY_GITHUB_TEST_TOKEN:-}" ]]; then
+            echo "::error::SYMPHONY_GITHUB_TEST_TOKEN is required"
+            exit 1
+          fi
+
+      - name: Run GitHub live profile
+        shell: bash
+        env:
+          SYMPHONY_RUN_GITHUB_LIVE: '1'
+          SYMPHONY_GITHUB_TEST_REPO: ${{ secrets.SYMPHONY_GITHUB_TEST_REPO }}
+          SYMPHONY_GITHUB_TEST_TOKEN: ${{ secrets.SYMPHONY_GITHUB_TEST_TOKEN }}
+        run: go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/github
+
+  linear-live:
+    name: Linear live (${{ matrix.os }})
+    if: ${{ inputs.linear == true && github.ref == 'refs/heads/main' }}
+    environment: linear-live
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os:
+          - macos-15
+          - windows-2025
+    defaults:
+      run:
+        working-directory: go
+
+    steps:
+      - name: Checkout dispatched SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
+      - name: Verify Linear live prerequisites
+        shell: bash
+        env:
+          SYMPHONY_LINEAR_TEST_PROJECT: ${{ secrets.SYMPHONY_LINEAR_TEST_PROJECT }}
+          SYMPHONY_LINEAR_TEST_TOKEN: ${{ secrets.SYMPHONY_LINEAR_TEST_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SYMPHONY_LINEAR_TEST_PROJECT:-}" ]]; then
+            echo "::error::SYMPHONY_LINEAR_TEST_PROJECT is required"
+            exit 1
+          fi
+          if [[ -z "${SYMPHONY_LINEAR_TEST_TOKEN:-}" ]]; then
+            echo "::error::SYMPHONY_LINEAR_TEST_TOKEN is required"
+            exit 1
+          fi
+
+      - name: Run Linear live profile
+        shell: bash
+        env:
+          SYMPHONY_RUN_LINEAR_LIVE: '1'
+          SYMPHONY_LINEAR_TEST_PROJECT: ${{ secrets.SYMPHONY_LINEAR_TEST_PROJECT }}
+          SYMPHONY_LINEAR_TEST_TOKEN: ${{ secrets.SYMPHONY_LINEAR_TEST_TOKEN }}
+        run: go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/linear
+
+  github-disabled:
+    name: GitHub disabled (${{ matrix.os }})
+    if: ${{ inputs.github == false }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os:
+          - macos-15
+          - windows-2025
+    defaults:
+      run:
+        working-directory: go
+
+    steps:
+      - name: Checkout dispatched SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
+      - name: Verify disabled GitHub live profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/github 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 0
+          case "$output" in
+            *"SKIPPED: GitHub live profile not enabled"*) ;;
+            *)
+              echo "::error::GitHub disabled profile did not emit its exact sentinel" >&2
+              exit 1
+              ;;
+          esac
+
+  linear-disabled:
+    name: Linear disabled (${{ matrix.os }})
+    if: ${{ inputs.linear == false }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os:
+          - macos-15
+          - windows-2025
+    defaults:
+      run:
+        working-directory: go
+
+    steps:
+      - name: Checkout dispatched SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
+      - name: Verify disabled Linear live profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/linear 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 0
+          case "$output" in
+            *"SKIPPED: Linear live profile not enabled"*) ;;
+            *)
+              echo "::error::Linear disabled profile did not emit its exact sentinel" >&2
+              exit 1
+              ;;
+          esac
