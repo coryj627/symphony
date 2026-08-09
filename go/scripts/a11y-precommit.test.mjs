@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
 
 import {run} from './a11y-precommit.mjs';
 
 const repoRoot = '/repo/go';
+const resolvedRepoRoot = path.resolve(repoRoot);
 
 test('passes staged web paths and no-update-baseline', () => {
   const calls = [];
@@ -22,14 +24,14 @@ test('passes staged web paths and no-update-baseline', () => {
   assert.deepEqual(calls[0][1], [
     'scan',
     '--repo-root',
-    repoRoot,
+    resolvedRepoRoot,
     '--changed-files',
     'web/templates/base.html',
     '--no-update-baseline',
     '--format',
     'text',
   ]);
-  assert.equal(calls[0][2].env.A11Y_ALLOWED_ROOTS, repoRoot);
+  assert.equal(calls[0][2].env.A11Y_ALLOWED_ROOTS, resolvedRepoRoot);
 });
 
 test('passes each applicable staged path as a separate changed-files argument', () => {

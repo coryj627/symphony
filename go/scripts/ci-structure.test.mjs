@@ -6,9 +6,12 @@ import {fileURLToPath} from 'node:url';
 
 const goRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workflowsRoot = path.join(goRoot, '..', '.github', 'workflows');
-const mainWorkflow = readFileSync(path.join(workflowsRoot, 'go.yml'), 'utf8');
+const normalizeWorkflow = (source) => source.replace(/\r\n?/g, '\n');
+const mainWorkflow = normalizeWorkflow(readFileSync(path.join(workflowsRoot, 'go.yml'), 'utf8'));
 const integrationsPath = path.join(workflowsRoot, 'go-integrations.yml');
-const integrationsWorkflow = existsSync(integrationsPath) ? readFileSync(integrationsPath, 'utf8') : '';
+const integrationsWorkflow = existsSync(integrationsPath)
+  ? normalizeWorkflow(readFileSync(integrationsPath, 'utf8'))
+  : '';
 
 const githubSentinel = 'SKIPPED: GitHub live profile not enabled';
 const linearSentinel = 'SKIPPED: Linear live profile not enabled';
@@ -133,6 +136,13 @@ function assertSelectedSecretSteps(job, title) {
   assert.deepEqual(secretSteps.map((step) => step.name), allowedStepNames);
   return secretSteps;
 }
+
+test('workflow parsing normalizes Windows line endings', () => {
+  const source = normalizeWorkflow('name: Fixture\r\npermissions:\r\n  contents: read\r\njobs:\r\n  fixture:\r\n    runs-on: windows-2025\r\n');
+
+  assert.match(workflowHeader(source), /^name: Fixture$/m);
+  assert.match(jobBlock(source, 'fixture'), /runs-on: windows-2025/);
+});
 
 test('main CI uses neutral names and exact supported native runner labels', () => {
   const header = workflowHeader(mainWorkflow);
