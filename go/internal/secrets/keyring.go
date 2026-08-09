@@ -55,9 +55,7 @@ func (s *keyringStore) Put(ctx context.Context, ref Ref, value []byte) error {
 		return err
 	}
 
-	valueCopy := append([]byte(nil), value...)
-	password := string(valueCopy)
-	clear(valueCopy)
+	password := string(value)
 	if err := s.client.Set(ctx, s.service(ref), ref.Account(), password); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err

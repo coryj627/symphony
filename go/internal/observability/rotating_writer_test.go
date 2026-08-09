@@ -116,6 +116,33 @@ func TestRotatingWriterKeepsExactTenMiBBoundaryActive(t *testing.T) {
 	}
 }
 
+func TestRotatingWriterArchivesOversizedActiveLogAtStartup(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "symphony.jsonl")
+	if err := os.WriteFile(path, []byte("oversized-active"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".1", []byte("previous-archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	writer, err := newRotatingWriter(path, 10, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteLine([]byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertFileContents(t, path, "new")
+	assertFileContents(t, path+".1", "oversized-active")
+	assertFileContents(t, path+".2", "previous-archive")
+}
+
 func TestRotatingWriterRetainsFiveArchivesNewestFirst(t *testing.T) {
 	t.Parallel()
 

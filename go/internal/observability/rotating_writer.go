@@ -126,6 +126,10 @@ func (w *rotatingWriter) Close() error {
 }
 
 func (w *rotatingWriter) openActive() error {
+	return w.openActiveWithOversizedRotation(true)
+}
+
+func (w *rotatingWriter) openActiveWithOversizedRotation(allowOversizedRotation bool) error {
 	info, err := w.ops.lstat(w.path)
 	if err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
@@ -149,8 +153,16 @@ func (w *rotatingWriter) openActive() error {
 		return errors.New("opened active log is not a regular file")
 	}
 	if openedInfo.Size() > w.maxSize {
-		_ = file.Close()
-		return errLogLineTooLarge
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("close oversized active log before rotation: %w", err)
+		}
+		if !allowOversizedRotation {
+			return errLogLineTooLarge
+		}
+		if err := w.rotateClosedFiles(); err != nil {
+			return fmt.Errorf("rotate oversized active log: %w", err)
+		}
+		return w.openActiveWithOversizedRotation(false)
 	}
 	w.file = file
 	w.size = openedInfo.Size()

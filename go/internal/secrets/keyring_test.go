@@ -40,6 +40,26 @@ func TestKeyringStoreRoundTripAndCopiesReturnedValues(t *testing.T) {
 	}
 }
 
+func TestKeyringStorePutAvoidsRedundantCredentialCopy(t *testing.T) {
+	store := &keyringStore{
+		servicePrefix: "symphony",
+		client:        discardKeyringClient{},
+		supported:     true,
+	}
+	ctx := context.Background()
+	ref := Ref{WorkflowID: "workflow-id", TrackerKind: "github"}
+	credential := []byte("credential")
+
+	allocations := testing.AllocsPerRun(1000, func() {
+		if err := store.Put(ctx, ref, credential); err != nil {
+			panic(err)
+		}
+	})
+	if allocations > 3 {
+		t.Fatalf("Put() allocations = %.0f, want at most 3", allocations)
+	}
+}
+
 func TestKeyringStoreUsesIsolatedServicePrefix(t *testing.T) {
 	client := newFakeKeyringClient("symphony-test/0123/workflow/w", "tracker/linear")
 	store := newKeyringForPlatform("symphony-test/0123/", "darwin", client)
@@ -326,6 +346,14 @@ type fakeKeyringClient struct {
 	deleteErr   error
 	accesses    int
 }
+
+type discardKeyringClient struct{}
+
+func (discardKeyringClient) Set(context.Context, string, string, string) error { return nil }
+func (discardKeyringClient) Get(context.Context, string, string) (string, error) {
+	return "", ErrNotFound
+}
+func (discardKeyringClient) Delete(context.Context, string, string) error { return ErrNotFound }
 
 func newFakeKeyringClient(service, account string) *fakeKeyringClient {
 	return &fakeKeyringClient{wantService: service, wantAccount: account}
