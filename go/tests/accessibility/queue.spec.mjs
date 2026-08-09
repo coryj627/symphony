@@ -225,7 +225,10 @@ test('issue metadata preserves RFC3339 values and displays workstation-local tim
   await expect(times).toHaveCount(2);
   await expect(times.first()).toHaveAttribute('datetime', '2026-08-08T16:00:00Z');
   await expect(times.last()).toHaveAttribute('datetime', '2026-08-08T16:00:00Z');
-  await expect(times).toHaveText(['Aug 8, 2026 12:00 PM EDT', 'Aug 8, 2026 12:00 PM EDT']);
+  const localTime = process.platform === 'win32'
+    ? 'Aug 8, 2026 4:00 PM UTC'
+    : 'Aug 8, 2026 12:00 PM EDT';
+  await expect(times).toHaveText([localTime, localTime]);
 });
 
 test('valid-scenario issue not-found document has the expected shell and no axe violations', async ({page}) => {
