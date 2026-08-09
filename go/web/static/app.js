@@ -30,6 +30,46 @@ if (focusTarget && allowedFocusTargets.has(focusTarget)) {
   }
 }
 
+const responsiveBreakpoint = window.matchMedia('(max-width: 40rem)');
+let responsiveFocusKey = '';
+
+document.addEventListener('focusin', event => {
+  if (!(event.target instanceof HTMLElement)) return;
+  if (event.target.dataset.responsiveFocusKey) {
+    responsiveFocusKey = event.target.dataset.responsiveFocusKey;
+    return;
+  }
+  if (event.target !== document.body && event.target !== document.documentElement) {
+    responsiveFocusKey = '';
+  }
+});
+
+document.addEventListener('pointerdown', event => {
+  if (event.target instanceof Element && event.target.closest('[data-responsive-focus-key]')) return;
+  window.requestAnimationFrame(() => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !active.dataset.responsiveFocusKey) {
+      responsiveFocusKey = '';
+    }
+  });
+});
+
+responsiveBreakpoint.addEventListener('change', () => {
+  const key = responsiveFocusKey;
+  if (!key) return;
+  window.requestAnimationFrame(() => {
+    if (responsiveFocusKey !== key) return;
+    const branch = responsiveBreakpoint.matches ? '.responsive-narrow' : '.responsive-wide';
+    const targets = [...document.querySelectorAll(`${branch} [data-responsive-focus-key]`)];
+    const target = targets.find(candidate => candidate instanceof HTMLElement
+      && candidate.dataset.responsiveFocusKey === key
+      && candidate.getClientRects().length > 0);
+    if (!(target instanceof HTMLElement)) return;
+    target.focus();
+    target.scrollIntoView({behavior: 'instant', block: 'center', inline: 'nearest'});
+  });
+});
+
 const deleteButton = document.getElementById('delete-credential');
 const deleteDialog = document.getElementById('credential-delete-dialog');
 const deleteCancel = document.getElementById('credential-delete-cancel');

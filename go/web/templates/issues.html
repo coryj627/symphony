@@ -12,16 +12,16 @@
   <table>
     <caption>Tracker work candidates</caption>
     <thead><tr><th scope="col">Identifier</th><th scope="col">Title</th><th scope="col">State</th><th scope="col">Eligibility</th></tr></thead>
-    <tbody>{{range .Content.Rows}}<tr>
-      <th scope="row"><a href="{{.DetailURL}}">{{.Identifier}}</a></th>
-      <td>{{.Title}}</td>
-      <td>{{.State}}{{if .Stale}} <span class="muted">(last known)</span>{{end}}</td>
-      <td>{{if .Routable}}Routable{{else}}Needs attention{{range .RoutingReasons}}<span class="reason">{{.Message}}</span>{{end}}{{end}}</td>
+    <tbody>{{range $index, $row := .Content.Rows}}<tr>
+      <th scope="row"><a data-responsive-focus-key="issue-{{$index}}" href="{{$row.DetailURL}}">{{$row.Identifier}}</a></th>
+      <td>{{$row.Title}}</td>
+      <td>{{$row.State}}{{if $row.Stale}} <span class="muted">(last known)</span>{{end}}</td>
+      <td>{{if $row.Routable}}Routable{{else}}Needs attention{{range $row.RoutingReasons}}<span class="reason">{{.Message}}</span>{{end}}{{end}}</td>
     </tr>{{end}}</tbody>
   </table>
 </div>
-<ul class="issue-list responsive-narrow" aria-label="Tracker work candidates">{{range .Content.Rows}}
-  <li><h2><a href="{{.DetailURL}}">{{.Identifier}}</a></h2><p>{{.Title}}</p><dl><div><dt>State</dt><dd>{{.State}}{{if .Stale}} (last known){{end}}</dd></div><div><dt>Eligibility</dt><dd>{{if .Routable}}Routable{{else}}Needs attention{{range .RoutingReasons}}<span class="reason">{{.Message}}</span>{{end}}{{end}}</dd></div></dl></li>
+<ul class="issue-list responsive-narrow" aria-label="Tracker work candidates">{{range $index, $row := .Content.Rows}}
+  <li><h2><a data-responsive-focus-key="issue-{{$index}}" href="{{$row.DetailURL}}">{{$row.Identifier}}</a></h2><p>{{$row.Title}}</p><dl><div><dt>State</dt><dd>{{$row.State}}{{if $row.Stale}} (last known){{end}}</dd></div><div><dt>Eligibility</dt><dd>{{if $row.Routable}}Routable{{else}}Needs attention{{range $row.RoutingReasons}}<span class="reason">{{.Message}}</span>{{end}}{{end}}</dd></div></dl></li>
 {{end}}</ul>
 {{else}}<p>No tracker work candidates match these filters.</p>{{end}}
 {{end}}

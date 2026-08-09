@@ -30,7 +30,7 @@ func TestIssuesHTMLUsesOneFilteredRowSliceForEquivalentTableAndList(t *testing.T
 	}
 	html := recorder.Body.String()
 	for _, want := range []string{
-		`<caption>Tracker work candidates</caption>`, `<th scope="col">Title</th>`, `<th scope="row"><a href="/issues/TEAM-1?sort=identifier&amp;state=Open">TEAM-1</a></th>`,
+		`<caption>Tracker work candidates</caption>`, `<th scope="col">Title</th>`, `<th scope="row"><a data-responsive-focus-key="issue-0" href="/issues/TEAM-1?sort=identifier&amp;state=Open">TEAM-1</a></th>`,
 		`<ul class="issue-list responsive-narrow"`, "Needs attention", "Routable", "last known", "Tracker marked this issue unavailable for dispatch.",
 		`value="Open" selected`, `value="all" selected`, `value="identifier" selected`, `&lt;script&gt;bad()&lt;/script&gt;`,
 	} {
@@ -222,6 +222,73 @@ func TestIssueHTMLUsesAllowlistedRunRetryAndMatchingOperatorRequests(t *testing.
 	for _, forbidden := range []string{"workspace-session-canary", "credential-retry-detail-canary", "other-request-canary", "seconds_running"} {
 		if strings.Contains(html, forbidden) {
 			t.Fatalf("issue live detail exposed %q", forbidden)
+		}
+	}
+}
+
+func TestIssueHTMLRendersProviderTimesInWorkstationLocalTime(t *testing.T) {
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalLocation := time.Local
+	time.Local = location
+	t.Cleanup(func() { time.Local = originalLocation })
+
+	providerTime := time.Date(2026, 8, 8, 16, 0, 0, 0, time.UTC)
+	runtime := &pageRuntimeFake{details: map[string]domain.IssueDetail{
+		"TEAM-9": {
+			Issue: domain.Issue{
+				ID: "nine", Identifier: "TEAM-9", Title: "Local time", State: "Open",
+				Labels: []string{}, BlockedBy: []domain.BlockerRef{}, CreatedAt: &providerTime, UpdatedAt: &providerTime,
+			},
+			Routable: true, RoutingReasons: []string{},
+		},
+	}}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+	html := serveDirect(t, handler, http.MethodGet, "/issues/TEAM-9", "", nil).Body.String()
+	want := `<time datetime="2026-08-08T16:00:00Z">Aug 8, 2026 12:00 PM EDT</time>`
+	if count := strings.Count(html, want); count != 2 {
+		t.Fatalf("created/updated workstation-local semantic time count = %d, want 2; body=%s", count, html)
+	}
+}
+
+func TestIssueHTMLUsesReturnedCanonicalIdentifierForScopedJoins(t *testing.T) {
+	runtime := &pageRuntimeFake{
+		details: map[string]domain.IssueDetail{
+			"GH-17": {
+				Issue:    domain.Issue{ID: "seventeen", Identifier: "Gh-17", Title: "Canonical issue", State: "Open", Labels: []string{}, BlockedBy: []domain.BlockerRef{}},
+				Routable: true, RoutingReasons: []string{},
+			},
+		},
+		snapshot: domain.Snapshot{Requests: []domain.OperatorRequest{
+			{ID: "canonical-request", IssueIdentifier: "Gh-17", Kind: "choice", Title: "canonical-request-visible", Choices: []domain.OperatorChoice{}, Questions: []domain.OperatorQuestion{}},
+			{ID: "requested-spelling", IssueIdentifier: "GH-17", Kind: "choice", Title: "requested-spelling-request-canary", Choices: []domain.OperatorChoice{}, Questions: []domain.OperatorQuestion{}},
+			{ID: "unrelated", IssueIdentifier: "Gh-18", Kind: "choice", Title: "unrelated-request-canary", Choices: []domain.OperatorChoice{}, Questions: []domain.OperatorQuestion{}},
+		}},
+	}
+	logs := &logQueryFake{page: observability.LogPage{Records: []observability.LogRecord{
+		{Sequence: 3, Level: "INFO", Message: "canonical-log-visible", Fields: map[string]any{"issue_identifier": "Gh-17"}},
+		{Sequence: 2, Level: "INFO", Message: "requested-spelling-log-canary", Fields: map[string]any{"issue_identifier": "GH-17"}},
+		{Sequence: 1, Level: "INFO", Message: "unrelated-log-canary", Fields: map[string]any{"issue_identifier": "Gh-18"}},
+	}}}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime, Logs: logs})
+	recorder := serveDirect(t, handler, http.MethodGet, "/issues/GH-17?state=open", "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("casing-variant issue status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if logs.query.Search != "Gh-17" || logs.query.Limit != 100 {
+		t.Fatalf("canonical issue log query = %#v", logs.query)
+	}
+	html := recorder.Body.String()
+	for _, want := range []string{"<title>Gh-17 — Symphony</title>", "<h1>Issue Gh-17</h1>", "canonical-request-visible", "canonical-log-visible"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("canonical issue page omitted %q: %s", want, html)
+		}
+	}
+	for _, forbidden := range []string{"requested-spelling-request-canary", "requested-spelling-log-canary", "unrelated-request-canary", "unrelated-log-canary"} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("canonical issue page included %q", forbidden)
 		}
 	}
 }

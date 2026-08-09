@@ -271,23 +271,24 @@ func (handler *PageHandler) issueHTML(w http.ResponseWriter, request *http.Reque
 		}
 		return
 	}
+	response := issueResponseFrom(detail)
+	canonicalIdentifier := response.Issue.Identifier
 	snapshot, err := dependencies.queries.Snapshot(request.Context())
 	if err != nil {
 		handler.respondHTMLRequestError(w, request, http.StatusServiceUnavailable)
 		return
 	}
 	filters := parseIssueFilters(request.URL.Query(), snapshot.Candidates)
-	logPage, logErr := dependencies.logs.Query(request.Context(), observability.LogQuery{Search: identifier, Limit: 100})
+	logPage, logErr := dependencies.logs.Query(request.Context(), observability.LogQuery{Search: canonicalIdentifier, Limit: 100})
 	logs := []logRecordView{}
 	degraded := false
 	if logErr == nil {
-		logs = issueLogRecordViews(identifier, logPage.Records)
+		logs = issueLogRecordViews(canonicalIdentifier, logPage.Records)
 		degraded = logPage.Degraded
 	}
-	response := issueResponseFrom(detail)
 	requests := make([]domain.OperatorRequest, 0)
 	for _, candidate := range snapshot.Requests {
-		if cleanMachine(candidate.IssueIdentifier, maximumIdentifierBytes) == identifier {
+		if cleanMachine(candidate.IssueIdentifier, maximumIdentifierBytes) == canonicalIdentifier {
 			requests = append(requests, candidate)
 		}
 	}
@@ -648,7 +649,7 @@ func issueResponseFrom(detail domain.IssueDetail) issueResponse {
 	for _, blocker := range detail.Issue.BlockedBy[:min(len(detail.Issue.BlockedBy), 100)] {
 		blockers = append(blockers, issueBlockerResponse{Identifier: cleanOptional(blocker.Identifier, maximumIdentifierBytes), State: cleanOptional(blocker.State, maximumShortTextBytes)})
 	}
-	return issueResponse{
+	response := issueResponse{
 		IssueIdentifier: cleanMachine(detail.Issue.Identifier, maximumIdentifierBytes), IssueID: cleanMachine(detail.Issue.ID, maximumIdentifierBytes), Status: "candidate",
 		Workspace: nil, Attempts: issueAttemptsResponse{}, Running: nil, Retry: nil, Logs: issueLogsResponse{CodexSessionLogs: []emptyResponse{}}, RecentEvents: []eventSummaryResponse{}, LastError: nil, Tracked: emptyResponse{},
 		Issue: issueSummaryResponse{
@@ -658,6 +659,8 @@ func issueResponseFrom(detail domain.IssueDetail) issueResponse {
 		},
 		Eligibility: issueEligibilityResponse{Routable: detail.Routable, Reasons: routingReasonResponses(detail.RoutingReasons)},
 	}
+	populateIssueTimeViews(&response.Issue)
+	return response
 }
 
 func cleanOptional(value *string, maximum int) *string {

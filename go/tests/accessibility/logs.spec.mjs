@@ -8,6 +8,38 @@ async function expectNoAxeViolations(page) {
   expect(results.violations.map(({id, nodes}) => ({id, targets: nodes.map(node => node.target)}))).toEqual([]);
 }
 
+async function expectFocusedVisibleAndUnobscured(locator) {
+  await expect(locator).toBeVisible();
+  await expect(locator).toBeFocused();
+  const result = await locator.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const outlineWidth = Number.parseFloat(style.outlineWidth);
+    const outlineOffset = Number.parseFloat(style.outlineOffset);
+    const clearance = outlineWidth + outlineOffset;
+    const hit = document.elementFromPoint(rect.left + (rect.width / 2), rect.top + (rect.height / 2));
+    return {
+      hasClientRect: element.getClientRects().length > 0,
+      focusVisible: element.matches(':focus-visible'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth,
+      inViewport: rect.left - clearance >= 0
+        && rect.top - clearance >= 0
+        && rect.right + clearance <= window.innerWidth
+        && rect.bottom + clearance <= window.innerHeight,
+      unobscured: hit === element || element.contains(hit),
+    };
+  });
+  expect(result).toEqual({
+    hasClientRect: true,
+    focusVisible: true,
+    outlineStyle: 'solid',
+    outlineWidth: 3,
+    inViewport: true,
+    unobscured: true,
+  });
+}
+
 for (const scenario of ['empty', 'populated', 'degraded-log', 'long-log', 'malicious-text']) {
   test(`${scenario} log state has no axe violations`, async ({page}) => {
     await authorize(page, scenarioPath('/logs', scenario));
@@ -28,6 +60,21 @@ test('wide log table and narrow list are mutually exclusive', async ({page}) => 
   await expect(list).toBeVisible();
   const reflow = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
   expect(reflow[0]).toBeLessThanOrEqual(reflow[1]);
+});
+
+test('structured-field focus follows the same logical log across both reflow directions', async ({page}) => {
+  await page.setViewportSize({width: 1280, height: 900});
+  await authorize(page, scenarioPath('/logs', 'populated'));
+  const wideGroup = page.locator('.responsive-wide').getByRole('group', {name: 'Structured fields for log entry 2'});
+  const narrowGroup = page.locator('.responsive-narrow').getByRole('group', {name: 'Structured fields for log entry 2'});
+
+  await wideGroup.focus();
+  await expectFocusedVisibleAndUnobscured(wideGroup);
+  await page.setViewportSize({width: 320, height: 900});
+  await expectFocusedVisibleAndUnobscured(narrowGroup);
+
+  await page.setViewportSize({width: 1280, height: 900});
+  await expectFocusedVisibleAndUnobscured(wideGroup);
 });
 
 test('long unbroken log fields overflow only inside their labelled scroll regions', async ({page}) => {

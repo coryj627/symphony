@@ -7,8 +7,8 @@
     <div><dt>Title</dt><dd>{{.Content.Issue.Title}}</dd></div>
     <div><dt>State</dt><dd>{{.Content.Issue.State}}</dd></div>
     <div><dt>Priority</dt><dd>{{with .Content.Issue.Priority}}{{.}}{{else}}Not set{{end}}</dd></div>
-    <div><dt>Created</dt><dd>{{with .Content.Issue.CreatedAt}}<time datetime="{{.Format "2006-01-02T15:04:05Z07:00"}}">{{.Format "Jan 2, 2006 3:04 PM MST"}}</time>{{else}}Not available{{end}}</dd></div>
-    <div><dt>Updated</dt><dd>{{with .Content.Issue.UpdatedAt}}<time datetime="{{.Format "2006-01-02T15:04:05Z07:00"}}">{{.Format "Jan 2, 2006 3:04 PM MST"}}</time>{{else}}Not available{{end}}</dd></div>
+    <div><dt>Created</dt><dd>{{if .Content.Issue.CreatedAt}}<time datetime="{{.Content.Issue.CreatedDateTime}}">{{.Content.Issue.CreatedDisplayTime}}</time>{{else}}Not available{{end}}</dd></div>
+    <div><dt>Updated</dt><dd>{{if .Content.Issue.UpdatedAt}}<time datetime="{{.Content.Issue.UpdatedDateTime}}">{{.Content.Issue.UpdatedDisplayTime}}</time>{{else}}Not available{{end}}</dd></div>
   </dl>
   <h3>Description</h3>
   {{with .Content.Issue.Description}}<p>{{.}}</p>{{if $.Content.Issue.DescriptionTruncated}}<p>Description truncated for display.</p>{{end}}{{else}}<p>No description is available.</p>{{end}}

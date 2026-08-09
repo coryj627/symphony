@@ -31,7 +31,7 @@
         <th scope="row"><time datetime="{{.DateTime}}">{{.DisplayTime}}</time></th>
         <td>{{.Level}}</td>
         <td><p>{{.Message}}</p>{{if .MessageTruncated}}<p>Message truncated for display.</p>{{end}}
-          <div class="log-scroll" role="group" aria-label="Structured fields for log entry {{.Sequence}}" tabindex="0"><pre>{{.Fields}}</pre></div>
+          <div class="log-scroll" role="group" aria-label="Structured fields for log entry {{.Sequence}}" data-responsive-focus-key="log-{{.Sequence}}" tabindex="0"><pre>{{.Fields}}</pre></div>
           {{if .FieldsTruncated}}<p>Structured fields truncated for display.</p>{{end}}
         </td>
       </tr>{{end}}</tbody>
@@ -42,7 +42,7 @@
       <div><dt>Time</dt><dd><time datetime="{{.DateTime}}">{{.DisplayTime}}</time></dd></div>
       <div><dt>Level</dt><dd>{{.Level}}</dd></div>
       <div><dt>Message</dt><dd>{{.Message}}{{if .MessageTruncated}} <span>Message truncated for display.</span>{{end}}</dd></div>
-      <div><dt>Structured fields</dt><dd><div class="log-scroll" role="group" aria-label="Structured fields for log entry {{.Sequence}}" tabindex="0"><pre>{{.Fields}}</pre></div>{{if .FieldsTruncated}}<p>Structured fields truncated for display.</p>{{end}}</dd></div>
+      <div><dt>Structured fields</dt><dd><div class="log-scroll" role="group" aria-label="Structured fields for log entry {{.Sequence}}" data-responsive-focus-key="log-{{.Sequence}}" tabindex="0"><pre>{{.Fields}}</pre></div>{{if .FieldsTruncated}}<p>Structured fields truncated for display.</p>{{end}}</dd></div>
     </dl></li>{{end}}
   </ul>
   {{else}}<p>No log entries are available for these filters.</p>{{end}}

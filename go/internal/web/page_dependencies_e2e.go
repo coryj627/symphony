@@ -206,7 +206,7 @@ func newE2EPageFixture(scenario string) (*e2ePageRuntime, *e2eLogQueries) {
 		logs.page.Records = []observability.LogRecord{{Sequence: 2, Time: e2eNow, Level: "INFO", Message: "Issue run started", Fields: map[string]any{"issue_identifier": "SYM-123"}}}
 	case "stale-error":
 		add(populated, false, []string{"provider_not_dispatchable"})
-		runtime.snapshot.Tracker = domain.TrackerStatus{Kind: "fixture", Scope: "fixture/example", State: "failed", Stale: true, ErrorCode: "tracker_transport", Message: "Tracker is temporarily unavailable.", LastAttemptAt: &e2eNow}
+		runtime.snapshot.Tracker = domain.TrackerStatus{Kind: "fixture", Scope: "fixture/example", State: "failed", Stale: true, ErrorCode: "tracker_transport", Message: strings.Repeat("W", maximumDisplayBytes), LastAttemptAt: &e2eNow}
 		runtime.snapshot.Config = domain.ConfigStatus{State: "invalid", ErrorCode: "invalid_workflow", Message: "Configuration needs attention.", ChangedAt: e2eNow}
 	case "filtered-empty":
 		closed := populated

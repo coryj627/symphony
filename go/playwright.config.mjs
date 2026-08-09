@@ -23,6 +23,7 @@ export default defineConfig({
     timeout: 120000,
     env: {
       ...process.env,
+      TZ: 'America/New_York',
       SYMPHONY_E2E_BOOTSTRAP_TOKEN: bootstrapToken,
       SYMPHONY_E2E_FAIL_DELETE_TRACKER: 'linear',
     },

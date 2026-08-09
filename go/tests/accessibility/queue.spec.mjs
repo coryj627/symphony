@@ -8,6 +8,38 @@ async function expectNoAxeViolations(page) {
   expect(results.violations.map(({id, nodes}) => ({id, targets: nodes.map(node => node.target)}))).toEqual([]);
 }
 
+async function expectFocusedVisibleAndUnobscured(locator) {
+  await expect(locator).toBeVisible();
+  await expect(locator).toBeFocused();
+  const result = await locator.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const outlineWidth = Number.parseFloat(style.outlineWidth);
+    const outlineOffset = Number.parseFloat(style.outlineOffset);
+    const clearance = outlineWidth + outlineOffset;
+    const hit = document.elementFromPoint(rect.left + (rect.width / 2), rect.top + (rect.height / 2));
+    return {
+      hasClientRect: element.getClientRects().length > 0,
+      focusVisible: element.matches(':focus-visible'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth,
+      inViewport: rect.left - clearance >= 0
+        && rect.top - clearance >= 0
+        && rect.right + clearance <= window.innerWidth
+        && rect.bottom + clearance <= window.innerHeight,
+      unobscured: hit === element || element.contains(hit),
+    };
+  });
+  expect(result).toEqual({
+    hasClientRect: true,
+    focusVisible: true,
+    outlineStyle: 'solid',
+    outlineWidth: 3,
+    inViewport: true,
+    unobscured: true,
+  });
+}
+
 for (const [name, path] of [
   ['empty', scenarioPath('/', 'empty')],
   ['populated', scenarioPath('/issues', 'populated')],
@@ -38,6 +70,40 @@ test('wide table and narrow list expose the same candidate links exclusively', a
   expect(await list.getByRole('link').allTextContents()).toEqual(wideIdentifiers);
   const reflow = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
   expect(reflow[0]).toBeLessThanOrEqual(reflow[1]);
+});
+
+test('candidate focus follows the same logical issue across both reflow directions', async ({page}) => {
+  await page.setViewportSize({width: 1280, height: 900});
+  await authorize(page, scenarioPath('/issues', 'populated'));
+  const wideLink = page.locator('.responsive-wide').getByRole('link', {name: 'SYM-123'});
+  const narrowLink = page.locator('.responsive-narrow').getByRole('link', {name: 'SYM-123'});
+
+  await wideLink.focus();
+  await expectFocusedVisibleAndUnobscured(wideLink);
+  await page.setViewportSize({width: 320, height: 900});
+  await expectFocusedVisibleAndUnobscured(narrowLink);
+
+  await page.setViewportSize({width: 1280, height: 900});
+  await expectFocusedVisibleAndUnobscured(wideLink);
+});
+
+test('candidate focus is not restored after an intentional outside pointer action', async ({page}) => {
+  await page.setViewportSize({width: 1280, height: 900});
+  await authorize(page, scenarioPath('/issues', 'populated'));
+  const wideLink = page.locator('.responsive-wide').getByRole('link', {name: 'SYM-123'});
+  const narrowLink = page.locator('.responsive-narrow').getByRole('link', {name: 'SYM-123'});
+
+  await wideLink.focus();
+  await expect(wideLink).toBeFocused();
+  await page.getByText('Symphony runs on this workstation.', {exact: true}).click();
+  const activeKey = await page.evaluate(() => document.activeElement?.dataset?.responsiveFocusKey ?? '');
+  expect(activeKey).toBe('');
+
+  await page.setViewportSize({width: 320, height: 900});
+  await page.evaluate(() => new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+  await expect(narrowLink).not.toBeFocused();
 });
 
 test('no-JavaScript issue filters survive list detail and return journeys', async ({page}) => {
@@ -89,7 +155,7 @@ test('stale and provider failures remain persistent ordinary text', async ({page
   await authorize(page, scenarioPath('/', 'stale-error'));
   await expect(page.getByText(/last known/)).toBeVisible();
   await expect(page.getByText('Configuration needs attention.')).toBeVisible();
-  await expect(page.getByText('Tracker is temporarily unavailable.')).toBeVisible();
+  await expect(page.locator('aside li', {hasText: 'W'.repeat(512)})).toBeVisible();
   await expect(page.getByRole('status')).toHaveCount(0);
 });
 
@@ -124,6 +190,51 @@ test('maximum-length provider labels and operator request text reflow at 320 pix
     page: document.documentElement.scrollWidth,
   }));
   expect(dimensions.page).toBeLessThanOrEqual(dimensions.viewport);
+});
+
+test('maximum-length provider error reflows at 320 pixels with WCAG text spacing', async ({page}) => {
+  await page.setViewportSize({width: 320, height: 900});
+  await authorize(page, scenarioPath('/', 'stale-error'));
+  await expect(page.locator('aside li', {hasText: 'W'.repeat(512)})).toBeVisible();
+
+  for (const spacing of [false, true]) {
+    if (spacing) {
+      await page.evaluate(() => {
+        const sheet = [...document.styleSheets].find(candidate => candidate.href?.endsWith('/static/app.css'));
+        if (!sheet) throw new Error('local application stylesheet was not loaded');
+        for (const rule of [
+          '* { letter-spacing: 0.12em !important; line-height: 1.5 !important; word-spacing: 0.16em !important; }',
+          'p { margin-block-end: 2em !important; }',
+        ]) {
+          sheet.insertRule(rule, sheet.cssRules.length);
+        }
+      });
+    }
+    const dimensions = await page.evaluate(() => ({
+      viewport: document.documentElement.clientWidth,
+      page: document.documentElement.scrollWidth,
+    }));
+    expect(dimensions.page, spacing ? 'WCAG text spacing' : 'default spacing').toBeLessThanOrEqual(dimensions.viewport);
+  }
+});
+
+test('issue metadata preserves RFC3339 values and displays workstation-local time', async ({page}) => {
+  await authorize(page, scenarioPath('/issues/SYM-123', 'populated'));
+  const times = page.locator('section[aria-labelledby="metadata-heading"] time');
+  await expect(times).toHaveCount(2);
+  await expect(times.first()).toHaveAttribute('datetime', '2026-08-08T16:00:00Z');
+  await expect(times.last()).toHaveAttribute('datetime', '2026-08-08T16:00:00Z');
+  await expect(times).toHaveText(['Aug 8, 2026 12:00 PM EDT', 'Aug 8, 2026 12:00 PM EDT']);
+});
+
+test('valid-scenario issue not-found document has the expected shell and no axe violations', async ({page}) => {
+  const response = await page.goto(scenarioPath('/issues/MISSING-1', 'issue-not-found'));
+  expect(response?.status()).toBe(404);
+  await expect(page).toHaveTitle('Page not found — Symphony');
+  await expect(page.getByRole('main')).toHaveCount(1);
+  await expect(page.getByRole('heading', {level: 1, name: 'Page not found', exact: true})).toHaveCount(1);
+  await expect(page.getByRole('status')).toHaveCount(0);
+  await expectNoAxeViolations(page);
 });
 
 test('valid scenario remains on navigation rendered inside an issue not-found document', async ({page}) => {

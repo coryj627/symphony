@@ -37,8 +37,8 @@
   <h2 id="errors-heading">Configuration and tracker errors</h2>
   {{if or .Content.ConfigError .Content.TrackerError}}
   <ul>
-    {{if .Content.ConfigError}}<li><strong>Configuration:</strong> {{.Content.Config.Message}}</li>{{end}}
-    {{if .Content.TrackerError}}<li><strong>Tracker:</strong> {{.Content.Tracker.Message}}</li>{{end}}
+    {{if .Content.ConfigError}}<li class="provider-text"><strong>Configuration:</strong> {{.Content.Config.Message}}</li>{{end}}
+    {{if .Content.TrackerError}}<li class="provider-text"><strong>Tracker:</strong> {{.Content.Tracker.Message}}</li>{{end}}
   </ul>
   {{else}}<p>No persistent errors.</p>{{end}}
 </aside>

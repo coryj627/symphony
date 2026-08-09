@@ -395,6 +395,10 @@ type issueSummaryResponse struct {
 	Blockers             []issueBlockerResponse `json:"blockers"`
 	CreatedAt            *time.Time             `json:"created_at"`
 	UpdatedAt            *time.Time             `json:"updated_at"`
+	CreatedDateTime      string                 `json:"-"`
+	CreatedDisplayTime   string                 `json:"-"`
+	UpdatedDateTime      string                 `json:"-"`
+	UpdatedDisplayTime   string                 `json:"-"`
 }
 
 type issueBlockerResponse struct {
@@ -499,6 +503,20 @@ func populateTrackerTimeViews(response *trackerStatusResponse) {
 	if response.RetryAt != nil {
 		response.RetryDateTime, response.RetryDisplayTime = semanticTimeStrings(*response.RetryAt)
 	}
+}
+
+func populateIssueTimeViews(response *issueSummaryResponse) {
+	if response.CreatedAt != nil {
+		response.CreatedDateTime, response.CreatedDisplayTime = semanticIssueTimeStrings(*response.CreatedAt)
+	}
+	if response.UpdatedAt != nil {
+		response.UpdatedDateTime, response.UpdatedDisplayTime = semanticIssueTimeStrings(*response.UpdatedAt)
+	}
+}
+
+func semanticIssueTimeStrings(value time.Time) (string, string) {
+	dateTime, _ := semanticTimeStrings(value)
+	return dateTime, value.Local().Format("Jan 2, 2006 3:04 PM MST")
 }
 
 func cloneIntPointer(value *int) *int {
