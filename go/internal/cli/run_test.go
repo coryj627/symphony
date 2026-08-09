@@ -13,8 +13,11 @@ import (
 	"testing"
 
 	"github.com/coryj627/symphony/go/internal/app"
+	"github.com/coryj627/symphony/go/internal/domain"
 	"github.com/coryj627/symphony/go/internal/instance"
+	"github.com/coryj627/symphony/go/internal/observability"
 	"github.com/coryj627/symphony/go/internal/secrets"
+	"github.com/coryj627/symphony/go/internal/tracker"
 	"github.com/coryj627/symphony/go/internal/web"
 	"github.com/coryj627/symphony/go/internal/workflow"
 )
@@ -83,7 +86,7 @@ func TestConfigureModeStartsWithMissingWorkflowAndCleansUpInOrder(t *testing.T) 
 		t.Fatalf("startup output = %q", stderr.String())
 	}
 	got := strings.Join(events, ",")
-	if !strings.Contains(got, "new-store,load,resolve,acquire,load,vault,handler,bootstrap,server:0,start,shutdown,store-close,release") {
+	if !strings.Contains(got, "new-store,load,resolve,acquire,load,vault,logger,runtime-new:false,runtime-start,handler,bootstrap,server:0,start,shutdown,runtime-shutdown,store-close,logs-close,release") {
 		t.Fatalf("configure composition/cleanup order = %q", got)
 	}
 }
@@ -146,6 +149,8 @@ func TestRuntimeServerFailureAttemptsEveryCleanupAndJoinsErrors(t *testing.T) {
 	storeCloseErr := errors.New("store close failed")
 	lockReleaseErr := errors.New("lock release failed")
 	shutdownErr := errors.New("shutdown failed")
+	runtimeShutdownErr := errors.New("runtime shutdown failed")
+	logsCloseErr := errors.New("logs close failed")
 	runtimeErr := errors.New("serve failed")
 	store := &cliStore{snapshots: []workflow.Snapshot{snapshot, snapshot}, closeErr: storeCloseErr}
 	events := []string{}
@@ -160,23 +165,204 @@ func TestRuntimeServerFailureAttemptsEveryCleanupAndJoinsErrors(t *testing.T) {
 		close(done)
 		return &cliServer{events: &events, done: done, shutdownErr: shutdownErr}, nil
 	}
+	deps.newRuntime = func(app.QueueOptions) queueRuntime {
+		return &cliQueueRuntime{events: &events, shutdownErr: runtimeShutdownErr}
+	}
+	originalCloseLogs := deps.closeLogs
+	deps.closeLogs = func(store *observability.LogStore) error {
+		_ = originalCloseLogs(store)
+		return logsCloseErr
+	}
 
 	err := startWithDependencies(context.Background(), Options{Mode: ModeRun, WorkflowPath: path}, io.Discard, io.Discard, deps)
-	for _, want := range []error{runtimeErr, shutdownErr, storeCloseErr, lockReleaseErr} {
+	for _, want := range []error{runtimeErr, shutdownErr, runtimeShutdownErr, storeCloseErr, logsCloseErr, lockReleaseErr} {
 		if !errors.Is(err, want) {
 			t.Fatalf("joined runtime error %v does not contain %v", err, want)
 		}
 	}
-	if tail := strings.Join(events[len(events)-3:], ","); tail != "shutdown,store-close,release" {
+	if tail := strings.Join(events[len(events)-5:], ","); tail != "shutdown,runtime-shutdown,store-close,logs-close,release" {
 		t.Fatalf("cleanup tail = %q", tail)
 	}
-	for _, raw := range []string{"serve failed", "shutdown failed", "store close failed", "lock release failed"} {
+	for _, raw := range []string{"serve failed", "shutdown failed", "runtime shutdown failed", "store close failed", "logs close failed", "lock release failed"} {
 		if strings.Contains(err.Error(), raw) {
 			t.Fatalf("operator-visible runtime error exposed raw cause %q: %v", raw, err)
 		}
 	}
 	if !strings.Contains(err.Error(), "web_runtime_failed") {
 		t.Fatalf("operator-visible runtime error omitted safe code: %v", err)
+	}
+}
+
+func TestProductionTrackerFactoryBuildsGitHubAndLinearWithScopedOwnedCredentials(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name     string
+		raw      workflow.TrackerConfig
+		wantKind string
+		wantRef  string
+		wantEnv  string
+	}{
+		{
+			name: "github", wantKind: "github", wantRef: "os-vault", wantEnv: "GH_TOKEN",
+			raw: workflow.TrackerConfig{Kind: "github", Provider: map[string]any{
+				"owner": "coryj627", "repository": "symphony", "credential_ref": "os-vault",
+			}},
+		},
+		{
+			name: "linear", wantKind: "linear", wantRef: "$SYMPHONY_LINEAR_TOKEN", wantEnv: "SYMPHONY_LINEAR_TOKEN",
+			raw: workflow.TrackerConfig{Kind: "linear", Provider: map[string]any{
+				"project_slug": "symphony", "credential_ref": "$SYMPHONY_LINEAR_TOKEN",
+			}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			credential := []byte("factory-token-canary-123456789")
+			resolver := &trackingResolver{returned: credential}
+			redactor := observability.NewRedactor(nil, func(name string) (string, bool) {
+				if name == test.wantEnv {
+					return string(credential), true
+				}
+				return "", false
+			})
+			logger, logs, err := observability.NewLogger(observability.Options{DataDir: t.TempDir(), Redactor: redactor, Stderr: io.Discard})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = logs.Close() })
+			factory := newProductionTrackerFactory("workflow-id", func(name string) (string, bool) {
+				if name == test.wantEnv {
+					return string(credential), true
+				}
+				return "", false
+			}, redactor, logger)
+			adapter, err := factory.Build(context.Background(), test.raw, resolver)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if adapter.Kind() != test.wantKind || resolver.ref != (secrets.Ref{WorkflowID: "workflow-id", TrackerKind: test.wantKind}) || resolver.reference != test.wantRef {
+				t.Fatalf("factory result kind/ref/reference = %q/%#v/%q", adapter.Kind(), resolver.ref, resolver.reference)
+			}
+			if strings.Trim(string(credential), "\x00") != "" {
+				t.Fatalf("factory did not clear resolver-owned credential: %v", credential)
+			}
+			logger.Info("redaction probe", slog.String("value", "factory-token-canary-123456789"))
+			page, err := logs.Query(context.Background(), observability.LogQuery{Limit: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded := fmt.Sprintf("%#v", page.Records)
+			if strings.Contains(encoded, "factory-token-canary-123456789") {
+				t.Fatalf("factory credential was not registered with the shared redactor: %s", encoded)
+			}
+		})
+	}
+}
+
+func TestProductionCredentialResolverUsesExactEnvironmentNameOrOwnedVaultValue(t *testing.T) {
+	t.Parallel()
+	lookups := []string{}
+	vault := &resolverVault{result: []byte("vault-token-canary"), ref: secrets.Ref{}}
+	resolver := productionCredentialResolver{vault: vault, lookupEnv: func(name string) (string, bool) {
+		lookups = append(lookups, name)
+		if name == "EXACT_TOKEN" {
+			return "environment-token-canary", true
+		}
+		return "", false
+	}}
+	ref := secrets.Ref{WorkflowID: "workflow-id", TrackerKind: "github"}
+	environment, err := resolver.Resolve(context.Background(), ref, "$EXACT_TOKEN")
+	if err != nil || string(environment) != "environment-token-canary" || strings.Join(lookups, ",") != "EXACT_TOKEN" || vault.calls != 0 {
+		t.Fatalf("environment resolve = %q, %v lookups=%v vault=%d", environment, err, lookups, vault.calls)
+	}
+	clear(environment)
+	vaultValue, err := resolver.Resolve(context.Background(), ref, "os-vault")
+	if err != nil || string(vaultValue) != "vault-token-canary" || vault.calls != 1 || vault.ref != ref {
+		t.Fatalf("vault resolve = %q, %v calls/ref=%d/%#v", vaultValue, err, vault.calls, vault.ref)
+	}
+	if strings.Trim(string(vault.result), "\x00") != "" {
+		t.Fatalf("resolver retained vault-returned temporary bytes: %v", vault.result)
+	}
+	vaultValue[0] = 'X'
+	clear(vaultValue)
+}
+
+func TestRunModeSuppliesStartedLiveRuntimeAndSharedLoggerToHandler(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	snapshot := validCLISnapshot(path, "digest", 0)
+	store := &cliStore{snapshots: []workflow.Snapshot{snapshot, snapshot}}
+	events := []string{}
+	deps := testStartDependencies(store, &events)
+	var processLogger *slog.Logger
+	baseNewLogger := deps.newLogger
+	deps.newLogger = func(options observability.Options) (*slog.Logger, *observability.LogStore, error) {
+		logger, logs, err := baseNewLogger(options)
+		processLogger = logger
+		return logger, logs, err
+	}
+	deps.newRuntime = func(options app.QueueOptions) queueRuntime {
+		if !options.Enabled || options.Store == nil || options.Factory == nil || options.Resolver == nil || options.Journal == nil || options.Logger == nil {
+			t.Fatalf("run runtime options = %#v", options)
+		}
+		return &cliQueueRuntime{events: &events}
+	}
+	deps.newHandler = func(_ *app.ConfigService, mode string, queries app.RuntimeQueries, commands app.RuntimeCommands, logs *observability.LogStore) (http.Handler, web.ErrorResponder, error) {
+		events = append(events, "handler")
+		if mode != "run" || queries == nil || commands == nil || logs == nil {
+			t.Fatalf("handler live dependencies mode=%q queries=%v commands=%v logs=%v", mode, queries, commands, logs)
+		}
+		return http.NotFoundHandler(), nil, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	deps.newServer = func(options web.Options) (runtimeServer, error) {
+		if options.Logger == nil || options.Logger != processLogger {
+			t.Fatal("web server did not receive the shared process logger")
+		}
+		return &cliServer{events: &events, done: make(chan error, 1), onStart: cancel}, nil
+	}
+	if err := startWithDependencies(ctx, Options{Mode: ModeRun, WorkflowPath: path}, io.Discard, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(events, ",")
+	if !strings.Contains(joined, "runtime-start,handler") || !strings.Contains(joined, "shutdown,runtime-shutdown,store-close,logs-close,release") {
+		t.Fatalf("runtime composition/cleanup order = %q", joined)
+	}
+}
+
+func TestRuntimeStartAndServerStartFailuresStillCleanUpInDependencyOrder(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		runtimeErr error
+		serverErr  error
+		wantCode   string
+		wantTail   string
+	}{
+		{name: "runtime start", runtimeErr: errors.New("runtime start raw"), wantCode: "queue_runtime_failed", wantTail: "runtime-start,runtime-shutdown,store-close,logs-close,release"},
+		{name: "server start", serverErr: errors.New("server start raw"), wantCode: "web_bind_failed", wantTail: "start,shutdown,runtime-shutdown,store-close,logs-close,release"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+			snapshot := validCLISnapshot(path, "digest", 0)
+			store := &cliStore{snapshots: []workflow.Snapshot{snapshot, snapshot}}
+			events := []string{}
+			deps := testStartDependencies(store, &events)
+			deps.newRuntime = func(app.QueueOptions) queueRuntime {
+				return &cliQueueRuntime{events: &events, startErr: test.runtimeErr}
+			}
+			deps.newServer = func(web.Options) (runtimeServer, error) {
+				return &cliServer{events: &events, done: make(chan error, 1), startErr: test.serverErr}, nil
+			}
+			err := startWithDependencies(context.Background(), Options{Mode: ModeRun, WorkflowPath: path}, io.Discard, io.Discard, deps)
+			var startup *StartupError
+			if !errors.As(err, &startup) || startup.Code != test.wantCode || strings.Contains(err.Error(), " raw") {
+				t.Fatalf("startup error = %v", err)
+			}
+			joined := strings.Join(events, ",")
+			if !strings.Contains(joined, test.wantTail) {
+				t.Fatalf("failure cleanup order = %q, want tail %q", joined, test.wantTail)
+			}
+		})
 	}
 }
 
@@ -259,7 +445,19 @@ func testStartDependencies(store *cliStore, events *[]string) startDependencies 
 			*events = append(*events, "vault")
 			return &cliVault{}
 		},
-		newHandler: func(*app.ConfigService, string) (http.Handler, web.ErrorResponder, error) {
+		newLogger: func(options observability.Options) (*slog.Logger, *observability.LogStore, error) {
+			*events = append(*events, "logger")
+			return observability.NewLogger(options)
+		},
+		closeLogs: func(store *observability.LogStore) error {
+			*events = append(*events, "logs-close")
+			return store.Close()
+		},
+		newRuntime: func(options app.QueueOptions) queueRuntime {
+			*events = append(*events, fmt.Sprintf("runtime-new:%t", options.Enabled))
+			return &cliQueueRuntime{events: events}
+		},
+		newHandler: func(*app.ConfigService, string, app.RuntimeQueries, app.RuntimeCommands, *observability.LogStore) (http.Handler, web.ErrorResponder, error) {
 			*events = append(*events, "handler")
 			handler := http.NotFoundHandler()
 			return handler, nil, nil
@@ -276,7 +474,6 @@ func testStartDependencies(store *cliStore, events *[]string) startDependencies 
 			*events = append(*events, "open")
 			return nil
 		},
-		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		lookupEnv: func(string) (string, bool) { return "", false },
 	}
 }
@@ -348,6 +545,7 @@ type cliServer struct {
 	done        chan error
 	onStart     func()
 	shutdownErr error
+	startErr    error
 }
 
 func (server *cliServer) Start(context.Context) (web.Bound, error) {
@@ -356,6 +554,9 @@ func (server *cliServer) Start(context.Context) (web.Bound, error) {
 	}
 	if server.onStart != nil {
 		server.onStart()
+	}
+	if server.startErr != nil {
+		return web.Bound{}, server.startErr
 	}
 	return web.Bound{URL: "http://127.0.0.1:43210/?access_token=test-capability", Port: 43210}, nil
 }
@@ -373,3 +574,74 @@ func (*cliVault) Put(context.Context, secrets.Ref, []byte) error     { return ni
 func (*cliVault) Get(context.Context, secrets.Ref) ([]byte, error)   { return nil, secrets.ErrNotFound }
 func (*cliVault) Delete(context.Context, secrets.Ref) error          { return secrets.ErrNotFound }
 func (*cliVault) Status(context.Context, secrets.Ref) secrets.Status { return secrets.Status{} }
+
+type cliQueueRuntime struct {
+	events      *[]string
+	startErr    error
+	shutdownErr error
+}
+
+func (runtime *cliQueueRuntime) Start(context.Context) error {
+	if runtime.events != nil {
+		*runtime.events = append(*runtime.events, "runtime-start")
+	}
+	return runtime.startErr
+}
+func (runtime *cliQueueRuntime) Shutdown(context.Context) error {
+	if runtime.events != nil {
+		*runtime.events = append(*runtime.events, "runtime-shutdown")
+	}
+	return runtime.shutdownErr
+}
+func (*cliQueueRuntime) NotifyCredentialChanged() {}
+func (*cliQueueRuntime) Snapshot(context.Context) (domain.Snapshot, error) {
+	return domain.EmptySnapshot(), nil
+}
+func (*cliQueueRuntime) Issue(context.Context, string) (domain.IssueDetail, error) {
+	return domain.IssueDetail{}, app.ErrIssueNotFound
+}
+func (*cliQueueRuntime) EventsAfter(context.Context, domain.EventCursor) (domain.EventPage, error) {
+	return domain.EventPage{Events: []domain.Event{}}, nil
+}
+func (*cliQueueRuntime) SubscribeEvents(domain.EventCursor) <-chan struct{} {
+	ready := make(chan struct{})
+	close(ready)
+	return ready
+}
+func (*cliQueueRuntime) Refresh(context.Context) (domain.RefreshReceipt, error) {
+	return domain.RefreshReceipt{Operations: []string{"poll"}}, nil
+}
+func (*cliQueueRuntime) SetScheduler(context.Context, bool) error { return app.ErrUnavailableInPhase }
+func (*cliQueueRuntime) Respond(context.Context, domain.OperatorResponse) error {
+	return app.ErrUnavailableInPhase
+}
+
+type trackingResolver struct {
+	returned  []byte
+	ref       secrets.Ref
+	reference string
+}
+
+func (resolver *trackingResolver) Resolve(_ context.Context, ref secrets.Ref, reference string) ([]byte, error) {
+	resolver.ref = ref
+	resolver.reference = reference
+	return resolver.returned, nil
+}
+
+type resolverVault struct {
+	result []byte
+	ref    secrets.Ref
+	calls  int
+}
+
+func (*resolverVault) Put(context.Context, secrets.Ref, []byte) error { return nil }
+func (vault *resolverVault) Get(_ context.Context, ref secrets.Ref) ([]byte, error) {
+	vault.ref = ref
+	vault.calls++
+	return vault.result, nil
+}
+func (*resolverVault) Delete(context.Context, secrets.Ref) error          { return nil }
+func (*resolverVault) Status(context.Context, secrets.Ref) secrets.Status { return secrets.Status{} }
+
+var _ tracker.Factory = (*productionTrackerFactory)(nil)
+var _ secrets.Resolver = productionCredentialResolver{}

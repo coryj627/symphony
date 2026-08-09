@@ -9,12 +9,16 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/coryj627/symphony/go/internal/app"
 	"github.com/coryj627/symphony/go/internal/instance"
+	"github.com/coryj627/symphony/go/internal/observability"
 	"github.com/coryj627/symphony/go/internal/secrets"
 	"github.com/coryj627/symphony/go/internal/tracker"
+	trackergithub "github.com/coryj627/symphony/go/internal/tracker/github"
+	trackerlinear "github.com/coryj627/symphony/go/internal/tracker/linear"
 	"github.com/coryj627/symphony/go/internal/web"
 	"github.com/coryj627/symphony/go/internal/workflow"
 )
@@ -74,17 +78,27 @@ type runtimeServer interface {
 	Done() <-chan error
 }
 
+type queueRuntime interface {
+	app.RuntimeQueries
+	app.RuntimeCommands
+	Start(context.Context) error
+	Shutdown(context.Context) error
+	NotifyCredentialChanged()
+}
+
 type startDependencies struct {
 	newStore        func(context.Context, string, workflow.LookupEnv, workflow.ProviderValidator) (workflowStore, error)
 	resolveInstance func(string, string, string) (instance.Info, error)
 	acquireLock     func(instance.Info) (instanceLock, error)
 	newVault        func() secrets.Store
-	newHandler      func(*app.ConfigService, string) (http.Handler, web.ErrorResponder, error)
+	newLogger       func(observability.Options) (*slog.Logger, *observability.LogStore, error)
+	closeLogs       func(*observability.LogStore) error
+	newRuntime      func(app.QueueOptions) queueRuntime
+	newHandler      func(*app.ConfigService, string, app.RuntimeQueries, app.RuntimeCommands, *observability.LogStore) (http.Handler, web.ErrorResponder, error)
 	newBootstrap    func() (web.Bootstrap, error)
 	newServer       func(web.Options) (runtimeServer, error)
 	openBrowser     func(string) error
 	lookupEnv       workflow.LookupEnv
-	logger          *slog.Logger
 }
 
 var start = productionStart
@@ -119,8 +133,15 @@ func defaultStartDependencies() startDependencies {
 		acquireLock: func(info instance.Info) (instanceLock, error) {
 			return instance.Acquire(info)
 		},
-		newVault: newVaultStore,
-		newHandler: func(service *app.ConfigService, mode string) (http.Handler, web.ErrorResponder, error) {
+		newVault:  newVaultStore,
+		newLogger: observability.NewLogger,
+		closeLogs: func(store *observability.LogStore) error {
+			return store.Close()
+		},
+		newRuntime: func(options app.QueueOptions) queueRuntime {
+			return app.NewQueueRuntime(options)
+		},
+		newHandler: func(service *app.ConfigService, mode string, _ app.RuntimeQueries, _ app.RuntimeCommands, _ *observability.LogStore) (http.Handler, web.ErrorResponder, error) {
 			handler, err := web.NewConfiguredPageHandler(service, mode)
 			if err != nil {
 				return nil, nil, err
@@ -133,8 +154,85 @@ func defaultStartDependencies() startDependencies {
 		},
 		openBrowser: openProtectedURL,
 		lookupEnv:   os.LookupEnv,
-		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
+}
+
+type productionTrackerFactory struct {
+	workflowID string
+	lookupEnv  workflow.LookupEnv
+	redactor   *observability.Redactor
+	logger     *slog.Logger
+}
+
+func newProductionTrackerFactory(workflowID string, lookupEnv workflow.LookupEnv, redactor *observability.Redactor, logger *slog.Logger) *productionTrackerFactory {
+	return &productionTrackerFactory{workflowID: workflowID, lookupEnv: lookupEnv, redactor: redactor, logger: logger}
+}
+
+func (factory *productionTrackerFactory) Build(ctx context.Context, raw workflow.TrackerConfig, resolver secrets.Resolver) (tracker.Adapter, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	provider, err := tracker.DecodeConfig(raw)
+	if err != nil {
+		return nil, &tracker.Error{Category: tracker.CategoryConfig, Message: "Tracker configuration is invalid."}
+	}
+	if factory.redactor != nil {
+		factory.redactor.RegisterEnvironmentNames(provider.SecretEnvironmentNames(), observability.LookupEnv(factory.lookupEnv))
+	}
+	if resolver == nil {
+		return nil, &tracker.Error{Category: tracker.CategoryAuth, Message: "Tracker credential is unavailable."}
+	}
+	credential := provider.Credential()
+	token, err := resolver.Resolve(ctx, secrets.Ref{WorkflowID: factory.workflowID, TrackerKind: provider.Kind()}, credential.Reference)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &tracker.Error{Category: tracker.CategoryAuth, Message: "Tracker credential is unavailable."}
+	}
+	defer clear(token)
+	if factory.redactor != nil {
+		factory.redactor.RegisterSecret(token)
+	}
+	client := &http.Client{}
+	switch config := provider.(type) {
+	case tracker.GitHubConfig:
+		return trackergithub.New(config, token, client, factory.logger)
+	case tracker.LinearConfig:
+		return trackerlinear.New(config, token, client, factory.logger)
+	default:
+		return nil, &tracker.Error{Category: tracker.CategoryConfig, Message: "Tracker kind is unsupported."}
+	}
+}
+
+type productionCredentialResolver struct {
+	vault     secrets.Store
+	lookupEnv workflow.LookupEnv
+}
+
+func (resolver productionCredentialResolver) Resolve(ctx context.Context, ref secrets.Ref, reference string) ([]byte, error) {
+	if strings.HasPrefix(reference, "$") && len(reference) > 1 {
+		if resolver.lookupEnv == nil {
+			return nil, secrets.ErrNotFound
+		}
+		value, found := resolver.lookupEnv(strings.TrimPrefix(reference, "$"))
+		if !found || value == "" {
+			return nil, secrets.ErrNotFound
+		}
+		return []byte(value), nil
+	}
+	if reference != "" && reference != "os-vault" {
+		return nil, secrets.ErrNotFound
+	}
+	if resolver.vault == nil {
+		return nil, secrets.ErrNotFound
+	}
+	value, err := resolver.vault.Get(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(value)
+	return append([]byte(nil), value...), nil
 }
 
 type preflightState struct {
@@ -185,27 +283,47 @@ func startWithDependencies(ctx context.Context, options Options, _, stderr io.Wr
 
 		vault := deps.newVault()
 		requestedPort := selectedPort(options, after)
+		redactor := observability.NewRedactor(nil, observability.LookupEnv(deps.lookupEnv))
+		logger, logs, err := deps.newLogger(observability.Options{
+			DataDir: info.DataDir, Redactor: redactor, Stderr: stderr,
+		})
+		if err != nil || logger == nil || logs == nil {
+			return joinSafe(&StartupError{Code: "observability_failed", Message: "Symphony could not prepare safe local logging."}, store.Close(), closeLogStore(deps, logs), lock.Release())
+		}
+		factory := newProductionTrackerFactory(info.WorkflowID, deps.lookupEnv, redactor, logger)
+		resolver := productionCredentialResolver{vault: vault, lookupEnv: deps.lookupEnv}
+		journal := observability.NewJournal(observability.JournalOptions{})
+		queue := deps.newRuntime(app.QueueOptions{
+			Enabled: options.Mode == ModeRun, Store: store, Factory: factory, Resolver: resolver,
+			Journal: journal, Logger: logger,
+		})
+		if queue == nil {
+			return joinSafe(&StartupError{Code: "queue_runtime_failed", Message: "Symphony could not prepare the live work queue."}, store.Close(), closeLogStore(deps, logs), lock.Release())
+		}
 		service := app.NewConfigService(app.ConfigServiceOptions{
 			Path: info.WorkflowPath, Store: store, Vault: vault, WorkflowID: info.WorkflowID,
-			RequestedPort: requestedPort, PortOverride: options.PortSet,
+			RequestedPort: requestedPort, PortOverride: options.PortSet, OnCredentialChanged: queue.NotifyCredentialChanged,
 		})
-		handler, responder, err := deps.newHandler(service, string(options.Mode))
+		if err := queue.Start(ctx); err != nil {
+			return joinSafe(&StartupError{Code: "queue_runtime_failed", Message: "Symphony could not start the live work queue."}, shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
+		}
+		handler, responder, err := deps.newHandler(service, string(options.Mode), queue, queue, logs)
 		if err != nil {
-			return joinSafe(&StartupError{Code: "web_handler_failed", Message: "Symphony could not prepare the local configuration interface."}, store.Close(), lock.Release())
+			return joinSafe(&StartupError{Code: "web_handler_failed", Message: "Symphony could not prepare the local configuration interface."}, shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
 		}
 		bootstrap, err := deps.newBootstrap()
 		if err != nil {
-			return joinSafe(&StartupError{Code: "web_bootstrap_failed", Message: "Symphony could not create a protected browser launch."}, store.Close(), lock.Release())
+			return joinSafe(&StartupError{Code: "web_bootstrap_failed", Message: "Symphony could not create a protected browser launch."}, shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
 		}
 		server, err := deps.newServer(web.Options{
-			Port: requestedPort, Bootstrap: bootstrap, Handler: handler, ErrorResponder: responder, Logger: deps.logger,
+			Port: requestedPort, Bootstrap: bootstrap, Handler: handler, ErrorResponder: responder, Logger: logger,
 		})
 		if err != nil {
-			return joinSafe(&StartupError{Code: "web_server_failed", Message: "Symphony could not prepare the protected loopback server."}, store.Close(), lock.Release())
+			return joinSafe(&StartupError{Code: "web_server_failed", Message: "Symphony could not prepare the protected loopback server."}, shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
 		}
 		bound, err := server.Start(context.Background())
 		if err != nil {
-			return joinSafe(&StartupError{Code: "web_bind_failed", Message: "Symphony could not bind the requested loopback port."}, store.Close(), lock.Release())
+			return joinSafe(&StartupError{Code: "web_bind_failed", Message: "Symphony could not bind the requested loopback port."}, shutdownServer(server), shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
 		}
 		fmt.Fprintln(stderr, bound.URL)
 		fmt.Fprintf(stderr, "Symphony %s mode is ready on loopback port %d.\n", options.Mode, bound.Port)
@@ -227,12 +345,34 @@ func startWithDependencies(ctx context.Context, options Options, _, stderr io.Wr
 				}
 			}
 		}
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		shutdownErr := server.Shutdown(shutdownCtx)
-		cancel()
-		return joinSafe(runtimeErr, shutdownErr, store.Close(), lock.Release())
+		return joinSafe(runtimeErr, shutdownServer(server), shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
 	}
 	return &StartupError{Code: "workflow_changed_during_startup", Message: "WORKFLOW.md changed repeatedly during startup. Wait for edits to finish and try again."}
+}
+
+func shutdownServer(server runtimeServer) error {
+	if server == nil {
+		return nil
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return server.Shutdown(shutdownCtx)
+}
+
+func shutdownQueue(runtime queueRuntime) error {
+	if runtime == nil {
+		return nil
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return runtime.Shutdown(shutdownCtx)
+}
+
+func closeLogStore(deps startDependencies, store *observability.LogStore) error {
+	if store == nil {
+		return nil
+	}
+	return deps.closeLogs(store)
 }
 
 func loadPreflight(ctx context.Context, store workflowStore, mode Mode, path string) (preflightState, error) {

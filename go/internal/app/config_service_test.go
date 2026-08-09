@@ -356,6 +356,68 @@ func TestEnvironmentManagedCredentialRejectsVaultMutationAndStillClearsBuffer(t 
 	}
 }
 
+func TestCredentialMutationCallbackRunsOnceAfterSuccessfulPutAndCallerClear(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	if err := os.WriteFile(path, []byte(validGitHubWorkflow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vault := &recordingVault{}
+	credential := []byte("credential-callback-canary")
+	callbacks := 0
+	service := NewConfigService(ConfigServiceOptions{
+		Path: path, Store: newTestWorkflowStore(t, ctx, path), Vault: vault, WorkflowID: "workflow-id",
+		OnCredentialChanged: func() {
+			callbacks++
+			if strings.Trim(string(credential), "\x00") != "" {
+				t.Fatalf("callback ran before caller credential bytes were cleared: %v", credential)
+			}
+		},
+	})
+	binding := CredentialBinding{TrackerKind: "github", BaseDigest: sourceDigest([]byte(validGitHubWorkflow))}
+	if err := service.ReplaceCredential(ctx, binding, credential); err != nil {
+		t.Fatal(err)
+	}
+	if callbacks != 1 {
+		t.Fatalf("successful Put callback count = %d", callbacks)
+	}
+}
+
+func TestCredentialDeleteCallbackRunsForSuccessAndNotFoundButNeverForFailures(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	if err := os.WriteFile(path, []byte(validGitHubWorkflow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vault := &recordingVault{}
+	callbacks := 0
+	service := NewConfigService(ConfigServiceOptions{
+		Path: path, Store: newTestWorkflowStore(t, ctx, path), Vault: vault, WorkflowID: "workflow-id",
+		OnCredentialChanged: func() { callbacks++ },
+	})
+	binding := CredentialBinding{TrackerKind: "github", BaseDigest: sourceDigest([]byte(validGitHubWorkflow))}
+	if err := service.DeleteCredential(ctx, binding); err != nil {
+		t.Fatal(err)
+	}
+	vault.deleteErr = secrets.ErrNotFound
+	if err := service.DeleteCredential(ctx, binding); err != nil {
+		t.Fatal(err)
+	}
+	vault.deleteErr = errors.New("vault unavailable")
+	if err := service.DeleteCredential(ctx, binding); err == nil {
+		t.Fatal("vault delete failure was hidden")
+	}
+	vault.putErr = errors.New("vault unavailable")
+	if err := service.ReplaceCredential(ctx, binding, []byte("failure-canary")); err == nil {
+		t.Fatal("vault put failure was hidden")
+	}
+	if callbacks != 2 {
+		t.Fatalf("delete/failed mutation callback count = %d, want 2", callbacks)
+	}
+}
+
 func newTestWorkflowStore(t *testing.T, ctx context.Context, path string) *workflow.FileStore {
 	t.Helper()
 	store, err := workflow.NewStore(ctx, path, func(string) (string, bool) { return "", false }, ValidateTracker)

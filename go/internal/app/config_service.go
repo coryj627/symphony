@@ -32,23 +32,25 @@ var (
 )
 
 type ConfigServiceOptions struct {
-	Path          string
-	Store         workflow.Store
-	Vault         secrets.Store
-	WorkflowID    string
-	Platform      string
-	RequestedPort int
-	PortOverride  bool
+	Path                string
+	Store               workflow.Store
+	Vault               secrets.Store
+	WorkflowID          string
+	Platform            string
+	RequestedPort       int
+	PortOverride        bool
+	OnCredentialChanged func()
 }
 
 type ConfigService struct {
-	path          string
-	store         workflow.Store
-	vault         secrets.Store
-	workflowID    string
-	platform      string
-	requestedPort int
-	portOverride  bool
+	path                string
+	store               workflow.Store
+	vault               secrets.Store
+	workflowID          string
+	platform            string
+	requestedPort       int
+	portOverride        bool
+	onCredentialChanged func()
 }
 
 type TrackerSelection struct {
@@ -133,6 +135,7 @@ func NewConfigService(options ConfigServiceOptions) *ConfigService {
 		path: options.Path, store: options.Store, vault: options.Vault,
 		workflowID: options.WorkflowID, platform: platform,
 		requestedPort: options.RequestedPort, portOverride: options.PortOverride,
+		onCredentialChanged: options.OnCredentialChanged,
 	}
 }
 
@@ -302,7 +305,12 @@ func (service *ConfigService) ReplaceCredential(ctx context.Context, binding Cre
 	if service.vault == nil {
 		return ErrCredentialUnavailable
 	}
-	return service.vault.Put(ctx, service.credentialRef(selection.Kind), value)
+	if err := service.vault.Put(ctx, service.credentialRef(selection.Kind), value); err != nil {
+		return err
+	}
+	clear(value)
+	service.notifyCredentialChanged()
+	return nil
 }
 
 func (service *ConfigService) DeleteCredential(ctx context.Context, binding CredentialBinding) error {
@@ -318,10 +326,11 @@ func (service *ConfigService) DeleteCredential(ctx context.Context, binding Cred
 		return ErrCredentialUnavailable
 	}
 	err = service.vault.Delete(ctx, service.credentialRef(selection.Kind))
-	if errors.Is(err, secrets.ErrNotFound) {
-		return nil
+	if err != nil && !errors.Is(err, secrets.ErrNotFound) {
+		return err
 	}
-	return err
+	service.notifyCredentialChanged()
+	return nil
 }
 
 func (service *ConfigService) CredentialView(ctx context.Context, binding CredentialBinding) (ConfigView, error) {
@@ -351,6 +360,12 @@ func (service *ConfigService) currentTracker(ctx context.Context) (TrackerSelect
 
 func (service *ConfigService) credentialRef(kind string) secrets.Ref {
 	return secrets.Ref{WorkflowID: service.workflowID, TrackerKind: kind}
+}
+
+func (service *ConfigService) notifyCredentialChanged() {
+	if service != nil && service.onCredentialChanged != nil {
+		service.onCredentialChanged()
+	}
 }
 
 func isEnvironmentReference(reference string) bool {
