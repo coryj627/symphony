@@ -26,7 +26,7 @@ func TestCloneCandidateRowsOmitsCandidatesWhoseIssuesCannotBeCloned(t *testing.T
 			Identifier: "SYM-1",
 			Title:      "Valid issue",
 			State:      "Todo",
-			NativeRef:  map[string]any{"id": "valid-id"},
+			NativeRef:  map[string]any{"nested": map[string]any{"id": "valid-id"}},
 		},
 		Routable:       true,
 		RoutingReasons: []string{"active"},
@@ -47,6 +47,11 @@ func TestCloneCandidateRowsOmitsCandidatesWhoseIssuesCannotBeCloned(t *testing.T
 	}
 	if got[0].Issue.ID != "valid-id" || !got[0].Routable || !reflect.DeepEqual(got[0].RoutingReasons, []string{"active"}) {
 		t.Fatalf("cloneCandidateRows() = %#v, want only the valid candidate", got)
+	}
+	got[0].Issue.NativeRef["nested"].(map[string]any)["id"] = "changed"
+	got[0].RoutingReasons[0] = "changed"
+	if valid.Issue.NativeRef["nested"].(map[string]any)["id"] != "valid-id" || valid.RoutingReasons[0] != "active" {
+		t.Fatalf("cloneCandidateRows() aliased its input: source=%#v clone=%#v", valid, got[0])
 	}
 }
 
