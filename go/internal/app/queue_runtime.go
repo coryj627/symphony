@@ -1673,8 +1673,8 @@ func cloneRuntimeSnapshot(source workflow.Snapshot) workflow.Snapshot {
 }
 
 func cloneCandidateRows(source []domain.CandidateRow) []domain.CandidateRow {
-	result := make([]domain.CandidateRow, len(source))
-	for index, candidate := range source {
+	result := make([]domain.CandidateRow, 0, len(source))
+	for _, candidate := range source {
 		issue, err := candidate.Issue.Clone()
 		if err != nil {
 			continue
@@ -1685,10 +1685,10 @@ func cloneCandidateRows(source []domain.CandidateRow) []domain.CandidateRow {
 		if candidate.Issue.BlockedBy != nil && issue.BlockedBy == nil {
 			issue.BlockedBy = []domain.BlockerRef{}
 		}
-		result[index] = domain.CandidateRow{
+		result = append(result, domain.CandidateRow{
 			Issue: issue, Routable: candidate.Routable,
 			RoutingReasons: append([]string{}, candidate.RoutingReasons...),
-		}
+		})
 	}
 	return result
 }
