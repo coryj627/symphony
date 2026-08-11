@@ -1672,6 +1672,8 @@ func cloneRuntimeSnapshot(source workflow.Snapshot) workflow.Snapshot {
 	return clone
 }
 
+// cloneCandidateRows returns independent copies of candidates whose issues can
+// be cloned. Failed clones are omitted, so the result is compacted in source order.
 func cloneCandidateRows(source []domain.CandidateRow) []domain.CandidateRow {
 	result := make([]domain.CandidateRow, 0, len(source))
 	for _, candidate := range source {

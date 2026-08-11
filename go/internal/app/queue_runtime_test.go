@@ -50,6 +50,18 @@ func TestCloneCandidateRowsOmitsCandidatesWhoseIssuesCannotBeCloned(t *testing.T
 	}
 }
 
+func TestCloneCandidateRowsReturnsEmptyWhenAllIssuesFailToClone(t *testing.T) {
+	got := cloneCandidateRows([]domain.CandidateRow{{
+		Issue: domain.Issue{
+			ID:        "invalid-id",
+			NativeRef: map[string]any{"score": math.NaN()},
+		},
+	}})
+	if len(got) != 0 {
+		t.Fatalf("cloneCandidateRows() = %#v, want no candidates", got)
+	}
+}
+
 type blockingFallbackWorkflowStore struct {
 	*fakeWorkflowStore
 	loadStarted chan struct{}
