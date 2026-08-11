@@ -100,6 +100,9 @@ test('success stored environment-managed and delete-confirmation states render v
   await resetWorkflow();
   await page.reload();
   await page.getByRole('button', {name: 'Delete credential'}).click();
-  await page.getByRole('button', {name: 'Delete credential', exact: true}).last().click();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result') === 'credential-deleted'),
+    page.getByRole('button', {name: 'Delete credential', exact: true}).last().click(),
+  ]);
   await expect(page.getByRole('status')).toHaveText('Credential deleted.');
 });

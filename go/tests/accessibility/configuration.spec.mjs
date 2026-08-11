@@ -125,7 +125,10 @@ test('credential success announces once, restores focus, and leaves no canary ar
   await expectNoAxeViolations(page);
 
   await page.getByRole('button', {name: 'Delete credential'}).click();
-  await page.getByRole('button', {name: 'Delete credential', exact: true}).last().click();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result') === 'credential-deleted'),
+    page.getByRole('button', {name: 'Delete credential', exact: true}).last().click(),
+  ]);
   await expect(page.getByRole('status')).toHaveText('Credential deleted.');
 });
 
@@ -203,17 +206,29 @@ test('validation save cancel and confirmed deletion work without application Jav
   await expect(page.getByLabel('Repository')).toHaveValue('no-js-saved');
   await expect(page.getByRole('button', {name: 'Save complete workflow'})).toBeFocused();
 
-  await page.getByRole('button', {name: 'Delete credential'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.pathname === '/api/v1/config/credential/delete'),
+    page.getByRole('button', {name: 'Delete credential'}).click(),
+  ]);
   let dialog = page.getByRole('dialog', {name: 'Delete credential?'});
   await expect(dialog).toHaveAttribute('open', '');
   await expect(dialog.getByRole('button', {name: 'Delete credential'})).toBeVisible();
-  await dialog.getByRole('link', {name: 'Cancel'}).click();
+  await Promise.all([
+    page.waitForURL(/\/configuration\?__e2e_scenario=empty#delete-credential$/),
+    dialog.getByRole('link', {name: 'Cancel'}).click(),
+  ]);
   await expect(page).toHaveURL(/\/configuration\?__e2e_scenario=empty#delete-credential$/);
   await expect(page.locator('#credential-delete-dialog')).not.toHaveAttribute('open', '');
 
-  await page.getByRole('button', {name: 'Delete credential'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.pathname === '/api/v1/config/credential/delete'),
+    page.getByRole('button', {name: 'Delete credential'}).click(),
+  ]);
   dialog = page.getByRole('dialog', {name: 'Delete credential?'});
-  await dialog.getByRole('button', {name: 'Delete credential'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result') === 'credential-deleted'),
+    dialog.getByRole('button', {name: 'Delete credential'}).click(),
+  ]);
   await expect(page.getByRole('status')).toHaveText('Credential deleted.');
   await expect(page.getByRole('button', {name: 'Delete credential'}).first()).toBeFocused();
   await expectNoAxeViolations(page);
