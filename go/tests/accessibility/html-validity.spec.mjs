@@ -66,7 +66,11 @@ test('invalid and conflict configuration states render valid HTML', async ({page
   await resetWorkflow();
   await authorize(page, '/configuration');
   await page.getByLabel('Complete WORKFLOW.md').fill('---\ntracker: []\n---\nRetained input');
-  await page.getByRole('button', {name: 'Save complete workflow'}).click();
+  const invalidResponse = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/config/save'),
+    page.getByRole('button', {name: 'Save complete workflow'}).click(),
+  ]).then(([response]) => response);
+  expect(invalidResponse.status()).toBe(422);
   await expect(page.locator('#error-summary')).toBeVisible();
   await expectValidHTML(page);
 
@@ -74,7 +78,11 @@ test('invalid and conflict configuration states render valid HTML', async ({page
   await page.reload();
   await page.getByLabel('Complete WORKFLOW.md').fill(validGitHubWorkflow.replace('repository: symphony', 'repository: unsaved'));
   await writeFile(manualWorkflowPath, validGitHubWorkflow.replace('repository: symphony', 'repository: external'), {mode: 0o600});
-  await page.getByRole('button', {name: 'Save complete workflow'}).click();
+  const conflictResponse = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/config/save'),
+    page.getByRole('button', {name: 'Save complete workflow'}).click(),
+  ]).then(([response]) => response);
+  expect(conflictResponse.status()).toBe(409);
   await expect(page.getByRole('heading', {name: 'Current workflow on disk'})).toBeVisible();
   await expectValidHTML(page);
 });
@@ -83,7 +91,10 @@ test('success stored environment-managed and delete-confirmation states render v
   await resetWorkflow();
   await authorize(page, '/configuration');
   await page.getByLabel(/New github credential/).fill('validity-credential-canary');
-  await page.getByRole('button', {name: 'Replace credential'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result') === 'credential-stored'),
+    page.getByRole('button', {name: 'Replace credential'}).click(),
+  ]);
   await expect(page.getByRole('status')).toHaveText('Credential stored.');
   await expectValidHTML(page);
 
@@ -93,7 +104,10 @@ test('success stored environment-managed and delete-confirmation states render v
   await page.keyboard.press('Escape');
 
   await page.getByLabel('Complete WORKFLOW.md').fill(environmentManagedWorkflow);
-  await page.getByRole('button', {name: 'Save complete workflow'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result')?.startsWith('configuration-saved')),
+    page.getByRole('button', {name: 'Save complete workflow'}).click(),
+  ]);
   await expect(page.getByText('Current state:')).toContainText('Environment managed');
   await expectValidHTML(page);
 

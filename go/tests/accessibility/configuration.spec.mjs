@@ -115,7 +115,10 @@ test('conflict retains unsaved source and shows freshly read disk source', async
 test('credential success announces once, restores focus, and leaves no canary artifact', async ({page}) => {
   const canary = 'browser-credential-canary';
   await page.getByLabel(/New github credential/).fill(canary);
-  await page.getByRole('button', {name: 'Replace credential'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result') === 'credential-stored'),
+    page.getByRole('button', {name: 'Replace credential'}).click(),
+  ]);
   await expect(page).toHaveURL(/result=credential-stored/);
   await expect(page.getByRole('status')).toHaveCount(1);
   await expect(page.getByRole('status')).toHaveText('Credential stored.');
@@ -134,7 +137,10 @@ test('credential success announces once, restores focus, and leaves no canary ar
 
 test('environment-managed credential is labelled and vault actions are unavailable', async ({page}) => {
   await page.getByLabel('Complete WORKFLOW.md').fill(environmentManagedWorkflow);
-  await page.getByRole('button', {name: 'Save complete workflow'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result')?.startsWith('configuration-saved')),
+    page.getByRole('button', {name: 'Save complete workflow'}).click(),
+  ]);
   await expect(page.getByRole('status')).toContainText('Configuration saved');
   await expect(page.getByText('Current state:')).toContainText('Environment managed');
   await expect(page.getByRole('button', {name: 'Replace credential'})).toBeDisabled();
@@ -162,10 +168,17 @@ test('delete failure keeps one focused reachable summary inside the modal', asyn
   await writeFile(manualWorkflowPath, validLinearWorkflow, {mode: 0o600});
   await page.reload();
   await page.getByLabel(/New linear credential/).fill('linear-delete-failure-canary');
-  await page.getByRole('button', {name: 'Replace credential'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result') === 'credential-stored'),
+    page.getByRole('button', {name: 'Replace credential'}).click(),
+  ]);
   await page.getByRole('button', {name: 'Delete credential'}).click();
   const dialog = page.getByRole('dialog', {name: 'Delete credential?'});
-  await dialog.getByRole('button', {name: 'Delete credential'}).click();
+  const deleteResponse = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/config/credential/delete'),
+    dialog.getByRole('button', {name: 'Delete credential'}).click(),
+  ]).then(([response]) => response);
+  expect(deleteResponse.status()).toBe(422);
   const summary = dialog.locator('#error-summary');
   await expect(summary).toHaveCount(1);
   await expectFocusedAndUnobscured(page, summary);
@@ -193,7 +206,11 @@ test('validation save cancel and confirmed deletion work without application Jav
   await page.reload();
   const invalid = '---\ntracker: []\n---\nNo JavaScript input';
   await page.getByLabel('Complete WORKFLOW.md').fill(invalid);
-  await page.getByRole('button', {name: 'Validate complete workflow'}).click();
+  const validationResponse = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/config/validate'),
+    page.getByRole('button', {name: 'Validate complete workflow'}).click(),
+  ]).then(([response]) => response);
+  expect(validationResponse.status()).toBe(422);
   await expect(page.locator('#error-summary')).toBeVisible();
   await expect(page.getByLabel('Complete WORKFLOW.md')).toHaveValue(invalid);
 
@@ -201,7 +218,10 @@ test('validation save cancel and confirmed deletion work without application Jav
   await page.reload();
   const saved = validGitHubWorkflow.replace('repository: symphony', 'repository: no-js-saved');
   await page.getByLabel('Complete WORKFLOW.md').fill(saved);
-  await page.getByRole('button', {name: 'Save complete workflow'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result')?.startsWith('configuration-saved')),
+    page.getByRole('button', {name: 'Save complete workflow'}).click(),
+  ]);
   await expect(page.getByRole('status')).toContainText('Configuration saved');
   await expect(page.getByLabel('Repository')).toHaveValue('no-js-saved');
   await expect(page.getByRole('button', {name: 'Save complete workflow'})).toBeFocused();
