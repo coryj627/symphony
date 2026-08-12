@@ -853,7 +853,10 @@ test('JavaScript-disabled context retains the complete manual live-page workflow
     await expect(noScriptPage.getByRole('heading', {name: 'Work summary'})).toBeVisible();
     await expect(noScriptPage.getByRole('status')).toHaveCount(0);
     expect(await noScriptPage.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-    await refresh.click();
+    await Promise.all([
+      noScriptPage.waitForURL(url => url.searchParams.get('result') === 'refresh-requested'),
+      refresh.click(),
+    ]);
     const current = new URL(noScriptPage.url());
     expect(current.searchParams.get('__e2e_scenario')).toBe('populated');
     expect(current.searchParams.get('result')).toBe('refresh-requested');

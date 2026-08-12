@@ -162,7 +162,10 @@ test('stale and provider failures remain persistent ordinary text', async ({page
 
 test('refresh preserves scenario, restores focus, and announces one concise status', async ({page}) => {
   await authorize(page, scenarioPath('/', 'populated'));
-  await page.getByRole('button', {name: 'Refresh tracker work'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result') === 'refresh-requested'),
+    page.getByRole('button', {name: 'Refresh tracker work'}).click(),
+  ]);
   const current = new URL(page.url());
   expect(current.searchParams.get('__e2e_scenario')).toBe('populated');
   expect(current.searchParams.get('result')).toBe('refresh-requested');
@@ -174,7 +177,10 @@ test('refresh preserves scenario, restores focus, and announces one concise stat
 test('refresh remains an ordinary form journey without JavaScript', async ({page}) => {
   await page.route('**/static/app.js', route => route.abort());
   await authorize(page, scenarioPath('/', 'populated'));
-  await page.getByRole('button', {name: 'Refresh tracker work'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result') === 'refresh-requested'),
+    page.getByRole('button', {name: 'Refresh tracker work'}).click(),
+  ]);
   const current = new URL(page.url());
   expect(current.searchParams.get('__e2e_scenario')).toBe('populated');
   expect(current.searchParams.get('result')).toBe('refresh-requested');

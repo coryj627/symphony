@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
@@ -17,6 +18,54 @@ import (
 	"github.com/coryj627/symphony/go/internal/tracker"
 	"github.com/coryj627/symphony/go/internal/workflow"
 )
+
+func TestCloneCandidateRowsOmitsCandidatesWhoseIssuesCannotBeCloned(t *testing.T) {
+	valid := domain.CandidateRow{
+		Issue: domain.Issue{
+			ID:         "valid-id",
+			Identifier: "SYM-1",
+			Title:      "Valid issue",
+			State:      "Todo",
+			NativeRef:  map[string]any{"nested": map[string]any{"id": "valid-id"}},
+		},
+		Routable:       true,
+		RoutingReasons: []string{"active"},
+	}
+	invalid := domain.CandidateRow{
+		Issue: domain.Issue{
+			ID:         "invalid-id",
+			Identifier: "SYM-2",
+			Title:      "Invalid issue",
+			State:      "Todo",
+			NativeRef:  map[string]any{"score": math.NaN()},
+		},
+	}
+
+	got := cloneCandidateRows([]domain.CandidateRow{invalid, valid})
+	if len(got) != 1 {
+		t.Fatalf("cloneCandidateRows() length = %d, want 1", len(got))
+	}
+	if got[0].Issue.ID != "valid-id" || !got[0].Routable || !reflect.DeepEqual(got[0].RoutingReasons, []string{"active"}) {
+		t.Fatalf("cloneCandidateRows() = %#v, want only the valid candidate", got)
+	}
+	got[0].Issue.NativeRef["nested"].(map[string]any)["id"] = "changed"
+	got[0].RoutingReasons[0] = "changed"
+	if valid.Issue.NativeRef["nested"].(map[string]any)["id"] != "valid-id" || valid.RoutingReasons[0] != "active" {
+		t.Fatalf("cloneCandidateRows() aliased its input: source=%#v clone=%#v", valid, got[0])
+	}
+}
+
+func TestCloneCandidateRowsReturnsEmptyWhenAllIssuesFailToClone(t *testing.T) {
+	got := cloneCandidateRows([]domain.CandidateRow{{
+		Issue: domain.Issue{
+			ID:        "invalid-id",
+			NativeRef: map[string]any{"score": math.NaN()},
+		},
+	}})
+	if len(got) != 0 {
+		t.Fatalf("cloneCandidateRows() = %#v, want no candidates", got)
+	}
+}
 
 type blockingFallbackWorkflowStore struct {
 	*fakeWorkflowStore
