@@ -11,10 +11,21 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/coryj627/symphony/go/internal/domain"
 	"github.com/coryj627/symphony/go/internal/observability"
 )
+
+func TestEnvironmentBlockDeduplicatesCaseInsensitiveKeysKeepingLastValue(t *testing.T) {
+	block, err := environmentBlock([]string{"Path=C:\\first", "ORDINARY=first", "PATH=C:\\second", "ordinary=second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(utf16.Decode(block)), "ordinary=second\x00PATH=C:\\second\x00\x00"; got != want {
+		t.Fatalf("environment block = %q, want %q", got, want)
+	}
+}
 
 func TestHookProcessUsesPowerShellStdinCWDEnvironmentAndRedactsOutput(t *testing.T) {
 	const canary = "hook-secret-canary-0123456789"

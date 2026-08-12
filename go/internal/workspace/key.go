@@ -10,6 +10,9 @@ import (
 
 var ErrInvalidWorkspaceKey = errors.New("invalid_workspace_key")
 
+// Key returns a stable filesystem-safe key for an issue identifier. It preserves
+// ASCII letters, digits, dot, underscore, and hyphen; identifiers requiring
+// substitution receive a 16-hex-character SHA-256 suffix to distinguish them.
 func Key(identifier string) (string, error) {
 	if identifier == "" || identifier == "." || identifier == ".." {
 		return "", fmt.Errorf("%w: identifier cannot name the workspace root", ErrInvalidWorkspaceKey)

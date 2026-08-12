@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"strings"
 	"sync"
 )
 
@@ -16,6 +17,34 @@ type hookProcessResult struct {
 	ExitCode int
 	TimedOut bool
 	Err      error
+}
+
+func deduplicateWindowsEnvironment(environment []string) []string {
+	values := make([]string, 0, len(environment))
+	seen := make(map[string]struct{}, len(environment))
+	for index := len(environment) - 1; index >= 0; index-- {
+		value := environment[index]
+		separator := strings.IndexByte(value, '=')
+		if separator == 0 {
+			separator = strings.IndexByte(value[1:], '=') + 1
+		}
+		if separator < 0 {
+			if value != "" {
+				values = append(values, value)
+			}
+			continue
+		}
+		key := strings.ToLower(value[:separator])
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		values = append(values, value)
+	}
+	for left, right := 0, len(values)-1; left < right; left, right = left+1, right-1 {
+		values[left], values[right] = values[right], values[left]
+	}
+	return values
 }
 
 type boundedOutput struct {

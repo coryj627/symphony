@@ -186,6 +186,7 @@ func environmentBlock(environment []string) ([]uint16, error) {
 			return nil, errors.New("environment contains NUL")
 		}
 	}
+	values = deduplicateWindowsEnvironment(values)
 	sort.SliceStable(values, func(left, right int) bool {
 		return strings.ToLower(values[left]) < strings.ToLower(values[right])
 	})
