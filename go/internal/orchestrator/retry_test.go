@@ -234,7 +234,7 @@ func retryActorState(issue domain.Issue) actorState {
 func retryTestOptions(clock Clock, adapter *fakeTracker, worker Worker) Options {
 	return Options{
 		Clock: clock, Tracker: adapter, Workflow: newFakeWorkflowStore(testWorkflowSnapshot()), Worker: worker,
-		Events: observability.NewJournal(observability.JournalOptions{}),
+		Workspace: &fakeWorkspaceManager{}, Events: observability.NewJournal(observability.JournalOptions{}),
 	}
 }
 

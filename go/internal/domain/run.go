@@ -11,6 +11,8 @@ const (
 	RunStatusInitializingSession RunStatus = "initializing_session"
 	RunStatusStreamingTurn       RunStatus = "streaming_turn"
 	RunStatusFinishing           RunStatus = "finishing"
+	RunStatusStopping            RunStatus = "stopping"
+	RunStatusStoppingFailed      RunStatus = "stopping_failed"
 	RunStatusSucceeded           RunStatus = "succeeded"
 	RunStatusFailed              RunStatus = "failed"
 	RunStatusTimedOut            RunStatus = "timed_out"

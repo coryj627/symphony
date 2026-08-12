@@ -18,6 +18,11 @@ func (clock *fakeClock) Now() time.Time {
 	defer clock.mu.Unlock()
 	return clock.now
 }
+func (clock *fakeClock) setNow(now time.Time) {
+	clock.mu.Lock()
+	clock.now = now
+	clock.mu.Unlock()
+}
 func (*fakeClock) After(time.Duration) <-chan time.Time { return make(chan time.Time) }
 func (clock *fakeClock) NewTimer(time.Duration) Timer {
 	timer := &fakeTimer{ch: make(chan time.Time, 4)}
@@ -42,6 +47,12 @@ func (clock *fakeClock) lastTimer(t *testing.T) *fakeTimer {
 	}
 	t.Fatal("timer was not created")
 	return nil
+}
+
+func (clock *fakeClock) timerCount() int {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	return len(clock.timers)
 }
 
 type fakeTimer struct {

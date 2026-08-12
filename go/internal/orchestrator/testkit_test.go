@@ -76,19 +76,21 @@ func idSet(ids ...string) map[string]struct{} {
 }
 
 type fakeTracker struct {
-	mu            sync.Mutex
-	activeCalls   int
-	maxConcurrent int
-	stateCalls    int
-	idCalls       int
-	byStates      []domain.Issue
-	byIDs         []domain.Issue
-	statesErr     error
-	idsErr        error
-	idResponses   []fakeTrackerResponse
-	stateStarted  chan struct{}
-	stateRelease  chan struct{}
-	afterStates   func()
+	mu             sync.Mutex
+	activeCalls    int
+	maxConcurrent  int
+	stateCalls     int
+	idCalls        int
+	byStates       []domain.Issue
+	byIDs          []domain.Issue
+	statesErr      error
+	idsErr         error
+	stateResponses []fakeTrackerResponse
+	idResponses    []fakeTrackerResponse
+	stateStarted   chan struct{}
+	stateRelease   chan struct{}
+	blockStates    []string
+	afterStates    func()
 }
 
 type fakeTrackerResponse struct {
@@ -98,7 +100,7 @@ type fakeTrackerResponse struct {
 
 func (tracker *fakeTracker) Kind() string { return "github" }
 
-func (tracker *fakeTracker) FetchIssuesByStates(ctx context.Context, _ []string) ([]domain.Issue, error) {
+func (tracker *fakeTracker) FetchIssuesByStates(ctx context.Context, states []string) ([]domain.Issue, error) {
 	tracker.beginCall()
 	defer tracker.endCall()
 	tracker.mu.Lock()
@@ -106,14 +108,22 @@ func (tracker *fakeTracker) FetchIssuesByStates(ctx context.Context, _ []string)
 	started, release := tracker.stateStarted, tracker.stateRelease
 	after := tracker.afterStates
 	issues, err := cloneIssuesForTest(tracker.byStates), tracker.statesErr
+	if len(tracker.stateResponses) > 0 {
+		response := tracker.stateResponses[0]
+		tracker.stateResponses = tracker.stateResponses[1:]
+		issues, err = cloneIssuesForTest(response.issues), response.err
+	} else if containsNormalized(states, "closed") {
+		issues = []domain.Issue{}
+	}
+	shouldBlock := len(tracker.blockStates) == 0 || sameNormalizedStrings(states, tracker.blockStates)
 	tracker.mu.Unlock()
-	if started != nil {
+	if started != nil && shouldBlock {
 		select {
 		case started <- struct{}{}:
 		default:
 		}
 	}
-	if release != nil {
+	if release != nil && shouldBlock {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -124,6 +134,18 @@ func (tracker *fakeTracker) FetchIssuesByStates(ctx context.Context, _ []string)
 		after()
 	}
 	return issues, err
+}
+
+func sameNormalizedStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if normalizeComparable(left[index]) != normalizeComparable(right[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (tracker *fakeTracker) FetchIssuesByIDs(ctx context.Context, _ []string) ([]domain.Issue, error) {
@@ -187,19 +209,28 @@ func cloneIssuesForTest(issues []domain.Issue) []domain.Issue {
 }
 
 type fakeWorkspaceManager struct {
-	mu      sync.Mutex
-	removes int
+	mu          sync.Mutex
+	removes     int
+	removeRoots []string
+	removeErr   error
 }
 
 func (*fakeWorkspaceManager) Ensure(context.Context, domain.Issue, workflow.EffectiveConfig) (domain.Workspace, error) {
 	return domain.Workspace{}, nil
 }
 
-func (manager *fakeWorkspaceManager) Remove(context.Context, domain.Issue, workflow.EffectiveConfig) error {
+func (manager *fakeWorkspaceManager) Remove(_ context.Context, _ domain.Issue, config workflow.EffectiveConfig) error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.removes++
-	return nil
+	manager.removeRoots = append(manager.removeRoots, config.Workspace.Root)
+	return manager.removeErr
+}
+
+func (manager *fakeWorkspaceManager) roots() []string {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return append([]string(nil), manager.removeRoots...)
 }
 
 func (manager *fakeWorkspaceManager) removeCount() int {
@@ -211,6 +242,28 @@ func (manager *fakeWorkspaceManager) removeCount() int {
 type fakeWorker struct {
 	started chan RunRequest
 	release chan domain.RunResult
+}
+
+type stubbornWorker struct {
+	started  chan RunRequest
+	canceled chan struct{}
+	release  chan domain.RunResult
+}
+
+func newStubbornWorker() *stubbornWorker {
+	return &stubbornWorker{started: make(chan RunRequest, 1), canceled: make(chan struct{}, 1), release: make(chan domain.RunResult, 1)}
+}
+
+func (worker *stubbornWorker) Run(ctx context.Context, request RunRequest, _ func(domain.AgentEvent)) domain.RunResult {
+	worker.started <- request
+	go func() {
+		<-ctx.Done()
+		select {
+		case worker.canceled <- struct{}{}:
+		default:
+		}
+	}()
+	return <-worker.release
 }
 
 func newBlockingWorker() *fakeWorker {
@@ -307,11 +360,9 @@ func testWorkflowSnapshot() workflow.Snapshot {
 func startTestOrchestrator(t *testing.T, adapter *fakeTracker, worker Worker, mutate ...func(*Options)) *Orchestrator {
 	t.Helper()
 	options := Options{
-		Tracker:  adapter,
-		Workflow: newFakeWorkflowStore(testWorkflowSnapshot()),
-		Worker:   worker,
-		Events:   observability.NewJournal(observability.JournalOptions{}),
-		Clock:    RealClock{},
+		Tracker: adapter, Workflow: newFakeWorkflowStore(testWorkflowSnapshot()),
+		Workspace: &fakeWorkspaceManager{}, Worker: worker,
+		Events: observability.NewJournal(observability.JournalOptions{}), Clock: RealClock{},
 	}
 	for _, apply := range mutate {
 		apply(&options)

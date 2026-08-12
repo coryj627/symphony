@@ -108,3 +108,24 @@ type retryCleanupDone struct {
 }
 
 type configChanged struct{ change workflow.Change }
+
+type startupCleanupFetched struct {
+	issues []domain.Issue
+	err    error
+}
+
+type startupCleanupRemoved struct {
+	issue domain.Issue
+	err   error
+}
+
+type reconcileFetched struct {
+	generation uint64
+	issues     []domain.Issue
+	err        error
+}
+
+type stopDeadline struct {
+	issueID    string
+	generation uint64
+}

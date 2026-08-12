@@ -5,17 +5,21 @@ import (
 	"time"
 
 	"github.com/coryj627/symphony/go/internal/domain"
+	"github.com/coryj627/symphony/go/internal/workflow"
 )
 
 type RunningEntry struct {
-	Issue       domain.Issue
-	Attempt     *int
-	Workspace   domain.Workspace
-	Status      domain.RunStatus
-	StartedAt   time.Time
-	LastEventAt time.Time
-	TurnCount   int
-	Tokens      domain.TokenTotals
+	Issue          domain.Issue
+	Attempt        *int
+	Workspace      domain.Workspace
+	Status         domain.RunStatus
+	StartedAt      time.Time
+	LastEventAt    time.Time
+	TurnCount      int
+	Tokens         domain.TokenTotals
+	StopReason     domain.StopReason
+	StopGeneration uint64
+	CleanupConfig  workflow.EffectiveConfig
 }
 
 type RetryEntry struct {

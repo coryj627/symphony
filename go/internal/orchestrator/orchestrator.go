@@ -49,26 +49,30 @@ type pollFlight struct {
 }
 
 type actorState struct {
-	workflow         workflow.Snapshot
-	model            State
-	candidates       []domain.Issue
-	scheduler        bool
-	config           domain.ConfigStatus
-	tracker          domain.TrackerStatus
-	poll             *pollFlight
-	pollGeneration   uint64
-	timerGeneration  uint64
-	cancels          map[string]context.CancelFunc
-	retryTimers      map[string]retryTimerState
-	retryGenerations map[string]uint64
+	workflow               workflow.Snapshot
+	model                  State
+	candidates             []domain.Issue
+	scheduler              bool
+	config                 domain.ConfigStatus
+	tracker                domain.TrackerStatus
+	poll                   *pollFlight
+	pollGeneration         uint64
+	timerGeneration        uint64
+	cancels                map[string]context.CancelFunc
+	retryTimers            map[string]retryTimerState
+	retryGenerations       map[string]uint64
+	startupCleanupStarted  bool
+	startupCleanupComplete bool
+	startupCleanupPending  int
+	startupWaiters         []refreshWaiter
 }
 
 func Start(ctx context.Context, options Options) (*Orchestrator, error) {
 	if ctx == nil {
 		return nil, errors.New("orchestrator context is required")
 	}
-	if options.Tracker == nil || options.Workflow == nil || options.Worker == nil || options.Events == nil {
-		return nil, errors.New("tracker, workflow, worker, and event journal are required")
+	if options.Tracker == nil || options.Workflow == nil || options.Workspace == nil || options.Worker == nil || options.Events == nil {
+		return nil, errors.New("tracker, workflow, workspace, worker, and event journal are required")
 	}
 	if options.Clock == nil {
 		options.Clock = RealClock{}
@@ -142,7 +146,7 @@ func (orchestrator *Orchestrator) loop(ctx context.Context, options Options, sna
 		retryTimers:      make(map[string]retryTimerState),
 		retryGenerations: make(map[string]uint64),
 	}
-	orchestrator.startPoll(ctx, options, &state, nil)
+	orchestrator.startStartupCleanup(ctx, options, &state)
 	close(ready)
 
 	for {
@@ -191,12 +195,23 @@ func (orchestrator *Orchestrator) loop(ctx context.Context, options Options, sna
 				orchestrator.handleRetryCleanupDone(options, &state, message)
 			case configChanged:
 				orchestrator.handleConfigChanged(ctx, options, &state, message.change)
+			case startupCleanupFetched:
+				orchestrator.handleStartupCleanupFetched(ctx, options, &state, message)
+			case startupCleanupRemoved:
+				orchestrator.handleStartupCleanupRemoved(ctx, options, &state, message)
+			case reconcileFetched:
+				orchestrator.handleReconcileFetched(ctx, options, &state, message)
+			case stopDeadline:
+				orchestrator.handleStopDeadline(&state, message)
 			}
 		}
 	}
 }
 
 func (orchestrator *Orchestrator) startPoll(ctx context.Context, options Options, state *actorState, first *refreshWaiter) {
+	if !state.startupCleanupComplete {
+		return
+	}
 	if state.poll != nil {
 		if first != nil {
 			state.poll.waiters = append(state.poll.waiters, *first)
@@ -226,10 +241,22 @@ func (orchestrator *Orchestrator) startPoll(ctx context.Context, options Options
 		orchestrator.scheduleNextPoll(ctx, options, state)
 		return
 	}
+	if orchestrator.startReconcile(ctx, options, state, flight.generation) {
+		return
+	}
+	orchestrator.fetchPollCandidates(ctx, options, state)
+}
+
+func (orchestrator *Orchestrator) fetchPollCandidates(ctx context.Context, options Options, state *actorState) {
+	if state.poll == nil {
+		return
+	}
+	generation := state.poll.generation
+	snapshot := state.poll.workflow
 	go func(generation uint64, workflowSnapshot workflow.Snapshot) {
 		issues, err := options.Tracker.FetchIssuesByStates(ctx, append([]string(nil), workflowSnapshot.Config.Tracker.ActiveStates...))
 		orchestrator.sendInternal(ctx, pollCandidates{generation: generation, workflow: workflowSnapshot, issues: issues, err: err})
-	}(flight.generation, snapshot)
+	}(generation, snapshot)
 }
 
 func (orchestrator *Orchestrator) handleCandidates(ctx context.Context, options Options, state *actorState, message pollCandidates) {
@@ -341,6 +368,9 @@ func (orchestrator *Orchestrator) startWorker(ctx context.Context, options Optio
 	claimRun(&state.model, issue, attempt, now)
 	workerContext, cancel := context.WithCancel(ctx)
 	state.cancels[issue.ID] = cancel
+	entry := state.model.Running[issue.ID]
+	entry.CleanupConfig = state.workflow.Config
+	state.model.Running[issue.ID] = entry
 	request := RunRequest{Issue: issue, Attempt: cloneAttempt(attempt), Workflow: state.workflow}
 	orchestrator.publish(options, "orchestrator.run_claimed", map[string]any{"issue_id": issue.ID, "issue_identifier": issue.Identifier})
 	go func() {
@@ -382,6 +412,21 @@ func (orchestrator *Orchestrator) handleWorkerExit(ctx context.Context, options 
 		}
 	}
 	delete(state.model.Running, message.issueID)
+	if entry.StopReason != "" {
+		if entry.StopReason == domain.StopReasonTerminal && options.Workspace != nil {
+			go func(issue domain.Issue, config workflow.EffectiveConfig) {
+				if err := options.Workspace.Remove(ctx, issue, config); err != nil {
+					options.Logger.Warn("terminal workspace cleanup failed", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+				}
+			}(entry.Issue, entry.CleanupConfig)
+		}
+		if entry.StopReason == domain.StopReasonStalled {
+			orchestrator.scheduleRetry(ctx, options, state, entry.Issue, nextFailureAttempt(entry.Attempt), FailureDelay(nextFailureAttempt(entry.Attempt), state.workflow.Config.Agent.MaxRetryBackoff), "worker stalled")
+		} else {
+			delete(state.model.Claimed, message.issueID)
+		}
+		return
+	}
 	switch message.result.Reason {
 	case domain.StopReasonNormal:
 		orchestrator.scheduleRetry(ctx, options, state, entry.Issue, 1, ContinuationDelay, "")
@@ -491,6 +536,15 @@ func (orchestrator *Orchestrator) releaseRetry(state *actorState, issueID string
 func (orchestrator *Orchestrator) handleRefresh(ctx context.Context, options Options, state *actorState, request refreshRequest) {
 	receipt := domain.RefreshReceipt{RequestedAt: request.requestedAt.UTC(), Operations: []string{"poll"}}
 	waiter := refreshWaiter{ctx: request.ctx, reply: request.reply, receipt: receipt}
+	if !state.startupCleanupComplete {
+		if len(state.startupWaiters) == 0 {
+			waiter.receipt.Queued = true
+		} else {
+			waiter.receipt.Coalesced = true
+		}
+		state.startupWaiters = append(state.startupWaiters, waiter)
+		return
+	}
 	if state.poll == nil {
 		waiter.receipt.Queued = true
 		orchestrator.startPoll(ctx, options, state, &waiter)

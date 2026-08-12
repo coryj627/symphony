@@ -26,7 +26,7 @@ func TestStartPerformsImmediatePollAndClaimsBeforeWorkerStart(t *testing.T) {
 		t.Fatalf("claim was not visible after worker start: %#v", snapshot.Running)
 	}
 	states, ids, maximum := tracker.counts()
-	if states != 1 || ids != 1 || maximum != 1 {
+	if states != 2 || ids != 1 || maximum != 1 {
 		t.Fatalf("tracker calls = states:%d ids:%d concurrent:%d", states, ids, maximum)
 	}
 }
@@ -34,7 +34,7 @@ func TestStartPerformsImmediatePollAndClaimsBeforeWorkerStart(t *testing.T) {
 func TestConcurrentRefreshesCoalesceToOnePoll(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
-	tracker := &fakeTracker{stateStarted: started, stateRelease: release}
+	tracker := &fakeTracker{stateStarted: started, stateRelease: release, blockStates: []string{"open"}}
 	orchestrator := startTestOrchestrator(t, tracker, newBlockingWorker())
 	select {
 	case <-started:
@@ -77,7 +77,7 @@ func TestConcurrentRefreshesCoalesceToOnePoll(t *testing.T) {
 		t.Fatalf("non-coalesced receipts = %d, want 1", leaders)
 	}
 	states, _, maximum := tracker.counts()
-	if states != 1 || maximum != 1 {
+	if states != 2 || maximum != 1 {
 		t.Fatalf("poll calls = %d, maximum concurrency = %d", states, maximum)
 	}
 }
@@ -152,7 +152,7 @@ func TestStartRejectsInvalidWorkflowAndAdapterFailureSkipsDispatch(t *testing.T)
 		store.loadErr = workflow.ErrInvalidWorkflow
 		_, err := Start(context.Background(), Options{
 			Tracker: &fakeTracker{}, Workflow: store, Worker: newBlockingWorker(),
-			Events: observability.NewJournal(observability.JournalOptions{}), Clock: RealClock{},
+			Workspace: &fakeWorkspaceManager{}, Events: observability.NewJournal(observability.JournalOptions{}), Clock: RealClock{},
 		})
 		if !errors.Is(err, workflow.ErrInvalidWorkflow) {
 			t.Fatalf("Start() error = %v, want invalid workflow", err)
