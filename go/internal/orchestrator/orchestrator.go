@@ -35,7 +35,7 @@ type Orchestrator struct {
 
 type refreshWaiter struct {
 	ctx     context.Context
-	reply   chan refreshResult
+	reply   chan<- refreshResult
 	receipt domain.RefreshReceipt
 }
 

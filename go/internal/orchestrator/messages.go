@@ -15,7 +15,7 @@ type snapshotResult struct {
 
 type snapshotRequest struct {
 	ctx   context.Context
-	reply chan snapshotResult
+	reply chan<- snapshotResult
 }
 
 type issueResult struct {
@@ -26,7 +26,7 @@ type issueResult struct {
 type issueRequest struct {
 	ctx        context.Context
 	identifier string
-	reply      chan issueResult
+	reply      chan<- issueResult
 }
 
 type eventPageResult struct {
@@ -37,13 +37,13 @@ type eventPageResult struct {
 type eventsAfterRequest struct {
 	ctx    context.Context
 	cursor domain.EventCursor
-	reply  chan eventPageResult
+	reply  chan<- eventPageResult
 }
 
 type recentEventsRequest struct {
 	ctx   context.Context
 	limit int
-	reply chan eventPageResult
+	reply chan<- eventPageResult
 }
 
 type refreshResult struct {
@@ -54,13 +54,13 @@ type refreshResult struct {
 type refreshRequest struct {
 	ctx         context.Context
 	requestedAt time.Time
-	reply       chan refreshResult
+	reply       chan<- refreshResult
 }
 
 type schedulerRequest struct {
 	ctx     context.Context
 	enabled bool
-	reply   chan error
+	reply   chan<- error
 }
 
 type pollTick struct{ generation uint64 }

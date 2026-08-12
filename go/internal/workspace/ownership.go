@@ -26,6 +26,15 @@ type ownershipMarker struct {
 	WorkspaceIdentity string `json:"workspace_identity"`
 }
 
+type ownershipMarkerReadOperations struct {
+	open  func(string) (*os.File, error)
+	lstat func(string) (os.FileInfo, error)
+}
+
+func defaultOwnershipMarkerReadOperations() ownershipMarkerReadOperations {
+	return ownershipMarkerReadOperations{open: os.Open, lstat: os.Lstat}
+}
+
 func writeOwnershipMarker(path string, marker ownershipMarker) (resultErr error) {
 	contents, err := json.Marshal(marker)
 	if err != nil {
@@ -76,19 +85,30 @@ func writeOwnershipMarker(path string, marker ownershipMarker) (resultErr error)
 }
 
 func readOwnershipMarker(path string) (ownershipMarker, error) {
+	return readOwnershipMarkerWithOperations(path, defaultOwnershipMarkerReadOperations())
+}
+
+func readOwnershipMarkerWithOperations(path string, operations ownershipMarkerReadOperations) (ownershipMarker, error) {
 	markerPath := filepath.Join(path, markerFilename)
-	info, err := os.Lstat(markerPath)
-	if err != nil {
-		return ownershipMarker{}, err
-	}
-	if !info.Mode().IsRegular() {
-		return ownershipMarker{}, fmt.Errorf("%w: ownership marker is not a regular file", ErrAmbiguousPath)
-	}
-	file, err := os.Open(markerPath)
+	file, err := operations.open(markerPath)
 	if err != nil {
 		return ownershipMarker{}, err
 	}
 	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return ownershipMarker{}, err
+	}
+	if !openedInfo.Mode().IsRegular() {
+		return ownershipMarker{}, fmt.Errorf("%w: ownership marker is not a regular file", ErrAmbiguousPath)
+	}
+	pathInfo, err := operations.lstat(markerPath)
+	if err != nil {
+		return ownershipMarker{}, fmt.Errorf("%w: ownership marker path changed after open: %v", ErrAmbiguousPath, err)
+	}
+	if !pathInfo.Mode().IsRegular() || !os.SameFile(openedInfo, pathInfo) {
+		return ownershipMarker{}, fmt.Errorf("%w: ownership marker path changed after open", ErrAmbiguousPath)
+	}
 	contents, err := io.ReadAll(io.LimitReader(file, maxMarkerBytes+1))
 	if err != nil {
 		return ownershipMarker{}, err
