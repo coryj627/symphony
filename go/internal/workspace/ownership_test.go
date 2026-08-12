@@ -171,31 +171,31 @@ func TestReadOwnershipMarkerRejectsPathReplacedAfterOpen(t *testing.T) {
 	if err := writeOwnershipMarker(workspace, original); err != nil {
 		t.Fatal(err)
 	}
-	markerPath := filepath.Join(workspace, markerFilename)
-	openedPath := markerPath + ".opened"
+	replacementWorkspace := t.TempDir()
+	replacement := original
+	replacement.IssueID = "attacker-controlled"
+	if err := writeOwnershipMarker(replacementWorkspace, replacement); err != nil {
+		t.Fatal(err)
+	}
+	replacementPath := filepath.Join(replacementWorkspace, markerFilename)
 	operations := defaultOwnershipMarkerReadOperations()
+	opened := false
 	operations.open = func(path string) (*os.File, error) {
 		file, err := os.Open(path)
-		if err != nil {
-			return nil, err
-		}
-		if err := os.Rename(path, openedPath); err != nil {
-			_ = file.Close()
-			return nil, err
-		}
-		replacement := original
-		replacement.IssueID = "attacker-controlled"
-		if err := writeOwnershipMarker(workspace, replacement); err != nil {
-			_ = file.Close()
-			return nil, err
+		if err == nil {
+			opened = true
 		}
 		return file, nil
+	}
+	operations.lstat = func(string) (os.FileInfo, error) {
+		if !opened {
+			return nil, errors.New("ownership marker was not opened before path validation")
+		}
+		return os.Lstat(replacementPath)
 	}
 
 	_, err := readOwnershipMarkerWithOperations(workspace, operations)
 	if !errors.Is(err, ErrAmbiguousPath) {
 		t.Fatalf("readOwnershipMarker error = %v, want ambiguous path", err)
 	}
-	assertExists(t, openedPath)
-	assertExists(t, markerPath)
 }
