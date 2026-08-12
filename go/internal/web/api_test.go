@@ -739,6 +739,55 @@ func TestRuntimeControlAPIAcceptsStartAndStopWithEffectiveState(t *testing.T) {
 	}
 }
 
+func TestRuntimeControlAPIRejectsUnsupportedAndInvalidBodiesBeforeCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		body        string
+		status      int
+		code        string
+	}{
+		{name: "unsupported media type", contentType: "text/plain", body: "{}", status: http.StatusUnsupportedMediaType, code: "unsupported_media_type"},
+		{name: "invalid JSON", contentType: "application/json", body: "{", status: http.StatusBadRequest, code: "invalid_request"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &pageRuntimeFake{}
+			handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+			recorder := serveDirect(t, handler, http.MethodPost, "/api/v1/runtime/start", test.body, map[string]string{"Content-Type": test.contentType})
+			var response apiErrorResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if recorder.Code != test.status || response.Error.Code != test.code || runtime.schedulerCalls.Load() != 0 || runtime.callOrderString() != "" {
+				t.Fatalf("rejected runtime control = %d/%#v scheduler calls=%d query calls=%q", recorder.Code, response, runtime.schedulerCalls.Load(), runtime.callOrderString())
+			}
+		})
+	}
+}
+
+func TestRuntimeControlFormRedirectsWithResultAndFocusWithoutSnapshot(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		enabled  bool
+		location string
+	}{
+		{name: "start", path: "/api/v1/runtime/start", enabled: true, location: "/?result=runtime-started&focus=stop-runtime"},
+		{name: "stop", path: "/api/v1/runtime/stop", enabled: false, location: "/?result=runtime-stopped&focus=start-runtime"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &pageRuntimeFake{}
+			handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+			recorder := serveDirect(t, handler, http.MethodPost, test.path, "", map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+			if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != test.location || runtime.schedulerCalls.Load() != 1 || runtime.lastScheduler != test.enabled || runtime.callOrderString() != "" {
+				t.Fatalf("%s form response = %d location=%q scheduler calls=%d enabled=%v query calls=%q", test.path, recorder.Code, recorder.Header().Get("Location"), runtime.schedulerCalls.Load(), runtime.lastScheduler, runtime.callOrderString())
+			}
+		})
+	}
+}
+
 func TestRuntimeControlAPIReturnsServiceUnavailableWhenEffectiveSnapshotTimesOut(t *testing.T) {
 	runtime := &pageRuntimeFake{snapshotErr: context.DeadlineExceeded}
 	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
