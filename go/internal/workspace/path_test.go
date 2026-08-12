@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -50,7 +51,11 @@ func TestNewCreatesNestedRootWithoutBroadPermissions(t *testing.T) {
 	if !os.SameFile(info, managerInfo) {
 		t.Fatalf("manager root %q is not configured root %q", manager.root, root)
 	}
-	if !info.IsDir() || info.Mode().Perm() != 0o700 {
+	if !info.IsDir() {
 		t.Fatalf("root mode = %v", info.Mode())
+	}
+	// Windows ACLs are not represented by os.FileMode permission bits.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
+		t.Fatalf("root permissions = %04o, want 0700", info.Mode().Perm())
 	}
 }
