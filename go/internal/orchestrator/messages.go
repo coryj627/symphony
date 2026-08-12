@@ -89,4 +89,22 @@ type workerExit struct {
 	result  domain.RunResult
 }
 
+type retryReady struct {
+	issueID    string
+	generation uint64
+}
+
+type retryFetchCompleted struct {
+	entry      RetryEntry
+	generation uint64
+	issues     []domain.Issue
+	err        error
+}
+
+type retryCleanupDone struct {
+	issueID    string
+	generation uint64
+	err        error
+}
+
 type configChanged struct{ change workflow.Change }

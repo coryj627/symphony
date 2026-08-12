@@ -61,6 +61,7 @@ func testConfig(activeStates, terminalStates, requiredLabels []string, maxConcur
 		},
 		Agent: workflow.AgentConfig{
 			MaxConcurrent:        maxConcurrent,
+			MaxRetryBackoff:      5 * time.Minute,
 			MaxConcurrentByState: map[string]int{},
 		},
 	}
@@ -84,9 +85,15 @@ type fakeTracker struct {
 	byIDs         []domain.Issue
 	statesErr     error
 	idsErr        error
+	idResponses   []fakeTrackerResponse
 	stateStarted  chan struct{}
 	stateRelease  chan struct{}
 	afterStates   func()
+}
+
+type fakeTrackerResponse struct {
+	issues []domain.Issue
+	err    error
 }
 
 func (tracker *fakeTracker) Kind() string { return "github" }
@@ -128,6 +135,11 @@ func (tracker *fakeTracker) FetchIssuesByIDs(ctx context.Context, _ []string) ([
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 	tracker.idCalls++
+	if len(tracker.idResponses) > 0 {
+		response := tracker.idResponses[0]
+		tracker.idResponses = tracker.idResponses[1:]
+		return cloneIssuesForTest(response.issues), response.err
+	}
 	issues := tracker.byIDs
 	if issues == nil {
 		issues = tracker.byStates
@@ -172,6 +184,28 @@ func cloneIssuesForTest(issues []domain.Issue) []domain.Issue {
 		result[index] = clone
 	}
 	return result
+}
+
+type fakeWorkspaceManager struct {
+	mu      sync.Mutex
+	removes int
+}
+
+func (*fakeWorkspaceManager) Ensure(context.Context, domain.Issue, workflow.EffectiveConfig) (domain.Workspace, error) {
+	return domain.Workspace{}, nil
+}
+
+func (manager *fakeWorkspaceManager) Remove(context.Context, domain.Issue, workflow.EffectiveConfig) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.removes++
+	return nil
+}
+
+func (manager *fakeWorkspaceManager) removeCount() int {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.removes
 }
 
 type fakeWorker struct {

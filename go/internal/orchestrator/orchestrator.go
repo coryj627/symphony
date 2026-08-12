@@ -49,16 +49,18 @@ type pollFlight struct {
 }
 
 type actorState struct {
-	workflow        workflow.Snapshot
-	model           State
-	candidates      []domain.Issue
-	scheduler       bool
-	config          domain.ConfigStatus
-	tracker         domain.TrackerStatus
-	poll            *pollFlight
-	pollGeneration  uint64
-	timerGeneration uint64
-	cancels         map[string]context.CancelFunc
+	workflow         workflow.Snapshot
+	model            State
+	candidates       []domain.Issue
+	scheduler        bool
+	config           domain.ConfigStatus
+	tracker          domain.TrackerStatus
+	poll             *pollFlight
+	pollGeneration   uint64
+	timerGeneration  uint64
+	cancels          map[string]context.CancelFunc
+	retryTimers      map[string]retryTimerState
+	retryGenerations map[string]uint64
 }
 
 func Start(ctx context.Context, options Options) (*Orchestrator, error) {
@@ -133,10 +135,12 @@ func (orchestrator *Orchestrator) loop(ctx context.Context, options Options, sna
 	now := options.Clock.Now().UTC()
 	state := actorState{
 		workflow: snapshot, model: newState(), candidates: []domain.Issue{},
-		scheduler: !options.InitiallyPaused,
-		config:    domain.ConfigStatus{State: "ready", Digest: snapshot.Digest, ActiveDigest: snapshot.Digest, ChangedAt: now},
-		tracker:   domain.TrackerStatus{Kind: options.Tracker.Kind(), State: "loading"},
-		cancels:   make(map[string]context.CancelFunc),
+		scheduler:        !options.InitiallyPaused,
+		config:           domain.ConfigStatus{State: "ready", Digest: snapshot.Digest, ActiveDigest: snapshot.Digest, ChangedAt: now},
+		tracker:          domain.TrackerStatus{Kind: options.Tracker.Kind(), State: "loading"},
+		cancels:          make(map[string]context.CancelFunc),
+		retryTimers:      make(map[string]retryTimerState),
+		retryGenerations: make(map[string]uint64),
 	}
 	orchestrator.startPoll(ctx, options, &state, nil)
 	close(ready)
@@ -146,6 +150,10 @@ func (orchestrator *Orchestrator) loop(ctx context.Context, options Options, sna
 		case <-ctx.Done():
 			for _, cancel := range state.cancels {
 				cancel()
+			}
+			for _, retry := range state.retryTimers {
+				retry.cancel()
+				retry.timer.Stop()
 			}
 			orchestrator.finishPoll(&state, ctx.Err())
 			return
@@ -174,7 +182,13 @@ func (orchestrator *Orchestrator) loop(ctx context.Context, options Options, sna
 			case workerUpdate:
 				orchestrator.handleWorkerUpdate(&state, message)
 			case workerExit:
-				orchestrator.handleWorkerExit(&state, message)
+				orchestrator.handleWorkerExit(ctx, options, &state, message)
+			case retryReady:
+				orchestrator.handleRetryReady(ctx, options, &state, message)
+			case retryFetchCompleted:
+				orchestrator.handleRetryFetchCompleted(ctx, options, &state, message)
+			case retryCleanupDone:
+				orchestrator.handleRetryCleanupDone(options, &state, message)
 			case configChanged:
 				orchestrator.handleConfigChanged(ctx, options, &state, message.change)
 			}
@@ -352,13 +366,126 @@ func (orchestrator *Orchestrator) handleWorkerUpdate(state *actorState, message 
 	state.model.RateLimits = cloneMap(message.event.RateLimits)
 }
 
-func (orchestrator *Orchestrator) handleWorkerExit(state *actorState, message workerExit) {
+func (orchestrator *Orchestrator) handleWorkerExit(ctx context.Context, options Options, state *actorState, message workerExit) {
+	entry, found := state.model.Running[message.issueID]
+	if !found {
+		return
+	}
 	cancel := state.cancels[message.issueID]
 	delete(state.cancels, message.issueID)
 	if cancel != nil {
 		cancel()
 	}
-	releaseRun(&state.model, message.issueID)
+	if current, ok := options.Workflow.Current(); ok {
+		if validateSnapshot(current, options.Tracker.Kind()) == nil {
+			state.workflow = current
+		}
+	}
+	delete(state.model.Running, message.issueID)
+	switch message.result.Reason {
+	case domain.StopReasonNormal:
+		orchestrator.scheduleRetry(ctx, options, state, entry.Issue, 1, ContinuationDelay, "")
+	case domain.StopReasonTerminal, domain.StopReasonOperatorStop:
+		delete(state.model.Claimed, message.issueID)
+	default:
+		attempt := nextFailureAttempt(entry.Attempt)
+		delay := FailureDelay(attempt, state.workflow.Config.Agent.MaxRetryBackoff)
+		orchestrator.scheduleRetry(ctx, options, state, entry.Issue, attempt, delay, retryFailureMessage(message.result))
+	}
+}
+
+func (orchestrator *Orchestrator) handleRetryReady(ctx context.Context, options Options, state *actorState, message retryReady) {
+	entry, found := state.model.RetryAttempts[message.issueID]
+	if !found || entry.Generation != message.generation || state.retryGenerations[message.issueID] != message.generation {
+		return
+	}
+	if timer, found := state.retryTimers[message.issueID]; found && timer.generation == message.generation {
+		timer.cancel()
+		timer.timer.Stop()
+		delete(state.retryTimers, message.issueID)
+	}
+	delete(state.model.RetryAttempts, message.issueID)
+	go func() {
+		issues, err := options.Tracker.FetchIssuesByIDs(ctx, []string{entry.IssueID})
+		orchestrator.sendInternal(ctx, retryFetchCompleted{entry: entry, generation: message.generation, issues: issues, err: err})
+	}()
+}
+
+func (orchestrator *Orchestrator) handleRetryFetchCompleted(ctx context.Context, options Options, state *actorState, message retryFetchCompleted) {
+	issueID := message.entry.IssueID
+	if state.retryGenerations[issueID] != message.generation {
+		return
+	}
+	if _, claimed := state.model.Claimed[issueID]; !claimed {
+		return
+	}
+	if current, ok := options.Workflow.Current(); ok {
+		if validateSnapshot(current, options.Tracker.Kind()) == nil {
+			state.workflow = current
+		}
+	}
+	if message.err != nil {
+		orchestrator.rescheduleRetry(ctx, options, state, message.entry, "tracker issue refresh failed")
+		return
+	}
+	if len(message.issues) == 0 {
+		orchestrator.releaseRetry(state, issueID)
+		orchestrator.publish(options, "orchestrator.retry_released", map[string]any{"issue_id": issueID, "reason": "missing"})
+		return
+	}
+	if len(message.issues) != 1 || message.issues[0].ID != issueID {
+		orchestrator.rescheduleRetry(ctx, options, state, message.entry, "tracker issue refresh was incomplete")
+		return
+	}
+	issue := message.issues[0]
+	if isTerminalIssue(issue, state) {
+		if options.Workspace == nil {
+			orchestrator.releaseRetry(state, issueID)
+			return
+		}
+		go func(generation uint64, config workflow.EffectiveConfig) {
+			err := options.Workspace.Remove(ctx, issue, config)
+			orchestrator.sendInternal(ctx, retryCleanupDone{issueID: issueID, generation: generation, err: err})
+		}(message.generation, state.workflow.Config)
+		return
+	}
+	if !retryIssueRoutable(issue, retryRoutingConfig(state)) {
+		orchestrator.releaseRetry(state, issueID)
+		orchestrator.publish(options, "orchestrator.retry_released", map[string]any{"issue_id": issueID, "reason": "inactive_or_unroutable"})
+		return
+	}
+	if !state.scheduler || !Eligible(issue, retryView(state.model, issueID), state.workflow.Config) {
+		orchestrator.rescheduleRetry(ctx, options, state, message.entry, "no scheduler slot is available")
+		return
+	}
+	orchestrator.startWorker(ctx, options, state, issue, &message.entry.Attempt)
+}
+
+func (orchestrator *Orchestrator) rescheduleRetry(ctx context.Context, options Options, state *actorState, entry RetryEntry, reason string) {
+	issue := domain.Issue{ID: entry.IssueID, Identifier: entry.Identifier, Title: entry.Identifier, State: "retrying", URL: cloneStringPointer(entry.IssueURL)}
+	delay := FailureDelay(entry.Attempt, state.workflow.Config.Agent.MaxRetryBackoff)
+	orchestrator.scheduleRetry(ctx, options, state, issue, entry.Attempt, delay, reason)
+}
+
+func (orchestrator *Orchestrator) handleRetryCleanupDone(options Options, state *actorState, message retryCleanupDone) {
+	if state.retryGenerations[message.issueID] != message.generation {
+		return
+	}
+	if message.err != nil {
+		options.Logger.Warn("terminal retry workspace cleanup failed", "issue_id", message.issueID, "error", message.err)
+	}
+	orchestrator.releaseRetry(state, message.issueID)
+	orchestrator.publish(options, "orchestrator.retry_released", map[string]any{"issue_id": message.issueID, "reason": "terminal"})
+}
+
+func (orchestrator *Orchestrator) releaseRetry(state *actorState, issueID string) {
+	if timer, found := state.retryTimers[issueID]; found {
+		timer.cancel()
+		timer.timer.Stop()
+		delete(state.retryTimers, issueID)
+	}
+	delete(state.model.RetryAttempts, issueID)
+	delete(state.model.Claimed, issueID)
 }
 
 func (orchestrator *Orchestrator) handleRefresh(ctx context.Context, options Options, state *actorState, request refreshRequest) {
@@ -498,7 +625,7 @@ func runningRows(state State) []domain.RunningRow {
 func retryRows(state State) []domain.RetryRow {
 	rows := make([]domain.RetryRow, 0, len(state.RetryAttempts))
 	for _, entry := range state.RetryAttempts {
-		rows = append(rows, domain.RetryRow{IssueID: entry.IssueID, IssueIdentifier: entry.Identifier, Attempt: entry.Attempt, DueAt: entry.DueAt, Error: entry.Error})
+		rows = append(rows, domain.RetryRow{IssueID: entry.IssueID, IssueIdentifier: entry.Identifier, IssueURL: cloneStringPointer(entry.IssueURL), Attempt: entry.Attempt, DueAt: entry.DueAt, Error: entry.Error})
 	}
 	sort.Slice(rows, func(left, right int) bool { return rows[left].IssueIdentifier < rows[right].IssueIdentifier })
 	return rows
@@ -537,7 +664,7 @@ func detailForIssue(issue domain.Issue, state State, config workflow.EffectiveCo
 		detail.Running = &rows[0]
 	}
 	if retry, found := state.RetryAttempts[issue.ID]; found {
-		row := domain.RetryRow{IssueID: retry.IssueID, IssueIdentifier: retry.Identifier, Attempt: retry.Attempt, DueAt: retry.DueAt, Error: retry.Error}
+		row := domain.RetryRow{IssueID: retry.IssueID, IssueIdentifier: retry.Identifier, IssueURL: cloneStringPointer(retry.IssueURL), Attempt: retry.Attempt, DueAt: retry.DueAt, Error: retry.Error}
 		detail.Status = "retrying"
 		detail.Retry = &row
 	}

@@ -21,6 +21,7 @@ type RunningEntry struct {
 type RetryEntry struct {
 	IssueID    string
 	Identifier string
+	IssueURL   *string
 	Attempt    int
 	DueAt      time.Time
 	Error      string
