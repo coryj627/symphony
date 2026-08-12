@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/coryj627/symphony/go/internal/domain"
 )
@@ -59,6 +61,39 @@ func TestEnsureRejectsExistingFileAndPreservesIt(t *testing.T) {
 	contents, readErr := os.ReadFile(path)
 	if readErr != nil || string(contents) != "preserve" {
 		t.Fatalf("existing file changed: %q, %v", contents, readErr)
+	}
+}
+
+func TestRunHookRevalidatesWorkspaceAndReturnsFailure(t *testing.T) {
+	root := t.TempDir()
+	hooks := &fakeHookRunner{results: map[domain.Hook]HookResult{
+		domain.HookBeforeRun: {ExitCode: 2, Err: errors.New("hook failed")},
+	}}
+	manager := testManager(t, root, hooks)
+	issue := testIssue("run-hook", "SYM-RUN-HOOK")
+	workspace, err := manager.Ensure(contextForTest(t), issue, withoutHooks(testConfig(root)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = manager.RunHook(contextForTest(t), domain.HookBeforeRun.WithScript("before"), workspace, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "before_run") {
+		t.Fatalf("RunHook error = %v", err)
+	}
+	workspace.PathIdentity = "changed"
+	if err := manager.RunHook(contextForTest(t), domain.HookAfterRun.WithScript("after"), workspace, time.Second); !errors.Is(err, ErrAmbiguousPath) {
+		t.Fatalf("changed workspace error = %v", err)
+	}
+}
+
+func TestRunHookBlankScriptNeedsNoProcessRunner(t *testing.T) {
+	root := t.TempDir()
+	manager := testManager(t, root, nil)
+	workspace, err := manager.Ensure(contextForTest(t), testIssue("blank-hook", "SYM-BLANK"), withoutHooks(testConfig(root)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RunHook(contextForTest(t), domain.HookBeforeRun, workspace, 0); err != nil {
+		t.Fatalf("blank hook failed: %v", err)
 	}
 }
 

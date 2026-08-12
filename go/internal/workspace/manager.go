@@ -244,6 +244,38 @@ func (manager *Manager) runHook(ctx context.Context, hook domain.Hook, workspace
 	return manager.hooks.Run(ctx, hook, workspace, timeout)
 }
 
+func (manager *Manager) RunHook(ctx context.Context, hook domain.Hook, workspace domain.Workspace, timeout time.Duration) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	if !knownHook(hook.Name) {
+		return errors.New("workspace hook name is invalid")
+	}
+	if err := manager.validateRoot(); err != nil {
+		return err
+	}
+	if workspace.RootIdentity != manager.rootIdentity || filepath.Clean(workspace.Root) != manager.root {
+		return fmt.Errorf("%w: hook workspace belongs to another root", ErrRootIdentity)
+	}
+	if !pathWithin(manager.root, workspace.Path) {
+		return fmt.Errorf("%w: hook workspace is not a child", ErrOutsideRoot)
+	}
+	if _, err := inspectChildPath(manager.root, workspace.Path); err != nil {
+		return err
+	}
+	identity, err := fileIdentity(workspace.Path)
+	if err != nil {
+		return fmt.Errorf("identify hook workspace: %w", err)
+	}
+	if workspace.PathIdentity == "" || identity != workspace.PathIdentity {
+		return fmt.Errorf("%w: hook workspace identity differs", ErrAmbiguousPath)
+	}
+	if strings.TrimSpace(hook.Script) == "" {
+		return nil
+	}
+	return hookResultError(hook, manager.runHook(ctx, hook, workspace, timeout))
+}
+
 func (manager *Manager) removeFailedCreation(workspace domain.Workspace) error {
 	current, owned, err := manager.inspectOwnedWorkspace(issueForWorkspace(workspace))
 	if err != nil || !owned || current.PathIdentity != workspace.PathIdentity {

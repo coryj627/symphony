@@ -1,0 +1,16 @@
+[
+  {"name":"exact ordering","check":"sort","want":"P1,P2,OLD,NEW"},
+  {"name":"dispatchable and labels","check":"eligibility","want":"eligible"},
+  {"name":"normal continuation retry","check":"continuation","want":"1s"},
+  {"name":"failure retry","check":"failure_backoff","attempt":3,"want":"40s"},
+  {"name":"global and state caps","check":"caps","want":"blocked"},
+  {"name":"slot exhaustion","check":"slot_retry","want":"no scheduler slot is available"},
+  {"name":"terminal reconciliation","check":"terminal","want":"cleanup"},
+  {"name":"inactive reconciliation","check":"inactive","want":"release"},
+  {"name":"missing reconciliation","check":"missing","want":"release"},
+  {"name":"stalled run","check":"stall","want":"retry"},
+  {"name":"invalid configuration","check":"invalid_config","want":"reject"},
+  {"name":"tracker error","check":"tracker_error","want":"preserve"},
+  {"name":"empty reads","check":"empty","want":"no_dispatch"},
+  {"name":"restart has no restored timers","check":"restart","want":"empty"}
+]
