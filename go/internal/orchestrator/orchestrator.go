@@ -30,6 +30,7 @@ type Orchestrator struct {
 	clock     Clock
 	events    EventJournal
 	closeOnce sync.Once
+	workers   sync.WaitGroup
 }
 
 type refreshWaiter struct {
@@ -160,6 +161,7 @@ func (orchestrator *Orchestrator) loop(ctx context.Context, options Options, sna
 				retry.timer.Stop()
 			}
 			orchestrator.finishPoll(&state, ctx.Err())
+			orchestrator.workers.Wait()
 			return
 		case message := <-orchestrator.commands:
 			switch message := message.(type) {
@@ -184,7 +186,7 @@ func (orchestrator *Orchestrator) loop(ctx context.Context, options Options, sna
 			case pollIssue:
 				orchestrator.handlePollIssue(ctx, options, &state, message)
 			case workerUpdate:
-				orchestrator.handleWorkerUpdate(&state, message)
+				orchestrator.handleWorkerUpdate(options, &state, message)
 			case workerExit:
 				orchestrator.handleWorkerExit(ctx, options, &state, message)
 			case retryReady:
@@ -202,7 +204,7 @@ func (orchestrator *Orchestrator) loop(ctx context.Context, options Options, sna
 			case reconcileFetched:
 				orchestrator.handleReconcileFetched(ctx, options, &state, message)
 			case stopDeadline:
-				orchestrator.handleStopDeadline(&state, message)
+				orchestrator.handleStopDeadline(options, &state, message)
 			}
 		}
 	}
@@ -373,7 +375,10 @@ func (orchestrator *Orchestrator) startWorker(ctx context.Context, options Optio
 	state.model.Running[issue.ID] = entry
 	request := RunRequest{Issue: issue, Attempt: cloneAttempt(attempt), Workflow: state.workflow}
 	orchestrator.publish(options, "orchestrator.run_claimed", map[string]any{"issue_id": issue.ID, "issue_identifier": issue.Identifier})
+	orchestrator.publish(options, "runtime.changed", map[string]any{"issue_id": issue.ID, "issue_identifier": issue.Identifier})
+	orchestrator.workers.Add(1)
 	go func() {
+		defer orchestrator.workers.Done()
 		result := options.Worker.Run(workerContext, request, func(event domain.AgentEvent) {
 			orchestrator.sendInternal(workerContext, workerUpdate{issueID: issue.ID, event: cloneAgentEvent(event)})
 		})
@@ -381,7 +386,7 @@ func (orchestrator *Orchestrator) startWorker(ctx context.Context, options Optio
 	}()
 }
 
-func (orchestrator *Orchestrator) handleWorkerUpdate(state *actorState, message workerUpdate) {
+func (orchestrator *Orchestrator) handleWorkerUpdate(options Options, state *actorState, message workerUpdate) {
 	entry, found := state.model.Running[message.issueID]
 	if !found {
 		return
@@ -389,11 +394,21 @@ func (orchestrator *Orchestrator) handleWorkerUpdate(state *actorState, message 
 	entry.LastEventAt = message.event.At.UTC()
 	entry.TurnCount = message.event.TurnCount
 	entry.Tokens = message.event.Tokens
+	if message.event.SessionID != "" {
+		entry.SessionID = message.event.SessionID
+	}
+	if message.event.Message != "" {
+		entry.LastMessage = message.event.Message
+	}
+	if workspace := message.event.Workspace; workspace != nil && workspace.IssueID == entry.Issue.ID && workspace.IssueIdentifier == entry.Issue.Identifier {
+		entry.Workspace = *workspace
+	}
 	if message.event.Type != "" {
 		entry.Status = domain.RunStatus(message.event.Type)
 	}
 	state.model.Running[message.issueID] = entry
 	state.model.RateLimits = cloneMap(message.event.RateLimits)
+	orchestrator.publish(options, "runtime.changed", map[string]any{"issue_id": entry.Issue.ID, "issue_identifier": entry.Issue.Identifier})
 }
 
 func (orchestrator *Orchestrator) handleWorkerExit(ctx context.Context, options Options, state *actorState, message workerExit) {
@@ -401,6 +416,7 @@ func (orchestrator *Orchestrator) handleWorkerExit(ctx context.Context, options 
 	if !found {
 		return
 	}
+	defer orchestrator.publish(options, "runtime.changed", map[string]any{"issue_id": entry.Issue.ID, "issue_identifier": entry.Issue.Identifier})
 	cancel := state.cancels[message.issueID]
 	delete(state.cancels, message.issueID)
 	if cancel != nil {
@@ -450,6 +466,7 @@ func (orchestrator *Orchestrator) handleRetryReady(ctx context.Context, options 
 		delete(state.retryTimers, message.issueID)
 	}
 	delete(state.model.RetryAttempts, message.issueID)
+	orchestrator.publish(options, "runtime.changed", map[string]any{"issue_id": entry.IssueID, "issue_identifier": entry.Identifier})
 	go func() {
 		issues, err := options.Tracker.FetchIssuesByIDs(ctx, []string{entry.IssueID})
 		orchestrator.sendInternal(ctx, retryFetchCompleted{entry: entry, generation: message.generation, issues: issues, err: err})
@@ -596,9 +613,24 @@ func (orchestrator *Orchestrator) handleScheduler(ctx context.Context, options O
 		return
 	}
 	state.scheduler = request.enabled
+	if !request.enabled {
+		issueIDs := make([]string, 0, len(state.model.Running))
+		for issueID := range state.model.Running {
+			issueIDs = append(issueIDs, issueID)
+		}
+		sort.Strings(issueIDs)
+		for _, issueID := range issueIDs {
+			entry := state.model.Running[issueID]
+			if entry.Status == domain.RunStatusStopping || entry.Status == domain.RunStatusStoppingFailed {
+				continue
+			}
+			orchestrator.requestStop(ctx, options, state, issueID, domain.StopReasonOperatorStop, false)
+		}
+	}
 	if request.enabled && state.poll == nil {
 		orchestrator.startPoll(ctx, options, state, nil)
 	}
+	orchestrator.publish(options, "runtime.changed", map[string]any{})
 	request.reply <- nil
 }
 
@@ -635,7 +667,7 @@ func (orchestrator *Orchestrator) handleSnapshot(options Options, state *actorSt
 	snapshot := domain.EmptySnapshot()
 	snapshot.GeneratedAt = options.Clock.Now().UTC()
 	snapshot.EventCursor = options.Events.Cursor()
-	snapshot.Scheduler = schedulerStatus(state.scheduler)
+	snapshot.Scheduler = schedulerStatus(state.scheduler, state.model)
 	snapshot.Candidates = candidateRows(state.candidates, state.model, state.workflow.Config)
 	snapshot.Running = runningRows(state.model)
 	snapshot.Retrying = retryRows(state.model)
@@ -647,9 +679,14 @@ func (orchestrator *Orchestrator) handleSnapshot(options Options, state *actorSt
 	request.reply <- snapshotResult{snapshot: clone, err: err}
 }
 
-func schedulerStatus(enabled bool) domain.SchedulerStatus {
+func schedulerStatus(enabled bool, state State) domain.SchedulerStatus {
 	if enabled {
 		return domain.SchedulerStatus{Available: true, Enabled: true, State: "running", Message: "The scheduler is running."}
+	}
+	for _, entry := range state.Running {
+		if entry.Status == domain.RunStatusStopping || entry.Status == domain.RunStatusStoppingFailed {
+			return domain.SchedulerStatus{Available: true, Enabled: false, State: "stopping", Message: "The scheduler is stopping active work."}
+		}
 	}
 	return domain.SchedulerStatus{Available: true, Enabled: false, State: "paused", Message: "The scheduler is paused."}
 }
@@ -668,7 +705,7 @@ func runningRows(state State) []domain.RunningRow {
 	for _, entry := range state.Running {
 		rows = append(rows, domain.RunningRow{
 			IssueID: entry.Issue.ID, IssueIdentifier: entry.Issue.Identifier, IssueURL: cloneStringPointer(entry.Issue.URL),
-			State: entry.Issue.State, TurnCount: entry.TurnCount, LastEvent: string(entry.Status),
+			State: entry.Issue.State, SessionID: entry.SessionID, TurnCount: entry.TurnCount, LastEvent: string(entry.Status), LastMessage: entry.LastMessage,
 			StartedAt: entry.StartedAt, LastEventAt: entry.LastEventAt, Tokens: entry.Tokens,
 		})
 	}
@@ -714,8 +751,16 @@ func detailForIssue(issue domain.Issue, state State, config workflow.EffectiveCo
 	detail := domain.IssueDetail{Issue: issue, Status: "candidate", Routable: Eligible(issue, stateView(state), config), RoutingReasons: []string{}}
 	if entry, found := state.Running[issue.ID]; found {
 		rows := runningRows(State{Running: map[string]RunningEntry{issue.ID: entry}})
-		detail.Status = "running"
+		detail.Status = string(entry.Status)
+		if detail.Status == "" {
+			detail.Status = "running"
+		}
 		detail.Running = &rows[0]
+		if entry.Workspace.Path != "" {
+			workspace := entry.Workspace
+			detail.Workspace = &workspace
+		}
+		detail.Attempt = cloneAttempt(entry.Attempt)
 	}
 	if retry, found := state.RetryAttempts[issue.ID]; found {
 		row := domain.RetryRow{IssueID: retry.IssueID, IssueIdentifier: retry.Identifier, IssueURL: cloneStringPointer(retry.IssueURL), Attempt: retry.Attempt, DueAt: retry.DueAt, Error: retry.Error}
@@ -756,6 +801,10 @@ func (orchestrator *Orchestrator) publish(options Options, eventType string, dat
 
 func cloneAgentEvent(event domain.AgentEvent) domain.AgentEvent {
 	event.RateLimits = cloneMap(event.RateLimits)
+	if event.Workspace != nil {
+		workspace := *event.Workspace
+		event.Workspace = &workspace
+	}
 	return event
 }
 

@@ -20,6 +20,8 @@ const allowedFocusTargets = new Set([
   'delete-credential',
   'credential-delete-cancel',
   'refresh',
+  'start-runtime',
+  'stop-runtime',
 ]);
 
 if (focusTarget && allowedFocusTargets.has(focusTarget)) {
@@ -299,7 +301,7 @@ if (liveRoot instanceof HTMLElement && typeof window.EventSource === 'function')
         liveConnection.textContent = 'Live updates are reconnecting.';
         if (cursorIsAhead(currentCursor, renderedCursor)) beginReconciliation();
       });
-      for (const eventName of ['queue.refreshed', 'queue.failed', 'configuration.changed']) {
+      for (const eventName of ['queue.refreshed', 'queue.failed', 'configuration.changed', 'runtime.changed']) {
         opened.addEventListener(eventName, event => {
           if (source === opened) handleLiveEvent(event);
         });
@@ -543,7 +545,7 @@ if (liveRoot instanceof HTMLElement && typeof window.EventSource === 'function')
       }
       updateOverviewText('tracker-scope', snapshot.tracker.scope);
       updateOverviewText('scheduler', snapshot.scheduler.available
-        ? (snapshot.scheduler.enabled ? 'Enabled' : 'Paused')
+        ? (snapshot.scheduler.state === 'stopping' ? 'Stopping' : (snapshot.scheduler.enabled ? 'Running' : 'Paused'))
         : 'Unavailable');
       updateOptionalOverviewText('scheduler-state', snapshot.scheduler.state);
       updateOptionalOverviewText('scheduler-message', snapshot.scheduler.message);
@@ -556,6 +558,63 @@ if (liveRoot instanceof HTMLElement && typeof window.EventSource === 'function')
       updateOverviewTime('last-attempt', snapshot.tracker.last_attempt_at, 'Not yet attempted');
       updateOverviewTime('last-success', snapshot.tracker.last_success_at, 'No successful refresh yet');
       updateOverviewErrors(snapshot);
+      updateRuntimeControls(snapshot.scheduler);
+    }
+
+    function updateRuntimeControls(scheduler) {
+      const start = liveRoot.querySelector('[data-runtime-start]');
+      const stop = liveRoot.querySelector('[data-runtime-stop]');
+      const startReason = liveRoot.querySelector('[data-runtime-start-reason]');
+      const stopReason = liveRoot.querySelector('[data-runtime-stop-reason]');
+      if (!(start instanceof HTMLButtonElement) || !(stop instanceof HTMLButtonElement)
+          || !(startReason instanceof HTMLElement) || !(stopReason instanceof HTMLElement)) return;
+      if (!scheduler.available) {
+        setRuntimeControlDisabled(start, true);
+        setRuntimeControlDisabled(stop, true);
+        setTextWithoutReplacingFocus(startReason, scheduler.message || 'Agent runtime will be enabled in Phase 4.');
+        setTextWithoutReplacingFocus(stopReason, scheduler.message || 'Agent runtime will be enabled in Phase 4.');
+        return;
+      }
+      if (scheduler.state === 'stopping') {
+        setRuntimeControlDisabled(start, true);
+        setRuntimeControlDisabled(stop, true);
+        setTextWithoutReplacingFocus(startReason, 'Wait for active work to stop before restarting the scheduler.');
+        setTextWithoutReplacingFocus(stopReason, 'The scheduler is already stopping.');
+        return;
+      }
+      setRuntimeControlDisabled(start, scheduler.enabled);
+      setRuntimeControlDisabled(stop, !scheduler.enabled);
+      setTextWithoutReplacingFocus(startReason, scheduler.enabled ? 'The scheduler is already running.' : 'Start polling and dispatch for this project.');
+      setTextWithoutReplacingFocus(stopReason, scheduler.enabled ? 'Stop the scheduler after active work is canceled safely.' : 'The scheduler is already paused.');
+    }
+
+    function setRuntimeControlDisabled(button, disabled) {
+      if (button.dataset.runtimeDisableReady !== 'true') {
+        button.dataset.runtimeDisableReady = 'true';
+        button.addEventListener('click', event => {
+          if (button.getAttribute('aria-disabled') === 'true') event.preventDefault();
+        });
+        button.addEventListener('focusout', () => {
+          window.requestAnimationFrame(() => {
+            if (document.activeElement === button || button.dataset.runtimeDisabled !== 'true') return;
+            button.disabled = true;
+            button.removeAttribute('aria-disabled');
+          });
+        });
+      }
+      button.dataset.runtimeDisabled = disabled ? 'true' : 'false';
+      if (!disabled) {
+        button.disabled = false;
+        button.removeAttribute('aria-disabled');
+        return;
+      }
+      if (document.activeElement === button) {
+        button.disabled = false;
+        button.setAttribute('aria-disabled', 'true');
+        return;
+      }
+      button.disabled = true;
+      button.removeAttribute('aria-disabled');
     }
 
     function updateOverviewText(name, value) {

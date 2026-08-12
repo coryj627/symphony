@@ -47,6 +47,7 @@ func (orchestrator *Orchestrator) scheduleRetry(
 		"issue_id": issue.ID, "issue_identifier": issue.Identifier, "attempt": attempt,
 		"due_at": state.model.RetryAttempts[issue.ID].DueAt.Format(time.RFC3339Nano),
 	})
+	orchestrator.publish(options, "runtime.changed", map[string]any{"issue_id": issue.ID, "issue_identifier": issue.Identifier})
 	go func() {
 		select {
 		case <-timerContext.Done():

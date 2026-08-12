@@ -94,6 +94,7 @@ func (orchestrator *Orchestrator) requestStop(ctx context.Context, options Optio
 		entry.CleanupConfig = state.workflow.Config
 	}
 	state.model.Running[issueID] = entry
+	orchestrator.publish(options, "runtime.changed", map[string]any{"issue_id": entry.Issue.ID, "issue_identifier": entry.Issue.Identifier})
 	if cancel := state.cancels[issueID]; cancel != nil {
 		cancel()
 	}
@@ -109,11 +110,12 @@ func (orchestrator *Orchestrator) requestStop(ctx context.Context, options Optio
 	}()
 }
 
-func (orchestrator *Orchestrator) handleStopDeadline(state *actorState, message stopDeadline) {
+func (orchestrator *Orchestrator) handleStopDeadline(options Options, state *actorState, message stopDeadline) {
 	entry, found := state.model.Running[message.issueID]
 	if !found || entry.StopGeneration != message.generation || entry.Status != domain.RunStatusStopping {
 		return
 	}
 	entry.Status = domain.RunStatusStoppingFailed
 	state.model.Running[message.issueID] = entry
+	orchestrator.publish(options, "runtime.changed", map[string]any{"issue_id": entry.Issue.ID, "issue_identifier": entry.Issue.Identifier})
 }

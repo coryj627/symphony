@@ -12,4 +12,5 @@ type AgentEvent struct {
 	Message    string         `json:"message,omitempty"`
 	Tokens     TokenTotals    `json:"tokens"`
 	RateLimits map[string]any `json:"rate_limits,omitempty"`
+	Workspace  *Workspace     `json:"workspace,omitempty"`
 }

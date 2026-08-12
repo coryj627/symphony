@@ -31,6 +31,157 @@ func TestStartPerformsImmediatePollAndClaimsBeforeWorkerStart(t *testing.T) {
 	}
 }
 
+func TestStopCancelsWorkersAndReturnsStoppingThenPausedState(t *testing.T) {
+	tracker := &fakeTracker{byStates: []domain.Issue{readyIssue("1", "open", "symphony")}}
+	worker := newStubbornWorker()
+	orchestrator := startTestOrchestrator(t, tracker, worker)
+
+	select {
+	case request := <-worker.started:
+		if request.Issue.ID != "1" {
+			t.Fatalf("worker issue = %q, want 1", request.Issue.ID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := orchestrator.SetScheduler(ctx, false); err != nil {
+		t.Fatalf("stop scheduler: %v", err)
+	}
+	select {
+	case <-worker.canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("scheduler stop did not cancel the worker")
+	}
+	snapshot := mustSnapshot(t, orchestrator)
+	if snapshot.Scheduler.Enabled || snapshot.Scheduler.State != "stopping" {
+		t.Fatalf("scheduler = %#v, want stopping", snapshot.Scheduler)
+	}
+	if len(snapshot.Running) != 1 || snapshot.Running[0].LastEvent != string(domain.RunStatusStopping) {
+		t.Fatalf("running rows after stop = %#v, want one stopping row", snapshot.Running)
+	}
+
+	worker.release <- domain.RunResult{Reason: domain.StopReasonOperatorStop, EndedAt: time.Now().UTC()}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		final := mustSnapshot(t, orchestrator)
+		if len(final.Running) == 0 {
+			if final.Scheduler.Enabled || final.Scheduler.State != "paused" {
+				t.Fatalf("scheduler after drain = %#v, want paused", final.Scheduler)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("stopped worker was not drained")
+}
+
+func TestCloseCancelsAndDrainsWorkersBeforeReturning(t *testing.T) {
+	tracker := &fakeTracker{byStates: []domain.Issue{readyIssue("1", "open", "symphony")}}
+	worker := newStubbornWorker()
+	orchestrator := startTestOrchestrator(t, tracker, worker)
+	select {
+	case <-worker.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not start")
+	}
+
+	closed := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		closed <- orchestrator.Close(ctx)
+	}()
+	select {
+	case <-worker.canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("close did not cancel the worker")
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("close returned before worker cleanup finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	worker.release <- domain.RunResult{Reason: domain.StopReasonOperatorStop, EndedAt: time.Now().UTC()}
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("close after drain: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("close did not return after the worker drained")
+	}
+}
+
+func TestWorkerWorkspaceAndAttemptReachIssueDetail(t *testing.T) {
+	issue := readyIssue("1", "open", "symphony")
+	attempt := 2
+	state := actorState{model: newState()}
+	claimRun(&state.model, issue, &attempt, time.Now())
+	workspace := domain.Workspace{Path: "/safe/workspace", Key: "SYM-1", Owned: true, IssueID: issue.ID, IssueIdentifier: issue.Identifier}
+	(&Orchestrator{}).handleWorkerUpdate(Options{Events: observability.NewJournal(observability.JournalOptions{})}, &state, workerUpdate{
+		issueID: issue.ID,
+		event:   domain.AgentEvent{Type: string(domain.RunStatusBuildingPrompt), Workspace: &workspace, SessionID: "session-1", Message: "Safe worker progress"},
+	})
+	detail := detailForIssue(issue, state.model, testConfig([]string{"open"}, []string{"closed"}, []string{"symphony"}, 1))
+	if detail.Workspace == nil || detail.Workspace.Path != workspace.Path || detail.Workspace.Key != workspace.Key || detail.Attempt == nil || *detail.Attempt != attempt || detail.Running == nil || detail.Running.SessionID != "session-1" || detail.Running.LastMessage != "Safe worker progress" {
+		t.Fatalf("issue detail lifecycle = workspace:%#v attempt:%#v running:%#v", detail.Workspace, detail.Attempt, detail.Running)
+	}
+}
+
+func TestWorkerEventUpdatesSnapshotAndPublishesSafeInvalidation(t *testing.T) {
+	journal := observability.NewJournal(observability.JournalOptions{})
+	emitted := make(chan struct{})
+	worker := WorkerFunc(func(ctx context.Context, request RunRequest, emit func(domain.AgentEvent)) domain.RunResult {
+		emit(domain.AgentEvent{
+			Type: "streaming_turn", At: time.Now().UTC(), SessionID: "session-secret",
+			TurnCount: 3, Message: "Safe worker progress", Tokens: domain.TokenTotals{TotalTokens: 21},
+		})
+		close(emitted)
+		<-ctx.Done()
+		return domain.RunResult{Reason: domain.StopReasonOperatorStop, EndedAt: time.Now().UTC()}
+	})
+	orchestrator := startTestOrchestrator(t, &fakeTracker{byStates: []domain.Issue{readyIssue("1", "open", "symphony")}}, worker, func(options *Options) {
+		options.Events = journal
+	})
+	select {
+	case <-emitted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not emit an event")
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		snapshot := mustSnapshot(t, orchestrator)
+		if len(snapshot.Running) == 1 && snapshot.Running[0].TurnCount == 3 {
+			row := snapshot.Running[0]
+			if row.SessionID != "session-secret" || row.LastMessage != "Safe worker progress" || row.Tokens.TotalTokens != 21 {
+				t.Fatalf("worker snapshot row = %#v", row)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("worker event did not reach snapshot: %#v", snapshot.Running)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	found := false
+	for _, event := range journal.Recent(20).Events {
+		if event.Type != "runtime.changed" || event.Data["issue_id"] != "1" {
+			continue
+		}
+		found = true
+		if len(event.Data) != 2 || event.Data["issue_identifier"] != "SYM-1" {
+			t.Fatalf("runtime invalidation data = %#v, want only safe issue identity", event.Data)
+		}
+	}
+	if !found {
+		t.Fatalf("runtime.changed was not published: %#v", journal.Recent(20).Events)
+	}
+}
+
 func TestConcurrentRefreshesCoalesceToOnePoll(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})

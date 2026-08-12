@@ -107,7 +107,8 @@ func (worker LifecycleWorker) Run(ctx context.Context, request RunRequest, emit 
 		}
 	}()
 
-	emitSafe(domain.AgentEvent{Type: string(domain.RunStatusBuildingPrompt)})
+	workspaceEvent := workspace
+	emitSafe(domain.AgentEvent{Type: string(domain.RunStatusBuildingPrompt), Workspace: &workspaceEvent})
 	prompt, err := workflow.Render(request.Workflow.Definition, templateIssue(request.Issue), request.Attempt)
 	if err != nil {
 		logger.Warn("prompt construction failed", "issue_id", request.Issue.ID, "issue_identifier", request.Issue.Identifier, "error", redactor.Value(err))

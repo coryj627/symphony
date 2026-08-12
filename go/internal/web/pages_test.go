@@ -284,7 +284,7 @@ func TestRenderedShellUsesTextualEmptyStatesAndIssueSectionOrder(t *testing.T) {
 	operator := strings.Index(issue, "Operator requests")
 	run := strings.Index(issue, "Current run")
 	retry := strings.Index(issue, "Retry history")
-	events := strings.Index(issue, "Issue-specific activity is not available in this phase.")
+	events := strings.Index(issue, "No issue-specific activity has been recorded.")
 	logs := strings.Index(issue, `<h2 id="issue-logs-heading">Logs</h2>`)
 	if metadata == -1 || eligibility == -1 || operator == -1 || run == -1 || retry == -1 || events == -1 || logs == -1 || !(metadata < eligibility && eligibility < operator && operator < run && run < retry && retry < events && events < logs) {
 		t.Fatalf("issue detail sections are missing or out of contract order")

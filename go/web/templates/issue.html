@@ -31,7 +31,7 @@
 
 <section aria-labelledby="run-heading"><h2 id="run-heading">Current run</h2>{{if .Content.Running}}<dl><div><dt>State</dt><dd>{{.Content.Running.State}}</dd></div><div><dt>Turns</dt><dd>{{.Content.Running.TurnCount}}</dd></div><div><dt>Last event</dt><dd>{{.Content.Running.LastEvent}}</dd></div><div><dt>Last message</dt><dd>{{.Content.Running.LastMessage}}</dd></div><div><dt>Started</dt><dd><time datetime="{{.Content.Running.StartedDateTime}}">{{.Content.Running.StartedDisplayTime}}</time></dd></div><div><dt>Tokens</dt><dd>{{.Content.Running.Tokens.TotalTokens}} total</dd></div></dl>{{else}}<p>No run is active.</p>{{end}}</section>
 <section aria-labelledby="retry-heading"><h2 id="retry-heading">Retry history</h2>{{if .Content.Retry}}<dl><div><dt>Attempt</dt><dd>{{.Content.Retry.Attempt}}</dd></div><div><dt>Due</dt><dd><time datetime="{{.Content.Retry.DueDateTime}}">{{.Content.Retry.DueDisplayTime}}</time></dd></div>{{if .Content.Retry.Error}}<div><dt>Status</dt><dd>{{.Content.Retry.Error}}</dd></div>{{end}}</dl>{{else}}<p>No retries have been recorded.</p>{{end}}</section>
-<section aria-labelledby="issue-activity-heading"><h2 id="issue-activity-heading">Activity</h2><p>Issue-specific activity is not available in this phase.</p></section>
+<section aria-labelledby="issue-activity-heading"><h2 id="issue-activity-heading">Activity</h2>{{if .Content.Activity}}<ol class="activity-list">{{range .Content.Activity}}<li><time datetime="{{.DateTime}}">{{.DisplayTime}}</time> — {{.Summary}}</li>{{end}}</ol>{{else}}<p>No issue-specific activity has been recorded.</p>{{end}}</section>
 
 <section aria-labelledby="issue-logs-heading">
   <h2 id="issue-logs-heading">Logs</h2>

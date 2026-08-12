@@ -22,6 +22,7 @@ const (
 	maximumShortTextBytes  = 128
 	maximumDisplayBytes    = 512
 	maximumDescription     = 16 << 10
+	maximumWorkspacePath   = 4096
 )
 
 type apiErrorResponse struct {
@@ -43,21 +44,23 @@ type apiErrorSpec struct {
 }
 
 var apiErrorSpecs = map[string]apiErrorSpec{
-	"invalid_request":          {http.StatusBadRequest, "invalid_request", "The request is invalid.", false},
-	"invalid_identifier":       {http.StatusBadRequest, "invalid_identifier", "The issue identifier is invalid.", false},
-	"invalid_event_cursor":     {http.StatusBadRequest, "invalid_event_cursor", "The event cursor is invalid.", false},
-	"event_stream_unavailable": {http.StatusServiceUnavailable, "event_stream_unavailable", "Live updates are temporarily unavailable.", true},
-	"invalid_body":             {http.StatusBadRequest, "invalid_request", "The request body is invalid.", false},
-	"unauthorized":             {http.StatusUnauthorized, "unauthorized", "Authentication is required.", false},
-	"forbidden":                {http.StatusForbidden, "forbidden", "The request was not allowed.", false},
-	"issue_not_found":          {http.StatusNotFound, "issue_not_found", "The requested issue was not found.", false},
-	"not_found":                {http.StatusNotFound, "not_found", "The requested API route was not found.", false},
-	"method_not_allowed":       {http.StatusMethodNotAllowed, "method_not_allowed", "The method is not allowed for this route.", false},
-	"refresh_unavailable":      {http.StatusConflict, "refresh_unavailable", "Refresh is unavailable in this mode.", false},
-	"unsupported_media_type":   {http.StatusUnsupportedMediaType, "unsupported_media_type", "Use JSON or form data for this request.", false},
-	"runtime_unavailable":      {http.StatusServiceUnavailable, "runtime_unavailable", "Runtime state is temporarily unavailable.", true},
-	"refresh_failed":           {http.StatusServiceUnavailable, "refresh_failed", "The refresh could not be completed.", false},
-	"internal_error":           {http.StatusInternalServerError, "internal_error", "The request could not be completed.", false},
+	"invalid_request":           {http.StatusBadRequest, "invalid_request", "The request is invalid.", false},
+	"invalid_identifier":        {http.StatusBadRequest, "invalid_identifier", "The issue identifier is invalid.", false},
+	"invalid_event_cursor":      {http.StatusBadRequest, "invalid_event_cursor", "The event cursor is invalid.", false},
+	"event_stream_unavailable":  {http.StatusServiceUnavailable, "event_stream_unavailable", "Live updates are temporarily unavailable.", true},
+	"invalid_body":              {http.StatusBadRequest, "invalid_request", "The request body is invalid.", false},
+	"unauthorized":              {http.StatusUnauthorized, "unauthorized", "Authentication is required.", false},
+	"forbidden":                 {http.StatusForbidden, "forbidden", "The request was not allowed.", false},
+	"issue_not_found":           {http.StatusNotFound, "issue_not_found", "The requested issue was not found.", false},
+	"not_found":                 {http.StatusNotFound, "not_found", "The requested API route was not found.", false},
+	"method_not_allowed":        {http.StatusMethodNotAllowed, "method_not_allowed", "The method is not allowed for this route.", false},
+	"refresh_unavailable":       {http.StatusConflict, "refresh_unavailable", "Refresh is unavailable in this mode.", false},
+	"agent_runtime_unavailable": {http.StatusConflict, "agent_runtime_unavailable", "Agent runtime will be enabled in Phase 4.", false},
+	"scheduler_failed":          {http.StatusServiceUnavailable, "scheduler_failed", "The scheduler state could not be changed.", true},
+	"unsupported_media_type":    {http.StatusUnsupportedMediaType, "unsupported_media_type", "Use JSON or form data for this request.", false},
+	"runtime_unavailable":       {http.StatusServiceUnavailable, "runtime_unavailable", "Runtime state is temporarily unavailable.", true},
+	"refresh_failed":            {http.StatusServiceUnavailable, "refresh_failed", "The refresh could not be completed.", false},
+	"internal_error":            {http.StatusInternalServerError, "internal_error", "The request could not be completed.", false},
 }
 
 func (handler *PageHandler) nextCorrelationID() string {
@@ -271,6 +274,12 @@ type schedulerResponse struct {
 	Message   string `json:"message"`
 }
 
+type schedulerCommandResponse struct {
+	Requested     string            `json:"requested"`
+	Effective     schedulerResponse `json:"effective"`
+	CorrelationID string            `json:"correlation_id"`
+}
+
 type configStatusResponse struct {
 	State         string    `json:"state"`
 	Digest        string    `json:"digest"`
@@ -368,10 +377,10 @@ type issueResponse struct {
 	IssueIdentifier string                   `json:"issue_identifier"`
 	IssueID         string                   `json:"issue_id"`
 	Status          string                   `json:"status"`
-	Workspace       *emptyResponse           `json:"workspace"`
+	Workspace       *workspaceResponse       `json:"workspace"`
 	Attempts        issueAttemptsResponse    `json:"attempts"`
-	Running         *emptyResponse           `json:"running"`
-	Retry           *emptyResponse           `json:"retry"`
+	Running         *runningResponse         `json:"running"`
+	Retry           *retryResponse           `json:"retry"`
 	Logs            issueLogsResponse        `json:"logs"`
 	RecentEvents    []eventSummaryResponse   `json:"recent_events"`
 	LastError       *emptyResponse           `json:"last_error"`
@@ -386,7 +395,15 @@ type issueAttemptsResponse struct {
 }
 
 type issueLogsResponse struct {
-	CodexSessionLogs []emptyResponse `json:"codex_session_logs"`
+	CodexSessionLogs []logRecordView `json:"codex_session_logs"`
+	Degraded         bool            `json:"degraded"`
+}
+
+type workspaceResponse struct {
+	Path       string `json:"path"`
+	Key        string `json:"workspace_key"`
+	CreatedNow bool   `json:"created_now"`
+	Owned      bool   `json:"owned"`
 }
 
 type issueSummaryResponse struct {
@@ -483,6 +500,9 @@ func eventSummary(event domain.Event) eventSummaryResponse {
 	case "configuration.changed":
 		summary.Type = event.Type
 		summary.Summary = "Configuration changed."
+	case "runtime.changed":
+		summary.Type = event.Type
+		summary.Summary = "Runtime state changed."
 	}
 	return summary
 }

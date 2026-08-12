@@ -37,6 +37,10 @@ export const scenarioManifest = [
   'encoded-identifier',
   'degraded-log',
   'long-log',
+  'runtime-unavailable',
+  'runtime-retrying',
+  'runtime-stalled',
+  'runtime-stopping',
 ];
 
 export function scenarioPath(pathname, scenario) {
@@ -55,6 +59,10 @@ export const scenarioCases = [
   {scenario: 'encoded-identifier', path: scenarioPath('/issues/TEAM%2F%2342', 'encoded-identifier')},
   {scenario: 'degraded-log', path: scenarioPath('/logs', 'degraded-log')},
   {scenario: 'long-log', path: scenarioPath('/logs', 'long-log')},
+  {scenario: 'runtime-unavailable', path: scenarioPath('/', 'runtime-unavailable')},
+  {scenario: 'runtime-retrying', path: scenarioPath('/issues/RETRY-1', 'runtime-retrying')},
+  {scenario: 'runtime-stalled', path: scenarioPath('/issues/STALL-1', 'runtime-stalled')},
+  {scenario: 'runtime-stopping', path: scenarioPath('/', 'runtime-stopping')},
 ];
 
 export const validLinearWorkflow = `---

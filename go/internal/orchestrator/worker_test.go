@@ -18,18 +18,23 @@ import (
 
 func TestLifecycleWorkerOrdersHooksAndAlwaysRunsAfterRun(t *testing.T) {
 	trace := &safeTrace{}
-	workspace := &traceWorkspace{trace: trace, workspace: domain.Workspace{IssueID: "1", IssueIdentifier: "GH-1"}}
+	wantWorkspace := domain.Workspace{Path: "/safe/workspace", Key: "GH-1", Owned: true, IssueID: "1", IssueIdentifier: "SYM-1"}
+	workspace := &traceWorkspace{trace: trace, workspace: wantWorkspace}
 	agent := AgentAttemptFunc(func(context.Context, AgentAttemptRequest, func(domain.AgentEvent)) domain.RunResult {
 		trace.add("agent")
 		return domain.RunResult{Reason: domain.StopReasonFailed, ErrorCode: "agent_failed", ErrorMessage: "safe failure"}
 	})
 	worker := lifecycleWorkerForTest(workspace, agent)
-	result := worker.Run(context.Background(), lifecycleRunRequest(), func(domain.AgentEvent) {})
+	events := []domain.AgentEvent{}
+	result := worker.Run(context.Background(), lifecycleRunRequest(), func(event domain.AgentEvent) { events = append(events, event) })
 	if result.ErrorCode != "agent_failed" {
 		t.Fatalf("result = %#v", result)
 	}
 	if got, want := trace.values(), []string{"ensure", "before_run", "agent", "after_run"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("trace = %#v, want %#v", got, want)
+	}
+	if len(events) < 2 || events[1].Type != string(domain.RunStatusBuildingPrompt) || events[1].Workspace == nil || !reflect.DeepEqual(*events[1].Workspace, wantWorkspace) {
+		t.Fatalf("workspace event = %#v, want %#v", events, wantWorkspace)
 	}
 }
 

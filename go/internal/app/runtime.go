@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	ErrUnavailableInPhase = errors.New("unavailable_in_phase")
-	ErrIssueNotFound      = errors.New("issue_not_found")
+	ErrUnavailableInPhase      = errors.New("unavailable_in_phase")
+	ErrAgentRuntimeUnavailable = errors.New("agent_runtime_unavailable")
+	ErrIssueNotFound           = errors.New("issue_not_found")
 )
 
 type RuntimeQueries interface {

@@ -13,6 +13,8 @@ type RunningEntry struct {
 	Attempt        *int
 	Workspace      domain.Workspace
 	Status         domain.RunStatus
+	SessionID      string
+	LastMessage    string
 	StartedAt      time.Time
 	LastEventAt    time.Time
 	TurnCount      int
