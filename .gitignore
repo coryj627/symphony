@@ -6,6 +6,7 @@
 !.env.example
 
 # Build and test output
+/.worktrees/
 /bin/
 /dist/
 /coverage/
