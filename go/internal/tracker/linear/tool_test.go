@@ -17,7 +17,7 @@ import (
 func TestLinearToolAdvertisesExactCapturedContract(t *testing.T) {
 	server := linearFixtureServer(t)
 	adapter := newLinearAdapter(t, server)
-	tools := adapter.AgentTools(tracker.Session{})
+	tools := adapter.AgentTools(linearToolSession(t, server.URL()))
 	if len(tools) != 1 || tools[0].Name != "linear_graphql" || tools[0].Description == "" {
 		t.Fatalf("tools=%+v", tools)
 	}
@@ -30,6 +30,23 @@ func TestLinearToolAdvertisesExactCapturedContract(t *testing.T) {
 			t.Fatalf("schema %s missing %s", schema, want)
 		}
 	}
+	githubSession, err := tracker.NewSession(domain.Issue{ID: "github:coryj627/symphony#42", Identifier: "#42", Title: "Task", State: "open"}, tracker.GitHubConfig{Owner: "coryj627", Repository: "symphony", Endpoint: "https://api.github.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tools := adapter.AgentTools(githubSession); len(tools) != 0 {
+		t.Fatalf("Linear adapter advertised to GitHub session: %+v", tools)
+	}
+}
+
+func linearToolSession(t *testing.T, endpoint string) tracker.Session {
+	t.Helper()
+	issue := domain.Issue{ID: "linear-1", Identifier: "LIN-1", Title: "Task", State: "Todo", NativeRef: map[string]any{}, Labels: []string{}, BlockedBy: []domain.BlockerRef{}}
+	session, err := tracker.NewSession(issue, defaultLinearConfig(endpoint))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return session
 }
 
 func TestLinearToolAcceptsObjectVariablesAndStringShorthand(t *testing.T) {

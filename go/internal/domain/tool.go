@@ -32,10 +32,12 @@ type ToolCall struct {
 // ToolResult is translated to the targeted app-server protocol. A failure is
 // data, not a returned Go error, so unsupported calls cannot stall a session.
 type ToolResult struct {
-	Success bool       `json:"success"`
-	Data    any        `json:"data,omitempty"`
-	Errors  []any      `json:"errors,omitempty"`
-	Error   *ToolError `json:"error,omitempty"`
+	Success   bool       `json:"success"`
+	Status    int        `json:"status,omitempty"`
+	RequestID string     `json:"request_id,omitempty"`
+	Data      any        `json:"data,omitempty"`
+	Errors    []any      `json:"errors,omitempty"`
+	Error     *ToolError `json:"error,omitempty"`
 }
 
 type ToolError struct {
@@ -89,6 +91,12 @@ func (result ToolResult) Validate() error {
 	}
 	if result.Error != nil && (result.Error.RetryAfterMS < 0 || result.Error.Status < 0) {
 		return fmt.Errorf("%w: result error metadata is invalid", ErrInvalidToolContract)
+	}
+	if result.Status < 0 || (result.Status > 0 && (result.Status < 100 || result.Status > 599)) {
+		return fmt.Errorf("%w: result status is invalid", ErrInvalidToolContract)
+	}
+	if len(result.RequestID) > 512 || strings.TrimSpace(result.RequestID) != result.RequestID {
+		return fmt.Errorf("%w: result request ID is invalid", ErrInvalidToolContract)
 	}
 	return nil
 }

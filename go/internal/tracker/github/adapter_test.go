@@ -17,7 +17,11 @@ import (
 var _ tracker.Adapter = (*Adapter)(nil)
 
 func TestAdapterCloseRetiresCapturedCredentialBytes(t *testing.T) {
-	adapter := &Adapter{token: []byte("credential-canary")}
+	cached := []byte(`{"success":false,"error":{"code":"failed","message":"failed"}}`)
+	adapter := &Adapter{
+		token: []byte("credential-canary"), idempotencyBytes: len(cached),
+		idempotencyCache: map[string]githubIdempotencyRecord{"session\x00key": {result: cached}},
+	}
 	captured := adapter.token
 	if err := adapter.Close(); err != nil {
 		t.Fatal(err)
@@ -30,11 +34,19 @@ func TestAdapterCloseRetiresCapturedCredentialBytes(t *testing.T) {
 			t.Fatal("retired GitHub credential bytes were retained")
 		}
 	}
+	if len(adapter.idempotencyCache) != 0 || adapter.idempotencyBytes != 0 {
+		t.Fatalf("retired idempotency state = %d entries, %d bytes", len(adapter.idempotencyCache), adapter.idempotencyBytes)
+	}
+	for _, value := range cached {
+		if value != 0 {
+			t.Fatal("retired GitHub idempotency result bytes were retained")
+		}
+	}
 }
 
-func TestAdapterImplementsProviderNeutralReadAndUnavailableToolSurface(t *testing.T) {
-	// Break caught: a provider adapter that returns nil collections or a Go
-	// error-shaped tool response violates the live Task 1 boundary.
+func TestAdapterImplementsProviderNeutralReadAndScopedToolSurface(t *testing.T) {
+	// Break caught: a provider adapter that returns nil collections or advertises
+	// a tool outside a captured GitHub session violates the shared boundary.
 	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("empty adapter calls must not make a request")
 	}))
@@ -47,7 +59,11 @@ func TestAdapterImplementsProviderNeutralReadAndUnavailableToolSurface(t *testin
 	if tools := adapter.AgentTools(tracker.Session{}); tools == nil || len(tools) != 0 {
 		t.Fatalf("tools = %#v, want non-nil empty", tools)
 	}
-	result := adapter.ExecuteAgentTool(context.Background(), domain.ToolCall{Name: "github_api"}, tracker.Session{})
+	validSession := githubToolSessionForEndpoint(t, server.URL)
+	if tools := adapter.AgentTools(validSession); len(tools) != 1 || tools[0].Name != githubAPIToolName {
+		t.Fatalf("scoped tools = %#v", tools)
+	}
+	result := adapter.ExecuteAgentTool(context.Background(), domain.ToolCall{Name: "future_tool"}, validSession)
 	if result.Success || result.Error == nil || result.Error.Code != domain.ToolUnavailableCode {
 		t.Fatalf("tool result = %#v", result)
 	}

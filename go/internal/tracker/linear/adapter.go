@@ -158,7 +158,19 @@ func (adapter *Adapter) FetchIssuesByIDs(ctx context.Context, ids []string) ([]d
 	return issues, nil
 }
 
-func (adapter *Adapter) AgentTools(tracker.Session) []domain.ToolSpec {
+func (adapter *Adapter) AgentTools(session tracker.Session) []domain.ToolSpec {
+	switch config := session.ProviderConfig.(type) {
+	case tracker.LinearConfig:
+		if config.ProjectSlug != adapter.config.ProjectSlug || config.Endpoint != adapter.config.Endpoint {
+			return []domain.ToolSpec{}
+		}
+	case *tracker.LinearConfig:
+		if config == nil || config.ProjectSlug != adapter.config.ProjectSlug || config.Endpoint != adapter.config.Endpoint {
+			return []domain.ToolSpec{}
+		}
+	default:
+		return []domain.ToolSpec{}
+	}
 	return []domain.ToolSpec{linearGraphQLToolSpec()}
 }
 

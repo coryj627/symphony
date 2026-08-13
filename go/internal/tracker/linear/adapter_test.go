@@ -52,7 +52,12 @@ func TestAdapterImplementsLiveTrackerAndToolContract(t *testing.T) {
 	if err != nil || ids == nil || len(ids) != 0 {
 		t.Fatalf("empty IDs = %#v, %v", ids, err)
 	}
-	if tools := adapter.AgentTools(tracker.Session{}); len(tools) != 1 || tools[0].Name != linearGraphQLToolName {
+	issue := domain.Issue{ID: "linear-1", Identifier: "LIN-1", Title: "Task", State: "Todo", NativeRef: map[string]any{}, Labels: []string{}, BlockedBy: []domain.BlockerRef{}}
+	session, err := tracker.NewSession(issue, defaultLinearConfig(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tools := adapter.AgentTools(session); len(tools) != 1 || tools[0].Name != linearGraphQLToolName {
 		t.Fatalf("tools = %#v, want linear_graphql", tools)
 	}
 	result := adapter.ExecuteAgentTool(context.Background(), domain.ToolCall{Name: "future_tool"}, tracker.Session{})
