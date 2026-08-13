@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,45 @@ import (
 	"github.com/coryj627/symphony/go/internal/domain"
 	"github.com/coryj627/symphony/go/internal/observability"
 )
+
+func TestOperatorRequestRedactsEveryUserVisibleFieldBeforeStorage(t *testing.T) {
+	const secret = "operator-request-secret-canary"
+	redactor := observability.NewRedactor(nil, nil)
+	redactor.RegisterSecret([]byte(secret))
+	recorder := newProtocolDecisionRecorder()
+	context := testServerRequestContext(recorder, "item/commandExecution/requestApproval", map[string]any{
+		"itemId": "item-1", "threadId": "thread-1", "turnId": "turn-1", "startedAtMs": 1,
+		"command": "printf " + secret, "reason": "reason " + secret,
+		"availableDecisions": []any{"accept", "decline"},
+	})
+	broker := NewRequestBroker(RequestBrokerOptions{
+		Redactor: redactor,
+		NewID:    func() string { return "request-1" },
+	})
+	request, err := broker.Open(context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), secret) {
+		t.Fatalf("operator request retained a registered secret: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "[REDACTED]") {
+		t.Fatalf("operator request did not preserve a redaction marker: %s", encoded)
+	}
+	for _, pending := range broker.Pending() {
+		encoded, err = json.Marshal(pending)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("pending request retained a registered secret: %s", encoded)
+		}
+	}
+}
 
 func TestOperatorRequestExpiresAfterAtMostElevenWindows(t *testing.T) {
 	clock := newBrokerFakeClock(time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC))

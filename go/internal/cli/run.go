@@ -304,7 +304,7 @@ func startWithDependencies(ctx context.Context, options Options, _, stderr io.Wr
 		if err != nil || logger == nil || logs == nil {
 			return joinSafe(&StartupError{Code: "observability_failed", Message: "Symphony could not prepare safe local logging."}, store.Close(), closeLogStore(deps, logs), lock.Release())
 		}
-		factory := newProductionTrackerFactory(info.WorkflowID, deps.lookupEnv, redactor, logger)
+		factory := newTrackerFactory(info.WorkflowID, deps.lookupEnv, redactor, logger)
 		resolver := productionCredentialResolver{vault: vault, lookupEnv: deps.lookupEnv}
 		journal := observability.NewJournal(observability.JournalOptions{})
 		queue := deps.newRuntime(app.QueueOptions{

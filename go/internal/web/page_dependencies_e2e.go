@@ -24,6 +24,7 @@ var e2eScenarioManifest = map[string]struct{}{
 	"degraded-log": {}, "long-log": {}, "live-focus": {}, "live-structural": {},
 	"live-pause": {}, "live-resume-failure": {}, "live-runtime-controls": {},
 	"runtime-unavailable": {}, "runtime-retrying": {}, "runtime-stalled": {}, "runtime-stopping": {},
+	"codex-incompatible": {}, "codex-tool-failure": {}, "runtime-stopping-failed": {},
 	"live-operator-requests": {},
 }
 
@@ -693,6 +694,29 @@ func newE2EPageFixture(scenario string) (*e2ePageRuntime, *e2eLogQueries) {
 		runtime.snapshot.Running = []domain.RunningRow{run}
 		detail := runtime.details[stopping.Identifier]
 		detail.Status = "stopping"
+		detail.Running = &run
+		runtime.details[stopping.Identifier] = detail
+	case "codex-incompatible":
+		runtime.snapshot.Scheduler = domain.SchedulerStatus{Available: false, State: "unavailable", Message: "The installed Codex CLI does not match the reviewed app-server version."}
+	case "codex-tool-failure":
+		failed := populated
+		failed.ID, failed.Identifier, failed.Title = "codex-tool-one", "CODEX-TOOL-1", "Codex provider tool failure"
+		add(failed, true, []string{})
+		run := domain.RunningRow{IssueID: failed.ID, IssueIdentifier: failed.Identifier, State: failed.State, LastEvent: string(domain.RunStatusFailed), LastMessage: "The provider tool returned a safe failure result.", StartedAt: e2eNow.Add(-time.Minute), LastEventAt: e2eNow}
+		runtime.snapshot.Running = []domain.RunningRow{run}
+		detail := runtime.details[failed.Identifier]
+		detail.Status = string(domain.RunStatusFailed)
+		detail.Running = &run
+		runtime.details[failed.Identifier] = detail
+	case "runtime-stopping-failed":
+		stopping := populated
+		stopping.ID, stopping.Identifier, stopping.Title = "stopping-failed-one", "STOPFAIL-1", "Codex process cleanup needs attention"
+		add(stopping, true, []string{})
+		runtime.snapshot.Scheduler = domain.SchedulerStatus{Available: false, State: "stopping_failed", Message: "The Codex process tree could not be confirmed stopped."}
+		run := domain.RunningRow{IssueID: stopping.ID, IssueIdentifier: stopping.Identifier, State: stopping.State, LastEvent: string(domain.RunStatusStoppingFailed), LastMessage: "Manual cleanup may be required before restarting.", StartedAt: e2eNow.Add(-time.Minute), LastEventAt: e2eNow}
+		runtime.snapshot.Running = []domain.RunningRow{run}
+		detail := runtime.details[stopping.Identifier]
+		detail.Status = string(domain.RunStatusStoppingFailed)
 		detail.Running = &run
 		runtime.details[stopping.Identifier] = detail
 	}

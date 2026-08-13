@@ -111,6 +111,7 @@ func (broker *RequestBroker) Open(context ServerRequestContext) (domain.Operator
 		}
 		return domain.OperatorRequest{}, err
 	}
+	mapped.request = redactOperatorRequest(mapped.request, broker.options.Redactor)
 
 	broker.mu.Lock()
 	id := broker.options.NewID()
@@ -138,6 +139,36 @@ func (broker *RequestBroker) Open(context ServerRequestContext) (domain.Operator
 	broker.mu.Unlock()
 	broker.changed()
 	return request, nil
+}
+
+func redactOperatorRequest(request domain.OperatorRequest, redactor *observability.Redactor) domain.OperatorRequest {
+	request = request.Clone()
+	redact := func(value string) string {
+		sanitized, ok := redactor.Value(value).(string)
+		if !ok {
+			return "[UNSAFE VALUE]"
+		}
+		return sanitized
+	}
+	request.Title = redact(request.Title)
+	request.Summary = redact(request.Summary)
+	for index := range request.Details {
+		request.Details[index].Label = redact(request.Details[index].Label)
+		request.Details[index].Value = redact(request.Details[index].Value)
+	}
+	for index := range request.Choices {
+		request.Choices[index].Label = redact(request.Choices[index].Label)
+		request.Choices[index].Description = redact(request.Choices[index].Description)
+	}
+	for index := range request.Questions {
+		request.Questions[index].Label = redact(request.Questions[index].Label)
+		request.Questions[index].Description = redact(request.Questions[index].Description)
+		for choiceIndex := range request.Questions[index].Choices {
+			request.Questions[index].Choices[choiceIndex].Label = redact(request.Questions[index].Choices[choiceIndex].Label)
+			request.Questions[index].Choices[choiceIndex].Description = redact(request.Questions[index].Choices[choiceIndex].Description)
+		}
+	}
+	return request
 }
 
 func (broker *RequestBroker) Respond(response domain.OperatorResponse) error {

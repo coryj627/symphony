@@ -90,6 +90,24 @@ jobs:
               ;;
           esac
 
+      - name: Verify disabled real Codex smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(go test -v -count=1 -run '^TestRealCodexAppServerSmoke$' ./internal/codex 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 0
+          case "$output" in
+            *"SKIPPED: real Codex smoke"*) ;;
+            *)
+              echo "::error::Disabled real Codex smoke did not emit its exact sentinel" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Install Node dependencies
         run: npm ci
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-08T19:33:36.997Z",
+  "generated_at": "2026-08-13T04:57:05.995Z",
   "versions": {
     "rule_engine": "1.36.0",
     "matcher": "1.1.0",
@@ -23,7 +23,7 @@
     "carried": 0,
     "resolved": 0,
     "preserved": 0,
-    "scanned_files": 12,
+    "scanned_files": 15,
     "skipped_files": 0
   },
   "findings": [],
@@ -44,26 +44,21 @@
   "coverage_scope": [],
   "coverage_caveats": [],
   "contrast_skipped_by_reason": {
-    "css_color_only_unpaired": 11,
-    "css_background_only_unpaired": 10,
-    "css_wcag_exempt": 1,
-    "template_unresolved_foreground": 52
+    "css_color_only_unpaired": 15,
+    "css_background_only_unpaired": 13,
+    "template_unresolved_foreground": 79,
+    "template_hiding_signal": 2
   },
   "contrast_diagnostics": [
     {
       "severity": "info",
       "source": "css",
-      "message": "1 contrast use-site(s) suppressed as WCAG 1.4.3-exempt (inactive :disabled/[disabled]/[inert] UI components)"
-    },
-    {
-      "severity": "info",
-      "source": "css",
-      "message": "contrast: 11 color-only [redacted-path] 10 background-only rule(s) not paired — inherited-pair analysis is out of scope for v1"
+      "message": "contrast: 15 color-only [redacted-path] 13 background-only rule(s) not paired — inherited-pair analysis is out of scope for v1"
     },
     {
       "severity": "info",
       "source": "pipeline",
-      "message": "contrast skipped_by_reason: css_background_only_unpaired=10, css_color_only_unpaired=11, css_wcag_exempt=1, template_unresolved_foreground=52"
+      "message": "contrast skipped_by_reason: css_background_only_unpaired=13, css_color_only_unpaired=15, template_hiding_signal=2, template_unresolved_foreground=79"
     }
   ],
   "artifacts": {

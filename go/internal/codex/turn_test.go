@@ -32,6 +32,30 @@ func TestTurnUsesTextInputWorkspaceSandboxAndSessionIdentity(t *testing.T) {
 	}
 }
 
+func TestDynamicToolWaitsUntilTurnStartResponseConfirmsItsIdentity(t *testing.T) {
+	active := &activeTurn{threadID: "thread-1", turnID: "", ready: make(chan struct{})}
+	session := &Session{threadID: "thread-1", active: active}
+	matched := make(chan bool, 1)
+	go func() { matched <- session.waitForActiveTurn(t.Context(), "thread-1", "turn-1") }()
+	select {
+	case <-matched:
+		t.Fatal("dynamic tool matched before turn/start was accepted")
+	case <-time.After(20 * time.Millisecond):
+	}
+	session.mu.Lock()
+	active.turnID = "turn-1"
+	active.readyOnce.Do(func() { close(active.ready) })
+	session.mu.Unlock()
+	select {
+	case ok := <-matched:
+		if !ok {
+			t.Fatal("dynamic tool did not match the accepted turn")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dynamic tool remained blocked after turn/start was accepted")
+	}
+}
+
 func TestTurnMapsFailedInterruptedAndInvalidTerminalStatuses(t *testing.T) {
 	for _, test := range []struct {
 		status   string

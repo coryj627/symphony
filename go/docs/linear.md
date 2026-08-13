@@ -1,9 +1,9 @@
 # Linear tracker
 
-The Linear adapter reads issues from one project slug per Symphony process. It
-does not create, edit, move, assign, label, or comment on issues, and it does
-not expose a Linear mutation tool to Codex. See the [main README](../README.md)
-for running separate projects concurrently.
+The Linear adapter polls issues from one project slug per Symphony process.
+During an active Codex attempt it also exposes the captured-endpoint
+`linear_graphql` tool described in [Provider tools](provider-tools.md). See the
+[main README](../README.md) for running separate projects concurrently.
 
 ## Configuration
 
@@ -43,8 +43,9 @@ replace or delete it. Never put an API key directly in `WORKFLOW.md`.
 
 Replacing or deleting a native-vault credential retires the running adapter
 generation and starts a rebuild. Use a dedicated, least-privilege credential
-that can read the configured project; Symphony's Phase 2 adapter requires no
-Linear write operation.
+that can read the configured project. If the authored workflow permits Codex
+to send mutations through `linear_graphql`, that credential must also be
+authorized for only the intended Linear workspace and operations.
 
 For the protected `integration_live` workflow, use a dedicated seeded test
 project rather than an operator or production project. Keep at least one stable
@@ -133,5 +134,7 @@ capped at 24 hours and fall back to one minute when no valid reset is present.
 Redirects are rejected, responses are bounded to 4 MiB, and requests time out
 after 30 seconds.
 
-These controls describe the current read-only provider boundary. They do not
-claim that a credentialed live profile has passed in a particular workspace.
+These controls describe queue reads. The separate GraphQL tool boundary and its
+1 MiB request/response limits are documented in
+[Provider tools](provider-tools.md). They do not claim that a credentialed live
+profile has passed in a particular workspace.

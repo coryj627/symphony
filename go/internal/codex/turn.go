@@ -55,6 +55,8 @@ type activeTurn struct {
 	done            chan turnOutcome
 	signals         chan turnSignal
 	once            sync.Once
+	ready           chan struct{}
+	readyOnce       sync.Once
 }
 
 // StartTurn starts one text-input turn on the existing live thread.
@@ -82,6 +84,7 @@ func (session *Session) StartTurn(ctx context.Context, text string) (TurnResult,
 		threadID: session.threadID,
 		done:     make(chan turnOutcome, 1),
 		signals:  make(chan turnSignal, 64),
+		ready:    make(chan struct{}),
 	}
 	session.active = active
 	threadID := session.threadID
@@ -119,6 +122,7 @@ func (session *Session) StartTurn(ctx context.Context, text string) (TurnResult,
 		return TurnResult{}, newProtocolError(ProtocolErrorMalformedMessage, "Codex turn/start response conflicts with the active turn.", false, nil)
 	}
 	active.turnID = response.Turn.ID
+	active.readyOnce.Do(func() { close(active.ready) })
 	earlyCompletion := cloneRaw(active.earlyCompletion)
 	earlyError := active.earlyError
 	active.earlyCompletion = nil
@@ -354,6 +358,7 @@ func (session *Session) clearActive(active *activeTurn) {
 		session.active = nil
 	}
 	session.mu.Unlock()
+	active.readyOnce.Do(func() { close(active.ready) })
 }
 
 func stopTimer(timer *time.Timer) {

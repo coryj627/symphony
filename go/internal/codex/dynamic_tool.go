@@ -34,8 +34,14 @@ func (session *liveAgentSession) handleServerRequest(ctx context.Context, reques
 		return true
 	}
 	var params dynamicToolCallParams
-	if decodeRequestParams(request.Params, &params) != nil || params.CallID == "" ||
-		!session.protocol.matchesActiveTurn(params.ThreadID, params.TurnID) {
+	if decodeRequestParams(request.Params, &params) != nil || params.CallID == "" {
+		session.rejectDynamicTool(request)
+		return true
+	}
+	matchCtx, cancel := session.protocol.requestContext(ctx)
+	matches := session.protocol.waitForActiveTurn(matchCtx, params.ThreadID, params.TurnID)
+	cancel()
+	if !matches {
 		session.rejectDynamicTool(request)
 		return true
 	}
