@@ -135,7 +135,7 @@ func TestBuiltSymphonyCompletesTwoTurnsOperatorRequestsAndProviderToolWithoutLea
 	cookie := exchangeFullProcessCapability(t, client, protectedURL)
 	var captured synchronizedText
 	csrf := fullProcessCSRFToken(t, client, baseURL, cookie, &captured)
-	startFullProcessRuntime(t, client, baseURL, cookie, csrf, &captured, diagnosticsRoot)
+	startFullProcessRuntime(t, client, baseURL, cookie, csrf, &captured, dataRoot, diagnosticsRoot)
 
 	approval := awaitFullProcessState(t, client, baseURL, cookie, &captured, dataRoot, func(state fullProcessState) bool {
 		return len(state.Requests) == 1 && state.Requests[0].Kind == "command_approval"
@@ -344,28 +344,48 @@ func awaitFullProcessState(t *testing.T, client *http.Client, baseURL string, co
 	return fullProcessState{}
 }
 
-func fullProcessDiagnostics(root string) string {
+func fullProcessDiagnostics(roots ...string) string {
 	var diagnostics strings.Builder
-	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
+	for _, root := range roots {
+		_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return nil
+			}
+			value, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return nil
+			}
+			text := string(bytes.ToValidUTF8(value, nil))
+			text = strings.ReplaceAll(text, fullProcessCanary, "[REDACTED]")
+			text = strings.ReplaceAll(text, "temporary-answer", "[REDACTED]")
+			if len(text) > 16<<10 {
+				text = text[len(text)-(16<<10):]
+			}
+			diagnostics.WriteString(path)
+			diagnostics.WriteByte('\n')
+			diagnostics.WriteString(text)
 			return nil
-		}
-		value, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return nil
-		}
-		text := string(bytes.ToValidUTF8(value, nil))
-		text = strings.ReplaceAll(text, fullProcessCanary, "[REDACTED]")
-		text = strings.ReplaceAll(text, "temporary-answer", "[REDACTED]")
-		if len(text) > 16<<10 {
-			text = text[len(text)-(16<<10):]
-		}
-		diagnostics.WriteString(path)
-		diagnostics.WriteByte('\n')
-		diagnostics.WriteString(text)
-		return nil
-	})
+		})
+	}
 	return diagnostics.String()
+}
+
+func TestFullProcessDiagnosticsAggregatesRootsAndRedactsSecrets(t *testing.T) {
+	first := privateTempDir(t)
+	second := privateTempDir(t)
+	if err := os.WriteFile(filepath.Join(first, "symphony.log"), []byte("preflight "+fullProcessCanary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "fake-codex-trace.log"), []byte("response temporary-answer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	diagnostics := fullProcessDiagnostics(first, second)
+	if !strings.Contains(diagnostics, "preflight [REDACTED]") || !strings.Contains(diagnostics, "response [REDACTED]") {
+		t.Fatalf("diagnostics omitted one redacted root: %s", diagnostics)
+	}
+	if strings.Contains(diagnostics, fullProcessCanary) || strings.Contains(diagnostics, "temporary-answer") {
+		t.Fatalf("diagnostics retained a secret: %s", diagnostics)
+	}
 }
 
 var (
@@ -403,7 +423,7 @@ func fullProcessCSRFToken(t *testing.T, client *http.Client, baseURL string, coo
 	return csrf[1]
 }
 
-func startFullProcessRuntime(t *testing.T, client *http.Client, baseURL string, cookie *http.Cookie, csrf string, captured *synchronizedText, debugRoot string) {
+func startFullProcessRuntime(t *testing.T, client *http.Client, baseURL string, cookie *http.Cookie, csrf string, captured *synchronizedText, debugRoots ...string) {
 	t.Helper()
 	request, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/runtime/start", strings.NewReader("{}"))
 	if err != nil {
@@ -425,7 +445,7 @@ func startFullProcessRuntime(t *testing.T, client *http.Client, baseURL string, 
 	captured.add(string(body))
 	if response.StatusCode != http.StatusAccepted {
 		state, _ := fullProcessGet(t, client, baseURL+"/api/v1/state", cookie)
-		t.Fatalf("runtime start = %d body=%s state=%s diagnostics=%s", response.StatusCode, body, state, fullProcessDiagnostics(debugRoot))
+		t.Fatalf("runtime start = %d body=%s state=%s diagnostics=%s", response.StatusCode, body, state, fullProcessDiagnostics(debugRoots...))
 	}
 }
 
