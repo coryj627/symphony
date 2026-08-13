@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -107,6 +109,73 @@ func TestFullScenarioRequiresOperatorResponsesToolResultAndTwoTurns(t *testing.T
 		if methods[index] != want[index] {
 			t.Fatalf("methods = %#v", methods)
 		}
+	}
+}
+
+func TestScenarioTraceReportsOnlyBoundedProtocolStages(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "fake-codex-trace.log")
+	t.Setenv("SYMPHONY_FAKE_CODEX_TRACE_PATH", tracePath)
+	input := strings.Join([]string{
+		`{"id":1,"method":"initialize","params":{"secret":"phase4-secret-canary"}}`,
+		`{"method":"initialized"}`,
+		`{"id":2,"method":"thread/start","params":{"cwd":"/workspace","dynamicTools":[{"name":"github_api"}]}}`,
+		`{"id":3,"method":"turn/start","params":{"threadId":"thread-1"}}`,
+		`{"id":"approval-1","result":{"decision":"accept"}}`,
+		`{"id":"input-1","result":{"answers":{"platform":{"answers":["Windows"]},"detail":{"answers":["integration detail"]},"token":{"answers":["temporary-answer"]}}}}`,
+		`{"id":"tool-1","result":{"success":true,"contentItems":[{"type":"inputText","text":"{\"success\":true,\"data\":{\"fake_tool\":\"executed\"}}"}]}}`,
+		`{"id":4,"method":"turn/start","params":{"threadId":"thread-1"}}`,
+	}, "\n") + "\n"
+	if err := runScenario("full", strings.NewReader(input), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	trace, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		"scenario=full event=start",
+		"scenario=full receive=initialize",
+		"scenario=full receive=initialized",
+		"scenario=full receive=thread/start",
+		"scenario=full receive=turn/start",
+		"scenario=full receive=command_response_accept",
+		"scenario=full receive=input_response",
+		"scenario=full receive=tool_response_success",
+		"scenario=full receive=turn/start",
+		"scenario=full event=complete",
+		"",
+	}, "\n")
+	if string(trace) != want {
+		t.Fatalf("trace = %q, want %q", trace, want)
+	}
+	if bytes.Contains(trace, []byte("phase4-secret-canary")) || bytes.Contains(trace, []byte("temporary-answer")) {
+		t.Fatalf("trace retained a protocol payload: %q", trace)
+	}
+}
+
+func TestScenarioTraceClassifiesCanceledCommandWithoutItsPayload(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "fake-codex-trace.log")
+	t.Setenv("SYMPHONY_FAKE_CODEX_TRACE_PATH", tracePath)
+	input := strings.Join([]string{
+		`{"id":1,"method":"initialize","params":{}}`,
+		`{"method":"initialized"}`,
+		`{"id":2,"method":"thread/start","params":{"cwd":"/workspace","dynamicTools":[{"name":"github_api"}]}}`,
+		`{"id":3,"method":"turn/start","params":{"threadId":"thread-1"}}`,
+		`{"id":"approval-1","result":{"decision":"cancel","secret":"phase4-secret-canary"}}`,
+	}, "\n") + "\n"
+	err := runScenario("full", strings.NewReader(input), io.Discard)
+	if err == nil || err.Error() != "fake app-server expected the command approval" {
+		t.Fatalf("run scenario error = %v", err)
+	}
+	trace, readErr := os.ReadFile(tracePath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Contains(trace, []byte("scenario=full receive=command_response_cancel\nscenario=full event=failed\n")) {
+		t.Fatalf("trace did not classify the canceled command: %q", trace)
+	}
+	if bytes.Contains(trace, []byte("phase4-secret-canary")) {
+		t.Fatalf("trace retained a protocol payload: %q", trace)
 	}
 }
 

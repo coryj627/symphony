@@ -70,6 +70,10 @@ func TestBuiltSymphonyCompletesTwoTurnsOperatorRequestsAndProviderToolWithoutLea
 	symphonyBinary := buildE2ESymphonyBinary(t, root)
 	workspaceRoot := filepath.Join(root, "workspaces")
 	dataRoot := filepath.Join(root, "data")
+	diagnosticsRoot := filepath.Join(root, "diagnostics")
+	if err := os.MkdirAll(diagnosticsRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	workflowPath := writeFullProcessWorkflow(t, root, workspaceRoot, fakeBinary)
 
 	command := exec.Command(symphonyBinary, workflowPath, "--port", "0", "--data-dir", dataRoot)
@@ -131,7 +135,7 @@ func TestBuiltSymphonyCompletesTwoTurnsOperatorRequestsAndProviderToolWithoutLea
 	cookie := exchangeFullProcessCapability(t, client, protectedURL)
 	var captured synchronizedText
 	csrf := fullProcessCSRFToken(t, client, baseURL, cookie, &captured)
-	startFullProcessRuntime(t, client, baseURL, cookie, csrf, &captured)
+	startFullProcessRuntime(t, client, baseURL, cookie, csrf, &captured, diagnosticsRoot)
 
 	approval := awaitFullProcessState(t, client, baseURL, cookie, &captured, dataRoot, func(state fullProcessState) bool {
 		return len(state.Requests) == 1 && state.Requests[0].Kind == "command_approval"
@@ -240,8 +244,8 @@ Work on {{ issue.identifier }} through the deterministic full-process fixture.
 func fullProcessEnvironment(root string) []string {
 	blocked := map[string]bool{
 		"SYMPHONY_E2E_CODEX_TRACKER": true, "SYMPHONY_FAKE_CODEX_SCENARIO": true,
-		"SYMPHONY_E2E_BOOTSTRAP_TOKEN": true,
-		"SYMPHONY_E2E_SECRET_CANARY":   true, "SYMPHONY_GITHUB_TEST_TOKEN": true, "SYMPHONY_LINEAR_TEST_TOKEN": true,
+		"SYMPHONY_E2E_BOOTSTRAP_TOKEN": true, "SYMPHONY_FAKE_CODEX_TRACE_PATH": true,
+		"SYMPHONY_E2E_SECRET_CANARY": true, "SYMPHONY_GITHUB_TEST_TOKEN": true, "SYMPHONY_LINEAR_TEST_TOKEN": true,
 	}
 	environment := make([]string, 0, len(os.Environ())+8)
 	for _, entry := range os.Environ() {
@@ -252,6 +256,7 @@ func fullProcessEnvironment(root string) []string {
 	}
 	environment = append(environment,
 		"SYMPHONY_E2E_CODEX_TRACKER=1", "SYMPHONY_FAKE_CODEX_SCENARIO=full",
+		"SYMPHONY_FAKE_CODEX_TRACE_PATH="+filepath.Join(root, "diagnostics", "fake-codex-trace.log"),
 		"SYMPHONY_E2E_BOOTSTRAP_TOKEN="+fullProcessBootstrapToken,
 		"SYMPHONY_E2E_SECRET_CANARY="+fullProcessCanary,
 		"SYMPHONY_GITHUB_TEST_TOKEN="+fullProcessCanary,
@@ -263,6 +268,24 @@ func fullProcessEnvironment(root string) []string {
 		environment = append(environment, "APPDATA="+filepath.Join(root, "AppData", "Roaming"))
 	}
 	return environment
+}
+
+func TestFullProcessEnvironmentPinsPrivateTracePath(t *testing.T) {
+	t.Setenv("SYMPHONY_FAKE_CODEX_TRACE_PATH", "attacker-controlled-trace.log")
+	root := privateTempDir(t)
+	want := filepath.Join(root, "diagnostics", "fake-codex-trace.log")
+	var got string
+	count := 0
+	for _, entry := range fullProcessEnvironment(root) {
+		name, value, found := strings.Cut(entry, "=")
+		if found && name == "SYMPHONY_FAKE_CODEX_TRACE_PATH" {
+			count++
+			got = value
+		}
+	}
+	if count != 1 || got != want {
+		t.Fatalf("trace environment count = %d, value = %q, want one %q", count, got, want)
+	}
 }
 
 func awaitProtectedURL(t *testing.T, ready <-chan string, exited <-chan error, output *synchronizedText) string {
@@ -380,7 +403,7 @@ func fullProcessCSRFToken(t *testing.T, client *http.Client, baseURL string, coo
 	return csrf[1]
 }
 
-func startFullProcessRuntime(t *testing.T, client *http.Client, baseURL string, cookie *http.Cookie, csrf string, captured *synchronizedText) {
+func startFullProcessRuntime(t *testing.T, client *http.Client, baseURL string, cookie *http.Cookie, csrf string, captured *synchronizedText, debugRoot string) {
 	t.Helper()
 	request, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/runtime/start", strings.NewReader("{}"))
 	if err != nil {
@@ -402,7 +425,7 @@ func startFullProcessRuntime(t *testing.T, client *http.Client, baseURL string, 
 	captured.add(string(body))
 	if response.StatusCode != http.StatusAccepted {
 		state, _ := fullProcessGet(t, client, baseURL+"/api/v1/state", cookie)
-		t.Fatalf("runtime start = %d body=%s state=%s", response.StatusCode, body, state)
+		t.Fatalf("runtime start = %d body=%s state=%s diagnostics=%s", response.StatusCode, body, state, fullProcessDiagnostics(debugRoot))
 	}
 }
 

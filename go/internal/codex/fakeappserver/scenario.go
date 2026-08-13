@@ -10,7 +10,10 @@ import (
 	"strings"
 )
 
-const maximumFixtureLineBytes = 8 << 20
+const (
+	maximumFixtureLineBytes = 8 << 20
+	fixtureTraceEnvironment = "SYMPHONY_FAKE_CODEX_TRACE_PATH"
+)
 
 var fixtureScenarios = map[string]struct{}{
 	"happy": {}, "full": {}, "tool-failure": {}, "turn-failed": {}, "turn-interrupted": {},
@@ -29,6 +32,7 @@ type fixtureEnvelope struct {
 type fixtureServer struct {
 	scenario    string
 	encoder     *json.Encoder
+	trace       io.Writer
 	workspace   string
 	dynamicTool string
 	pendingTool bool
@@ -37,11 +41,30 @@ type fixtureServer struct {
 	turnCount   int
 }
 
-func runScenario(name string, input io.Reader, output io.Writer) error {
+func runScenario(name string, input io.Reader, output io.Writer) (runErr error) {
 	if _, ok := fixtureScenarios[name]; !ok {
 		return fmt.Errorf("unknown fake app-server scenario %q", name)
 	}
-	server := &fixtureServer{scenario: name, encoder: json.NewEncoder(output)}
+	trace, closeTrace, err := openFixtureTrace()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		event := "complete"
+		if runErr != nil {
+			event = "failed"
+		}
+		if traceErr := writeFixtureTrace(trace, name, "event", event); runErr == nil && traceErr != nil {
+			runErr = traceErr
+		}
+		if closeErr := closeTrace(); runErr == nil && closeErr != nil {
+			runErr = closeErr
+		}
+	}()
+	if err := writeFixtureTrace(trace, name, "event", "start"); err != nil {
+		return err
+	}
+	server := &fixtureServer{scenario: name, encoder: json.NewEncoder(output), trace: trace}
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 64<<10), maximumFixtureLineBytes)
 	for scanner.Scan() {
@@ -49,6 +72,9 @@ func runScenario(name string, input io.Reader, output io.Writer) error {
 		var message fixtureEnvelope
 		if err := json.Unmarshal(line, &message); err != nil {
 			return fmt.Errorf("decode client message: %w", err)
+		}
+		if err := server.traceMessage(message); err != nil {
+			return err
 		}
 		if err := server.handle(message, output); err != nil {
 			return err
@@ -58,6 +84,67 @@ func runScenario(name string, input io.Reader, output io.Writer) error {
 		return err
 	}
 	return nil
+}
+
+func openFixtureTrace() (io.Writer, func() error, error) {
+	path := strings.TrimSpace(os.Getenv(fixtureTraceEnvironment))
+	if path == "" {
+		return io.Discard, func() error { return nil }, nil
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open fake app-server trace: %w", err)
+	}
+	return file, file.Close, nil
+}
+
+func writeFixtureTrace(target io.Writer, scenario, key, value string) error {
+	_, err := fmt.Fprintf(target, "scenario=%s %s=%s\n", scenario, key, value)
+	return err
+}
+
+func (server *fixtureServer) traceMessage(message fixtureEnvelope) error {
+	stage := "other"
+	if message.Method != "" {
+		switch message.Method {
+		case "initialize", "initialized", "thread/start", "turn/start", "turn/interrupt":
+			stage = message.Method
+		default:
+			stage = "method_other"
+		}
+	} else if server.pendingKind == "command" && len(message.Result) > 0 {
+		var response struct {
+			Decision string `json:"decision"`
+		}
+		if err := json.Unmarshal(message.Result, &response); err != nil {
+			stage = "command_response_other"
+		} else {
+			switch response.Decision {
+			case "accept":
+				stage = "command_response_accept"
+			case "cancel":
+				stage = "command_response_cancel"
+			default:
+				stage = "command_response_other"
+			}
+		}
+	} else if server.pendingKind == "input" && len(message.Result) > 0 {
+		stage = "input_response"
+	} else if server.pendingTool && len(message.ID) > 0 {
+		if len(message.Error) > 0 {
+			stage = "tool_response_error"
+		} else {
+			var response struct {
+				Success bool `json:"success"`
+			}
+			if err := json.Unmarshal(message.Result, &response); err == nil && response.Success {
+				stage = "tool_response_success"
+			} else {
+				stage = "tool_response_failure"
+			}
+		}
+	}
+	return writeFixtureTrace(server.trace, server.scenario, "receive", stage)
 }
 
 func (server *fixtureServer) handle(message fixtureEnvelope, rawOutput io.Writer) error {
