@@ -105,7 +105,7 @@ func launchNative(options validatedLaunchOptions, stderr io.Writer) (result nati
 		cleanupFiles()
 		return nativeLaunch{}, fmt.Errorf("encode Codex Bash path: %w", err)
 	}
-	commandLine, err := windows.UTF16PtrFromString(windows.ComposeCommandLine(append([]string{options.Spec.Path}, options.Spec.Args...)))
+	commandLine, err := windows.UTF16PtrFromString(composeWindowsBashCommandLine(options.Spec))
 	if err != nil {
 		cleanupFiles()
 		return nativeLaunch{}, fmt.Errorf("encode Codex command: %w", err)
@@ -179,6 +179,46 @@ func launchNative(options validatedLaunchOptions, stderr io.Writer) (result nati
 	processOwned = false
 	jobOwned = false
 	return nativeLaunch{stdin: stdinWrite, stdout: stdoutRead, backend: backend}, nil
+}
+
+// composeWindowsBashCommandLine always wraps the workflow command. Git Bash's
+// MSYS argument parser does not preserve a quote-only argument when the generic
+// Windows encoder leaves it unwrapped (for example, `"C:/codex.exe"`).
+func composeWindowsBashCommandLine(spec CommandSpec) string {
+	arguments := append([]string{spec.Path}, spec.Args...)
+	last := len(arguments) - 1
+	if last <= 0 {
+		return windows.ComposeCommandLine(arguments)
+	}
+	return windows.ComposeCommandLine(arguments[:last]) + " " + quoteWindowsCommandArgument(arguments[last])
+}
+
+func quoteWindowsCommandArgument(argument string) string {
+	var quoted strings.Builder
+	quoted.Grow(len(argument) + 2)
+	quoted.WriteByte('"')
+	backslashes := 0
+	for index := 0; index < len(argument); index++ {
+		character := argument[index]
+		switch character {
+		case '\\':
+			backslashes++
+			quoted.WriteByte(character)
+		case '"':
+			for ; backslashes > 0; backslashes-- {
+				quoted.WriteByte('\\')
+			}
+			quoted.WriteString(`\"`)
+		default:
+			backslashes = 0
+			quoted.WriteByte(character)
+		}
+	}
+	for ; backslashes > 0; backslashes-- {
+		quoted.WriteByte('\\')
+	}
+	quoted.WriteByte('"')
+	return quoted.String()
 }
 
 func (process *windowsProcess) pid() int { return process.processID }

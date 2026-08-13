@@ -61,6 +61,36 @@ func TestProcessStopTerminatesWindowsDescendantsAndNotUnrelatedProcess(t *testin
 	}
 }
 
+func TestWindowsLaunchPreservesQuoteOnlyWorkflowCommand(t *testing.T) {
+	bash, err := FindBash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	process, err := Launch(t.Context(), LaunchOptions{
+		Cwd:      canonicalTestDirectory(t),
+		Command:  `"true"`,
+		BashPath: bash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = process.Stop(context.Background()) })
+	waitContext, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := process.Wait(waitContext); err != nil {
+		t.Fatalf("quote-only workflow command failed: %v; diagnostic=%q", err, process.Diagnostic())
+	}
+}
+
+func TestWindowsBashCommandLineAlwaysQuotesWorkflowCommand(t *testing.T) {
+	spec := BashCommand(`C:\Program Files\Git\bin\bash.exe`, `"C:/fixture/fake.exe"`)
+	got := composeWindowsBashCommandLine(spec)
+	want := `"C:\Program Files\Git\bin\bash.exe" -lc "\"C:/fixture/fake.exe\""`
+	if got != want {
+		t.Fatalf("composeWindowsBashCommandLine() = %q, want %q", got, want)
+	}
+}
+
 func launchWindowsTestProcessTree(t *testing.T) (Process, string) {
 	t.Helper()
 	bash, err := FindBash()
