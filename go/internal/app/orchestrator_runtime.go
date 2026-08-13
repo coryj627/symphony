@@ -8,7 +8,7 @@ import (
 	"github.com/coryj627/symphony/go/internal/domain"
 )
 
-const phase3UnavailableMessage = "Agent runtime will be enabled in Phase 4."
+const agentUnavailableMessage = "The agent runtime is available only in run mode."
 
 type OrchestratorEngine interface {
 	RuntimeQueries
@@ -42,7 +42,7 @@ func (runtime *OrchestratorRuntime) Snapshot(ctx context.Context) (domain.Snapsh
 	}
 	if !runtime.agentReady {
 		snapshot.Scheduler = domain.SchedulerStatus{
-			Available: false, Enabled: false, State: "unavailable", Message: phase3UnavailableMessage,
+			Available: false, Enabled: false, State: "unavailable", Message: agentUnavailableMessage,
 		}
 	}
 	if runtime.requests != nil {

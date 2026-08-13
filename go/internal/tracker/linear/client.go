@@ -77,7 +77,7 @@ func (adapter *Adapter) request(ctx context.Context, query string, variables map
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", string(adapter.token))
+	request.Header.Set("Authorization", adapter.authorization())
 	request.Header.Set("User-Agent", linearUserAgent)
 
 	response, err := adapter.client.Do(request)

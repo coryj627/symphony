@@ -10,7 +10,7 @@ import (
 	"github.com/coryj627/symphony/go/internal/domain"
 )
 
-func TestOrchestratorRuntimeUnavailablePhaseIsTruthfulAndRejectsStart(t *testing.T) {
+func TestOrchestratorRuntimeConfigureModeIsTruthfulAndRejectsStart(t *testing.T) {
 	engine := &runtimeEngineFake{snapshot: domain.Snapshot{Scheduler: domain.SchedulerStatus{Available: true, Enabled: true, State: "running"}}}
 	runtime, err := NewOrchestratorRuntime(OrchestratorRuntimeOptions{Engine: engine, AgentReady: false})
 	if err != nil {
@@ -20,7 +20,7 @@ func TestOrchestratorRuntimeUnavailablePhaseIsTruthfulAndRejectsStart(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Scheduler.Available || snapshot.Scheduler.Enabled || snapshot.Scheduler.State != "unavailable" || snapshot.Scheduler.Message != "Agent runtime will be enabled in Phase 4." {
+	if snapshot.Scheduler.Available || snapshot.Scheduler.Enabled || snapshot.Scheduler.State != "unavailable" || snapshot.Scheduler.Message != "The agent runtime is available only in run mode." {
 		t.Fatalf("scheduler = %#v", snapshot.Scheduler)
 	}
 	if err := runtime.SetScheduler(context.Background(), true); !errors.Is(err, ErrAgentRuntimeUnavailable) {

@@ -27,6 +27,7 @@ type QueueOptions struct {
 	Resolver secrets.Resolver
 	Journal  *observability.Journal
 	Logger   *slog.Logger
+	Redactor *observability.Redactor
 }
 
 type queueDependencies struct {

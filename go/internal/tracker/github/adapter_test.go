@@ -16,6 +16,22 @@ import (
 
 var _ tracker.Adapter = (*Adapter)(nil)
 
+func TestAdapterCloseRetiresCapturedCredentialBytes(t *testing.T) {
+	adapter := &Adapter{token: []byte("credential-canary")}
+	captured := adapter.token
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(adapter.token) != 0 {
+		t.Fatalf("retired token length = %d", len(adapter.token))
+	}
+	for _, value := range captured {
+		if value != 0 {
+			t.Fatal("retired GitHub credential bytes were retained")
+		}
+	}
+}
+
 func TestAdapterImplementsProviderNeutralReadAndUnavailableToolSurface(t *testing.T) {
 	// Break caught: a provider adapter that returns nil collections or a Go
 	// error-shaped tool response violates the live Task 1 boundary.

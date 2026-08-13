@@ -25,6 +25,7 @@ type Adapter struct {
 
 	stateMu   sync.Mutex
 	pageCache map[string]cachedPage
+	tokenMu   sync.RWMutex
 }
 
 func New(config tracker.GitHubConfig, token []byte, client *http.Client, logger *slog.Logger) (*Adapter, error) {
@@ -59,6 +60,20 @@ func New(config tracker.GitHubConfig, token []byte, client *http.Client, logger 
 }
 
 func (adapter *Adapter) Kind() string { return "github" }
+
+func (adapter *Adapter) Close() error {
+	adapter.tokenMu.Lock()
+	clear(adapter.token)
+	adapter.token = nil
+	adapter.tokenMu.Unlock()
+	return nil
+}
+
+func (adapter *Adapter) authorization() string {
+	adapter.tokenMu.RLock()
+	defer adapter.tokenMu.RUnlock()
+	return "Bearer " + string(adapter.token)
+}
 
 func (adapter *Adapter) FetchIssuesByStates(ctx context.Context, states []string) ([]domain.Issue, error) {
 	wanted := supportedStates(states)

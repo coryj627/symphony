@@ -258,6 +258,18 @@ func TestProductionTrackerFactoryBuildsGitHubAndLinearWithScopedOwnedCredentials
 	}
 }
 
+func TestProductionRuntimeSelectsRealAgentSchedulerOnlyForRunMode(t *testing.T) {
+	deps := defaultStartDependencies()
+	runRuntime := deps.newRuntime(app.QueueOptions{Enabled: true})
+	if _, ok := runRuntime.(*app.AgentRuntime); !ok {
+		t.Fatalf("run runtime = %T, want *app.AgentRuntime", runRuntime)
+	}
+	configureRuntime := deps.newRuntime(app.QueueOptions{Enabled: false})
+	if _, ok := configureRuntime.(*app.QueueRuntime); !ok {
+		t.Fatalf("configure runtime = %T, want *app.QueueRuntime", configureRuntime)
+	}
+}
+
 func TestProductionCredentialResolverUsesExactEnvironmentNameOrOwnedVaultValue(t *testing.T) {
 	t.Parallel()
 	lookups := []string{}

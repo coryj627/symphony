@@ -20,6 +20,22 @@ import (
 
 var _ tracker.Adapter = (*Adapter)(nil)
 
+func TestAdapterCloseRetiresCapturedCredentialBytes(t *testing.T) {
+	adapter := &Adapter{token: []byte("credential-canary")}
+	captured := adapter.token
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(adapter.token) != 0 {
+		t.Fatalf("retired token length = %d", len(adapter.token))
+	}
+	for _, value := range captured {
+		if value != 0 {
+			t.Fatal("retired Linear credential bytes were retained")
+		}
+	}
+}
+
 func TestAdapterImplementsLiveTaskOneContract(t *testing.T) {
 	// Break caught: nil collections or Phase 4 tool behavior would violate the
 	// shared adapter boundary before the runtime can consume this provider.

@@ -326,6 +326,9 @@ func (broker *RequestBroker) Run(ctx context.Context, session *Session, requestC
 			context := requestContext(request)
 			context.Request = request
 			if _, err := broker.Open(context); err != nil {
+				if errors.Is(err, ErrMalformedServerRequest) || errors.Is(err, ErrUnsupportedServerRequest) {
+					continue
+				}
 				return err
 			}
 		case <-session.router.Done():

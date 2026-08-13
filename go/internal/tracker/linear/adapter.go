@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/coryj627/symphony/go/internal/domain"
 	"github.com/coryj627/symphony/go/internal/tracker"
@@ -21,6 +22,7 @@ type Adapter struct {
 	client   *http.Client
 	logger   *slog.Logger
 	endpoint *url.URL
+	tokenMu  sync.RWMutex
 }
 
 func New(config tracker.LinearConfig, token []byte, client *http.Client, logger *slog.Logger) (*Adapter, error) {
@@ -46,6 +48,20 @@ func New(config tracker.LinearConfig, token []byte, client *http.Client, logger 
 }
 
 func (adapter *Adapter) Kind() string { return "linear" }
+
+func (adapter *Adapter) Close() error {
+	adapter.tokenMu.Lock()
+	clear(adapter.token)
+	adapter.token = nil
+	adapter.tokenMu.Unlock()
+	return nil
+}
+
+func (adapter *Adapter) authorization() string {
+	adapter.tokenMu.RLock()
+	defer adapter.tokenMu.RUnlock()
+	return string(adapter.token)
+}
 
 func (adapter *Adapter) FetchIssuesByStates(ctx context.Context, states []string) ([]domain.Issue, error) {
 	stateNames := normalizedStateNames(states)

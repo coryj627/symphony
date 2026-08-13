@@ -103,7 +103,7 @@ func (adapter *Adapter) request(ctx context.Context, requestURL *url.URL, etag s
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	request.Header.Set("Authorization", "Bearer "+string(adapter.token))
+	request.Header.Set("Authorization", adapter.authorization())
 	request.Header.Set("User-Agent", githubUserAgent)
 	if etag != "" {
 		request.Header.Set("If-None-Match", etag)

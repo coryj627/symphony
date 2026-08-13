@@ -26,6 +26,56 @@ func TestNormalExitSchedulesContinuationAttemptOne(t *testing.T) {
 	}
 }
 
+func TestWorkerExitAccumulatesLatestAbsoluteTokensAndRuntimeOnce(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	clock := newFakeClock(now)
+	issue := readyIssue("1", "open", "symphony")
+	adapter := &fakeTracker{byStates: []domain.Issue{issue}}
+	worker := WorkerFunc(func(_ context.Context, _ RunRequest, emit func(domain.AgentEvent)) domain.RunResult {
+		emit(domain.AgentEvent{At: now.Add(2 * time.Second), Tokens: domain.TokenTotals{InputTokens: 3, OutputTokens: 5, TotalTokens: 8}})
+		emit(domain.AgentEvent{At: now.Add(4 * time.Second), Tokens: domain.TokenTotals{InputTokens: 7, OutputTokens: 11, TotalTokens: 18}})
+		return domain.RunResult{Reason: domain.StopReasonNormal, EndedAt: now.Add(5 * time.Second)}
+	})
+	orchestrator := startTestOrchestrator(t, adapter, worker, func(options *Options) { options.Clock = clock })
+	retry := waitForRetry(t, orchestrator)
+	if retry.Attempt != 1 {
+		t.Fatalf("retry = %+v", retry)
+	}
+	totals := mustSnapshot(t, orchestrator).CodexTotals
+	if totals.InputTokens != 7 || totals.OutputTokens != 11 || totals.TotalTokens != 18 || totals.SecondsRunning != 5 {
+		t.Fatalf("totals = %+v", totals)
+	}
+}
+
+func TestWorkerContinuationReleaseOutcomesDoNotEnterFailureRetry(t *testing.T) {
+	tests := []struct {
+		name        string
+		reason      domain.StopReason
+		wantCleanup bool
+	}{
+		{name: "terminal", reason: domain.StopReasonTerminal, wantCleanup: true},
+		{name: "inactive", reason: domain.StopReasonInactive},
+		{name: "unroutable", reason: domain.StopReasonUnroutable},
+		{name: "missing", reason: domain.StopReasonMissing},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			issue := readyIssue("1", "open", "symphony")
+			adapter := &fakeTracker{byStates: []domain.Issue{issue}}
+			worker := newBlockingWorker()
+			workspace := &fakeWorkspaceManager{}
+			orchestrator := startTestOrchestrator(t, adapter, worker, func(options *Options) { options.Workspace = workspace })
+			worker.waitStarted(t)
+			worker.release <- domain.RunResult{Reason: test.reason, EndedAt: time.Now().UTC()}
+			waitForRunning(t, orchestrator, false)
+			if snapshot := mustSnapshot(t, orchestrator); len(snapshot.Retrying) != 0 {
+				t.Fatalf("release outcome scheduled retry: %#v", snapshot.Retrying)
+			}
+			waitForRemovalDecision(t, workspace, test.wantCleanup)
+		})
+	}
+}
+
 func waitForRetryError(t *testing.T, orchestrator *Orchestrator, message string) domain.RetryRow {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
