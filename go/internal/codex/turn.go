@@ -66,6 +66,10 @@ func (session *Session) StartTurn(ctx context.Context, text string) (TurnResult,
 		return TurnResult{}, newProtocolError("empty_turn_input", "Codex turn input is empty.", false, nil)
 	}
 	session.mu.Lock()
+	if session.closed {
+		session.mu.Unlock()
+		return TurnResult{}, newProtocolError(ProtocolErrorRouterClosed, "Codex session is closed.", false, nil)
+	}
 	if session.threadID == "" {
 		session.mu.Unlock()
 		return TurnResult{}, newProtocolError("thread_not_started", "Codex thread is not started.", false, nil)

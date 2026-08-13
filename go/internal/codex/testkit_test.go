@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +18,26 @@ type pipeTransport struct {
 	serverInput  *bufio.Reader
 	serverOutput *io.PipeWriter
 	closeOnce    sync.Once
+}
+
+func canonicalTestDirectory(t *testing.T) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
+func replaceEnvironmentValue(environment []string, name, value string) []string {
+	prefix := name + "="
+	result := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		if !strings.EqualFold(strings.SplitN(entry, "=", 2)[0], name) {
+			result = append(result, entry)
+		}
+	}
+	return append(result, prefix+value)
 }
 
 func newPipeTransport(t *testing.T, options RouterOptions) (*Router, *pipeTransport) {

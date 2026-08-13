@@ -42,6 +42,7 @@ type SessionOptions struct {
 	SilenceTimeout time.Duration
 	Now            func() time.Time
 	OnEvent        func(SessionEvent)
+	Process        Process
 }
 
 // SessionEvent is a browser-safe state transition or telemetry summary.
@@ -71,6 +72,8 @@ type Session struct {
 	lastTurn    string
 	closed      bool
 	telemetry   TelemetrySnapshot
+	closeOnce   sync.Once
+	closeErr    error
 
 	pumpDone chan struct{}
 }
@@ -208,20 +211,24 @@ func (session *Session) RespondRequest(id RequestID, result any) error {
 
 // Close interrupts an active turn when possible and closes the router.
 func (session *Session) Close() error {
-	session.mu.Lock()
-	if session.closed {
+	session.closeOnce.Do(func() {
+		session.mu.Lock()
+		session.closed = true
+		active := session.active
 		session.mu.Unlock()
-		return nil
-	}
-	session.closed = true
-	active := session.active
-	session.mu.Unlock()
-	if active != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), session.options.RequestTimeout)
-		_ = session.InterruptTurn(ctx)
-		cancel()
-	}
-	return session.router.Close()
+		if active != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), session.options.RequestTimeout)
+			_ = session.InterruptTurn(ctx)
+			cancel()
+		}
+		routerErr := session.router.Close()
+		var processErr error
+		if session.options.Process != nil {
+			processErr = session.options.Process.Stop(context.Background())
+		}
+		session.closeErr = errors.Join(routerErr, processErr)
+	})
+	return session.closeErr
 }
 
 func (session *Session) pump() {
