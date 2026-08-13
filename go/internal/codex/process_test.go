@@ -241,12 +241,16 @@ func TestProcessStopContinuesCleanupAfterCallerCancellation(t *testing.T) {
 }
 
 func TestLaunchRechecksCanonicalWorkspaceContainment(t *testing.T) {
+	bash, err := FindBash()
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := canonicalTestDirectory(t)
 	workspace := filepath.Join(root, "GH-42")
 	if err := os.Mkdir(workspace, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	options := LaunchOptions{Cwd: workspace, WorkspaceRoot: root, Command: "codex app-server", BashPath: "/bin/bash"}
+	options := LaunchOptions{Cwd: workspace, WorkspaceRoot: root, Command: "codex app-server", BashPath: bash}
 	if _, err := validateLaunchOptions(options); err != nil {
 		t.Fatalf("valid options: %v", err)
 	}
@@ -265,12 +269,16 @@ func TestLaunchRechecksCanonicalWorkspaceContainment(t *testing.T) {
 }
 
 func TestLaunchRejectsInvalidSecretNamesAndEnvironment(t *testing.T) {
+	bash, err := FindBash()
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := canonicalTestDirectory(t)
 	workspace := filepath.Join(root, "GH-42")
 	if err := os.Mkdir(workspace, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	base := LaunchOptions{Cwd: workspace, WorkspaceRoot: root, Command: "codex app-server", BashPath: "/bin/bash"}
+	base := LaunchOptions{Cwd: workspace, WorkspaceRoot: root, Command: "codex app-server", BashPath: bash}
 	invalidSecret := base
 	invalidSecret.SecretNames = []string{"TOKEN=VALUE"}
 	if _, err := validateLaunchOptions(invalidSecret); !errors.Is(err, ErrInvalidLaunch) {

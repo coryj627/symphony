@@ -99,7 +99,7 @@ export function run({
 
   const npm = platform === 'win32' ? 'npm.cmd' : 'npm';
   const commands = [
-    {command: process.execPath, args: ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']},
+    {command: process.execPath, args: ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/git-attributes.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']},
     {command: selectedGo.command, args: [...selectedGo.prefix, 'build', '-o', buildOutput, './cmd/symphony']},
     {command: selectedGo.command, args: [...selectedGo.prefix, 'test', './...']},
     ...(platform === 'darwin'

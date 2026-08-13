@@ -44,7 +44,7 @@ test('runs every deterministic gate in order on macOS including build, disabled 
   assert.notEqual(path.dirname(buildArgs[2]), '/fixture/repository');
   assert.equal(existsSync(path.dirname(buildArgs[2])), false, 'temporary build directory was not cleaned');
   assert.deepEqual(calls.map(([kind, , args]) => [kind, args]), [
-    ['exec', ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']],
+    ['exec', ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/git-attributes.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']],
     ['exec', buildArgs],
     ['exec', ['test', './...']],
     ['exec', ['test', '-race', './...']],
