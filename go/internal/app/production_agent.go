@@ -92,12 +92,22 @@ func ProductionAgentBuilder(redactor *observability.Redactor, logger *slog.Logge
 			SecretNames:    append([]string(nil), adapter.SecretEnvironmentNames()...),
 		}
 		if err := runner.Preflight(ctx, preflightRequest); err != nil {
+			logCodexPreflightFailure(logger, redactor, err)
 			return AgentRuntimeBuild{}, codexPreflightError(err)
 		}
 		agent := codex.AgentAttempt{Tracker: adapter, Runner: runner, Logger: logger, Redactor: redactor}
 		worker := orchestrator.LifecycleWorker{Workspace: workspaceManager, Agent: agent, Logger: logger, Redactor: redactor}
 		return AgentRuntimeBuild{Workspace: workspaceManager, Worker: worker}, nil
 	}
+}
+
+func logCodexPreflightFailure(logger *slog.Logger, redactor *observability.Redactor, err error) {
+	protocolCode := "other"
+	var protocolErr *codex.ProtocolError
+	if errors.As(err, &protocolErr) && protocolErr.Code != "" {
+		protocolCode = protocolErr.Code
+	}
+	logger.Warn("Codex compatibility preflight failed", "protocol_code", protocolCode, "error", redactor.Value(err))
 }
 
 func codexPreflightError(err error) error {

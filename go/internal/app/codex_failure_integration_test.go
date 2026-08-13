@@ -82,6 +82,29 @@ func TestProductionCodexCompositionRejectsBrokenPreflightProfiles(t *testing.T) 
 	}
 }
 
+func TestProductionCodexCompositionLogsSafePreflightDiagnostics(t *testing.T) {
+	root := privateTempDir(t)
+	snapshot := codexIntegrationSnapshot(root, buildFakeCodexCommand(t, "malformed"))
+	issue := validIssue("CODEX-DIAGNOSTIC")
+	adapter := &codexIntegrationAdapter{refreshed: terminalIssue(issue)}
+	redactor := observability.NewRedactor(nil, nil)
+	redactor.RegisterSecret([]byte("malformed protocol message"))
+	var logs bytes.Buffer
+	_, err := ProductionAgentBuilder(redactor, slog.New(slog.NewTextHandler(&logs, nil)))(
+		t.Context(), snapshot, adapter, codex.NewRequestBroker(codex.RequestBrokerOptions{}),
+	)
+	if err == nil {
+		t.Fatal("malformed fake app-server passed preflight")
+	}
+	requirePrerequisiteCode(t, err, "codex_preflight_failed")
+	if !strings.Contains(logs.String(), "protocol_code=malformed_message") {
+		t.Fatalf("preflight diagnostics omitted the bounded protocol code: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "malformed protocol message") {
+		t.Fatalf("preflight diagnostics retained registered secret text: %s", logs.String())
+	}
+}
+
 func TestProductionCodexCompositionExpiresAndCancelsPendingRequests(t *testing.T) {
 	for _, test := range []struct {
 		name, scenario string
