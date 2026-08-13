@@ -162,7 +162,7 @@ func TestRemovePreservesAmbiguousOwnershipMarker(t *testing.T) {
 	}
 }
 
-func TestReadOwnershipMarkerRejectsPathReplacedAfterOpen(t *testing.T) {
+func TestReadOwnershipMarkerRejectsMismatchedPathIdentityAfterOpen(t *testing.T) {
 	workspace := t.TempDir()
 	original := ownershipMarker{
 		Version: markerVersion, IssueID: "issue-1", Identifier: "SYM-1", Key: "SYM-1",
