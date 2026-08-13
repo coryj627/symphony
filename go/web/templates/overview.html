@@ -5,7 +5,7 @@
     <div><dt>Service</dt><dd>Symphony</dd></div>
     <div data-live-overview-field-container="tracker-scope"><dt>Tracker scope</dt><dd>{{.Content.TrackerScope}}</dd></div>
     <div><dt>Mode</dt><dd>{{if eq .Content.Mode "run"}}Run{{else}}Configure{{end}}</dd></div>
-    <div><dt>Scheduler</dt><dd data-live-overview-field="scheduler">{{if not .Content.Scheduler.Available}}Unavailable{{else if .Content.Scheduler.Enabled}}Enabled{{else}}Paused{{end}}</dd></div>
+    <div><dt>Scheduler</dt><dd><span aria-hidden="true">●</span> <span data-live-overview-field="scheduler">{{if not .Content.Scheduler.Available}}Unavailable{{else if eq .Content.Scheduler.State "stopping"}}Stopping{{else if .Content.Scheduler.Enabled}}Running{{else}}Paused{{end}}</span></dd></div>
     <div data-live-overview-row="scheduler-state"{{if not .Content.Scheduler.State}} hidden{{end}}><dt>Scheduler state</dt><dd data-live-overview-field="scheduler-state">{{.Content.Scheduler.State}}</dd></div>
     <div data-live-overview-row="scheduler-message"{{if not .Content.Scheduler.Message}} hidden{{end}}><dt>Scheduler detail</dt><dd data-live-overview-field="scheduler-message">{{.Content.Scheduler.Message}}</dd></div>
     <div data-live-overview-row="tracker-state"{{if not .Content.Tracker.State}} hidden{{end}}><dt>Tracker state</dt><dd data-live-overview-field="tracker-state">{{.Content.Tracker.State}}</dd></div>
@@ -14,6 +14,21 @@
     <div data-live-overview-row="config-message"{{if not .Content.Config.Message}} hidden{{end}}><dt>Configuration detail</dt><dd data-live-overview-field="config-message">{{.Content.Config.Message}}</dd></div>
   </dl>
   <p class="notice" data-live-overview-stale{{if not .Content.Tracker.Stale}} hidden{{end}}>Tracker information is stale and is shown as last known.</p>
+</section>
+<section aria-labelledby="runtime-controls-heading">
+  <h2 id="runtime-controls-heading">Scheduler controls</h2>
+  <div class="button-row">
+    <form method="post" action="{{.InternalURL "/api/v1/runtime/start"}}">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button id="start-runtime" type="submit" aria-describedby="runtime-start-reason"{{if .Content.StartDisabled}} disabled{{end}}{{if eq .FocusTarget "start-runtime"}} autofocus{{end}} data-runtime-start>Start scheduler</button>
+    </form>
+    <form method="post" action="{{.InternalURL "/api/v1/runtime/stop"}}">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button id="stop-runtime" type="submit" aria-describedby="runtime-stop-reason"{{if .Content.StopDisabled}} disabled{{end}}{{if eq .FocusTarget "stop-runtime"}} autofocus{{end}} data-runtime-stop>Stop scheduler</button>
+    </form>
+  </div>
+  <p id="runtime-start-reason" data-runtime-start-reason>{{.Content.StartReason}}</p>
+  <p id="runtime-stop-reason" data-runtime-stop-reason>{{.Content.StopReason}}</p>
 </section>
 <section aria-labelledby="work-heading" data-live-presentation>
   <h2 id="work-heading">Work summary</h2>

@@ -14,7 +14,7 @@ async function csrfForScenario(page, scenario) {
   await authorize(page, scenarioPath('/', scenario));
   await page.evaluate(() => sessionStorage.removeItem('symphony.live-updates.paused'));
   await page.reload();
-  return page.locator('input[name="csrf_token"]').inputValue();
+  return page.locator('input[name="csrf_token"]').first().inputValue();
 }
 
 async function requestRefresh(page, scenario, csrf) {
@@ -166,7 +166,7 @@ test('real SSE updates issue rows while preserving the focused search node', asy
   await expect(page.getByRole('status')).toHaveCount(0);
 
   await expect(overviewPage.locator('[data-live-count="candidates"]')).toHaveText('2');
-  await expect(overviewPage.locator('[data-live-overview-field="scheduler"]')).toHaveText('Enabled');
+  await expect(overviewPage.locator('[data-live-overview-field="scheduler"]')).toHaveText('Running');
   await expect(overviewPage.locator('[data-live-overview-field-container="tracker-scope"] dd')).toHaveText('fixture/updated');
   await expect(overviewPage.locator('[data-live-count="errors"]')).toHaveText('2');
   await expect(overviewPage.locator('[data-live-overview-stale]')).toBeVisible();

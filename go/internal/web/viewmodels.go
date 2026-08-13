@@ -68,6 +68,10 @@ type overviewContent struct {
 	Config         configStatusResponse
 	ConfigError    bool
 	TrackerError   bool
+	StartDisabled  bool
+	StartReason    string
+	StopDisabled   bool
+	StopReason     string
 }
 
 type issuesContent struct {
@@ -83,6 +87,7 @@ type issueContent struct {
 	Running     *runningResponse
 	Retry       *retryResponse
 	Requests    []operatorRequestResponse
+	Activity    []eventSummaryResponse
 	Logs        []logRecordView
 	LogDegraded bool
 }

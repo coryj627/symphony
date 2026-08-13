@@ -383,13 +383,14 @@ dialog::backdrop {
   background: rgb(0 0 0 / 72%);
 }
 
-button:hover:not(:disabled),
+button:hover:not(:disabled):not([aria-disabled="true"]),
 .button-link:hover {
   border-color: var(--color-muted);
   background: var(--color-surface-2);
 }
 
-button:disabled {
+button:disabled,
+button[aria-disabled="true"] {
   border-color: var(--color-border);
   background: var(--color-surface-3);
   color: var(--color-muted);

@@ -480,6 +480,21 @@ func TestEventsReplaysCanonicalRecordsInStrictOrderAndClosesOnReadyWithoutProgre
 	}
 }
 
+func TestRuntimeChangedIsACanonicalSnapshotInvalidationEvent(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	page := domain.EventPage{
+		LatestCursor: domain.EventCursor{Epoch: "epoch-a", Sequence: 1},
+		Events: []domain.Event{{
+			Epoch: "epoch-a", Sequence: 1, Type: "runtime.changed", At: now,
+			Data: map[string]any{"issue_id": "issue-1", "issue_identifier": "SYM-1"},
+		}},
+	}
+	records, next, reset, ok := prepareEventPage(domain.EventCursor{Epoch: "epoch-a", Sequence: 0}, page)
+	if !ok || reset != nil || len(records) != 1 || records[0].typeName != "runtime.changed" || next != page.LatestCursor {
+		t.Fatalf("runtime event = records:%#v next:%#v reset:%#v ok:%v", records, next, reset, ok)
+	}
+}
+
 func TestEventsInvalidOrOversizedRecordEmitsOnlyOneSafeReset(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	oversized := eventWithEncodedSize(t, 64<<10+1)

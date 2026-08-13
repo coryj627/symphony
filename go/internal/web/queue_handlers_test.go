@@ -212,8 +212,10 @@ func TestOverviewShowsSafeScopeCountsSchedulerAndPersistentFailures(t *testing.T
 		}
 	}
 	assertRenderedTime(t, html, now)
-	if strings.Contains(html, "Start scheduler") || strings.Contains(html, "Stop scheduler") {
-		t.Fatal("overview exposed Phase 3 scheduler controls")
+	for _, want := range []string{"Start scheduler", "Stop scheduler", "Scheduler unavailable", `aria-describedby="runtime-start-reason" disabled`, `aria-describedby="runtime-stop-reason" disabled`} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("overview omitted runtime control state %q", want)
+		}
 	}
 }
 
@@ -270,7 +272,7 @@ func TestActivityUsesBoundedTailResetTextAndSafeAllowlistedSummaries(t *testing.
 	assertRenderedTime(t, html, now)
 }
 
-func TestIssueHTMLRendersEscapedMetadataUnsafeURLAsTextAndNeverGlobalActivity(t *testing.T) {
+func TestIssueHTMLRendersEscapedMetadataUnsafeURLAsTextAndFiltersGlobalActivity(t *testing.T) {
 	unsafeURL := "https://user:password@example.invalid/issue?secret=1#fragment"
 	description := "<img src=x onerror=bad()>"
 	label := "<script>label()</script>"
@@ -284,13 +286,13 @@ func TestIssueHTMLRendersEscapedMetadataUnsafeURLAsTextAndNeverGlobalActivity(t 
 		t.Fatalf("issue status = %d", recorder.Code)
 	}
 	html := recorder.Body.String()
-	for _, want := range []string{"&lt;script&gt;title()&lt;/script&gt;", "&lt;img src=x onerror=bad()&gt;", "&lt;script&gt;label()&lt;/script&gt;", "Routing details are unavailable.", "Issue-specific activity is not available in this phase."} {
+	for _, want := range []string{"&lt;script&gt;title()&lt;/script&gt;", "&lt;img src=x onerror=bad()&gt;", "&lt;script&gt;label()&lt;/script&gt;", "Routing details are unavailable.", "No issue-specific activity has been recorded."} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("issue page omitted %q", want)
 		}
 	}
-	if strings.Contains(html, "user:password") || strings.Contains(html, "secret=1") || strings.Contains(html, "unknown-reason-canary") || strings.Contains(runtime.callOrderString(), "recent:") {
-		t.Fatal("issue page linked unsafe URL, reflected raw reason, or queried global events")
+	if strings.Contains(html, "user:password") || strings.Contains(html, "secret=1") || strings.Contains(html, "unknown-reason-canary") || !strings.Contains(runtime.callOrderString(), "recent:100") {
+		t.Fatal("issue page linked unsafe URL, reflected raw reason, or omitted the filtered activity query")
 	}
 }
 

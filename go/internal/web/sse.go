@@ -211,7 +211,7 @@ func prepareResetRecord(cursor string) (preparedEventRecord, bool) {
 
 func validEventType(value string) bool {
 	switch value {
-	case "queue.refreshed", "queue.failed", "configuration.changed":
+	case "queue.refreshed", "queue.failed", "configuration.changed", "runtime.changed":
 		return true
 	default:
 		return false

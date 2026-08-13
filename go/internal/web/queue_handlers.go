@@ -62,6 +62,7 @@ func (handler *PageHandler) overviewHTML(w http.ResponseWriter, request *http.Re
 		},
 		ConfigError: snapshot.Config.ErrorCode != "", TrackerError: snapshot.Tracker.ErrorCode != "",
 	}
+	content.StartDisabled, content.StartReason, content.StopDisabled, content.StopReason = schedulerControlState(snapshot.Scheduler)
 	populateTrackerTimeViews(&content.Tracker)
 	if content.ConfigError {
 		content.ErrorCount++
@@ -82,9 +83,35 @@ func (handler *PageHandler) overviewHTML(w http.ResponseWriter, request *http.Re
 			page.FocusTarget = "refresh"
 		}
 	}
+	switch firstQueryValue(request.URL.Query(), "result") {
+	case "runtime-started":
+		page.Flash = "Scheduler start requested."
+	case "runtime-stopped":
+		page.Flash = "Scheduler stop requested."
+	}
+	if target := firstQueryValue(request.URL.Query(), "focus"); target == "start-runtime" || target == "stop-runtime" {
+		page.FocusTarget = target
+	}
 	if err := handler.renderHTML(w, "overview", page); err != nil {
 		handler.respondHTMLRequestError(w, request, http.StatusInternalServerError)
 	}
+}
+
+func schedulerControlState(status domain.SchedulerStatus) (startDisabled bool, startReason string, stopDisabled bool, stopReason string) {
+	if !status.Available {
+		reason := cleanDisplayValue(status.Message, maximumDisplayBytes)
+		if reason == "" {
+			reason = "Agent runtime will be enabled in Phase 4."
+		}
+		return true, reason, true, reason
+	}
+	if status.State == "stopping" {
+		return true, "Wait for active work to stop before restarting the scheduler.", true, "The scheduler is already stopping."
+	}
+	if status.Enabled {
+		return true, "The scheduler is already running.", false, "Stop the scheduler after active work is canceled safely."
+	}
+	return false, "Start polling and dispatch for this project.", true, "The scheduler is already paused."
 }
 
 func (handler *PageHandler) presentationTrackerScope(request *http.Request, snapshot domain.Snapshot) string {
@@ -264,6 +291,13 @@ func (handler *PageHandler) issueAPI(w http.ResponseWriter, request *http.Reques
 		return
 	}
 	response := issueResponseFrom(detail)
+	if tail, tailErr := dependencies.queries.RecentEvents(request.Context(), 100); tailErr == nil {
+		response.RecentEvents = issueEventResponses(tail.Events, detail.Issue.ID, detail.Issue.Identifier)
+	}
+	if logPage, logErr := dependencies.logs.Query(request.Context(), observability.LogQuery{Search: response.IssueIdentifier, Limit: 100}); logErr == nil {
+		response.Logs.CodexSessionLogs = boundedIssueLogRecordViews(response.IssueIdentifier, logPage.Records, 100)
+		response.Logs.Degraded = logPage.Degraded
+	}
 	if err := writeJSON(w, http.StatusOK, response); err != nil {
 		handler.writeAPIError(w, "internal_error")
 	}
@@ -309,6 +343,9 @@ func (handler *PageHandler) issueHTML(w http.ResponseWriter, request *http.Reque
 	content := issueContent{
 		Identifier: response.IssueIdentifier, Issue: response.Issue, Eligibility: response.Eligibility,
 		Requests: operatorRequestResponses(requests), Logs: logs, LogDegraded: degraded,
+	}
+	if tail, tailErr := dependencies.queries.RecentEvents(request.Context(), 100); tailErr == nil {
+		content.Activity = issueEventResponses(tail.Events, detail.Issue.ID, canonicalIdentifier)
 	}
 	if detail.Running != nil {
 		running := runningResponseFrom(*detail.Running)
@@ -404,6 +441,74 @@ func (handler *PageHandler) refreshAPI(w http.ResponseWriter, request *http.Requ
 		operations = []string{}
 	}
 	response := refreshReceiptResponse{Queued: receipt.Queued, Coalesced: receipt.Coalesced, RequestedAt: receipt.RequestedAt, Operations: operations}
+	if err := writeJSON(w, http.StatusAccepted, response); err != nil {
+		handler.writeAPIError(w, "internal_error")
+	}
+}
+
+func (handler *PageHandler) startRuntimeAPI(w http.ResponseWriter, request *http.Request) {
+	handler.schedulerAPI(w, request, true)
+}
+
+func (handler *PageHandler) stopRuntimeAPI(w http.ResponseWriter, request *http.Request) {
+	handler.schedulerAPI(w, request, false)
+}
+
+func (handler *PageHandler) schedulerAPI(w http.ResponseWriter, request *http.Request, enabled bool) {
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil {
+		handler.writeAPIError(w, "unsupported_media_type")
+		return
+	}
+	switch mediaType {
+	case "application/json":
+		if !validEmptyRefreshJSON(request.Body) {
+			handler.writeAPIError(w, "invalid_body")
+			return
+		}
+	case "application/x-www-form-urlencoded":
+		if err := request.ParseForm(); err != nil {
+			handler.writeAPIError(w, "invalid_body")
+			return
+		}
+	default:
+		handler.writeAPIError(w, "unsupported_media_type")
+		return
+	}
+	dependencies := handler.dependencies(request)
+	if err := dependencies.commands.SetScheduler(request.Context(), enabled); err != nil {
+		if errors.Is(err, app.ErrAgentRuntimeUnavailable) || errors.Is(err, app.ErrUnavailableInPhase) {
+			handler.writeAPIError(w, "agent_runtime_unavailable")
+			return
+		}
+		handler.writeAPIError(w, "scheduler_failed")
+		return
+	}
+	if mediaType == "application/x-www-form-urlencoded" {
+		result, focus := "runtime-stopped", "start-runtime"
+		if enabled {
+			result, focus = "runtime-started", "stop-runtime"
+		}
+		setSecurityHeaders(w.Header())
+		http.Redirect(w, request, internalURL("/?result="+result+"&focus="+focus, dependencies.scenario), http.StatusSeeOther)
+		return
+	}
+	snapshot, err := dependencies.queries.Snapshot(request.Context())
+	if err != nil {
+		handler.writeAPIError(w, "runtime_unavailable")
+		return
+	}
+	requested := "paused"
+	if enabled {
+		requested = "running"
+	}
+	correlationID := handler.nextCorrelationID()
+	w.Header().Set("X-Correlation-ID", correlationID)
+	response := schedulerCommandResponse{
+		Requested:     requested,
+		Effective:     schedulerResponse{Available: snapshot.Scheduler.Available, Enabled: snapshot.Scheduler.Enabled, State: cleanDisplayValue(snapshot.Scheduler.State, maximumShortTextBytes), Message: cleanDisplayValue(snapshot.Scheduler.Message, maximumDisplayBytes)},
+		CorrelationID: correlationID,
+	}
 	if err := writeJSON(w, http.StatusAccepted, response); err != nil {
 		handler.writeAPIError(w, "internal_error")
 	}
@@ -670,8 +775,8 @@ func issueResponseFrom(detail domain.IssueDetail) issueResponse {
 		blockers = append(blockers, issueBlockerResponse{Identifier: cleanOptional(blocker.Identifier, maximumIdentifierBytes), State: cleanOptional(blocker.State, maximumShortTextBytes)})
 	}
 	response := issueResponse{
-		IssueIdentifier: cleanMachine(detail.Issue.Identifier, maximumIdentifierBytes), IssueID: cleanMachine(detail.Issue.ID, maximumIdentifierBytes), Status: "candidate",
-		Workspace: nil, Attempts: issueAttemptsResponse{}, Running: nil, Retry: nil, Logs: issueLogsResponse{CodexSessionLogs: []emptyResponse{}}, RecentEvents: []eventSummaryResponse{}, LastError: nil, Tracked: emptyResponse{},
+		IssueIdentifier: cleanMachine(detail.Issue.Identifier, maximumIdentifierBytes), IssueID: cleanMachine(detail.Issue.ID, maximumIdentifierBytes), Status: issueDetailStatus(detail),
+		Workspace: nil, Attempts: issueAttemptsResponse{}, Running: nil, Retry: nil, Logs: issueLogsResponse{CodexSessionLogs: []logRecordView{}}, RecentEvents: []eventSummaryResponse{}, LastError: nil, Tracked: emptyResponse{},
 		Issue: issueSummaryResponse{
 			Identifier: cleanMachine(detail.Issue.Identifier, maximumIdentifierBytes), Title: cleanDisplayValue(detail.Issue.Title, maximumDisplayBytes), Description: descriptionPointer, DescriptionTruncated: truncated,
 			Priority: cloneIntPointer(detail.Issue.Priority), State: cleanDisplayValue(detail.Issue.State, maximumShortTextBytes), URL: validatedTrackerURL(detail.Issue.URL), Labels: labels, Blockers: blockers,
@@ -679,8 +784,71 @@ func issueResponseFrom(detail domain.IssueDetail) issueResponse {
 		},
 		Eligibility: issueEligibilityResponse{Routable: detail.Routable, Reasons: routingReasonResponses(detail.RoutingReasons)},
 	}
+	if detail.Running != nil {
+		running := runningResponseFrom(*detail.Running)
+		response.Running = &running
+	}
+	if detail.Workspace != nil {
+		response.Workspace = &workspaceResponse{
+			Path: cleanMachine(detail.Workspace.Path, maximumWorkspacePath), Key: cleanMachine(detail.Workspace.Key, maximumIdentifierBytes),
+			CreatedNow: detail.Workspace.CreatedNow, Owned: detail.Workspace.Owned,
+		}
+	}
+	if detail.Attempt != nil && *detail.Attempt >= 0 {
+		response.Attempts.RestartCount = *detail.Attempt
+		response.Attempts.CurrentRetryAttempt = *detail.Attempt
+	}
+	if detail.Retry != nil {
+		retry := retryResponseFrom(*detail.Retry)
+		response.Retry = &retry
+		response.Attempts.CurrentRetryAttempt = retry.Attempt
+		response.Attempts.RestartCount = retry.Attempt
+	}
 	populateIssueTimeViews(&response.Issue)
 	return response
+}
+
+func issueDetailStatus(detail domain.IssueDetail) string {
+	switch detail.Status {
+	case "candidate", "running", "retrying", "stalled", "stopping", "stopping_failed", "preparing_workspace", "building_prompt", "launching_agent_process", "initializing_session", "streaming_turn", "finishing":
+		return detail.Status
+	}
+	if detail.Running != nil {
+		return "running"
+	}
+	if detail.Retry != nil {
+		return "retrying"
+	}
+	return "candidate"
+}
+
+func boundedIssueLogRecordViews(identifier string, records []observability.LogRecord, limit int) []logRecordView {
+	views := issueLogRecordViews(identifier, records)
+	if limit >= 0 && len(views) > limit {
+		views = views[:limit]
+	}
+	return views
+}
+
+func issueEventResponses(events []domain.Event, issueID, identifier string) []eventSummaryResponse {
+	result := make([]eventSummaryResponse, 0, min(len(events), 20))
+	for index := len(events) - 1; index >= 0 && len(result) < 20; index-- {
+		data := events[index].Data
+		matches := false
+		if value, ok := data["issue_id"].(string); ok && value == issueID {
+			matches = true
+		}
+		if value, ok := data["issue_identifier"].(string); ok && value == identifier {
+			matches = true
+		}
+		if matches {
+			result = append(result, eventSummary(events[index]))
+		}
+	}
+	for left, right := 0, len(result)-1; left < right; left, right = left+1, right-1 {
+		result[left], result[right] = result[right], result[left]
+	}
+	return result
 }
 
 func cleanOptional(value *string, maximum int) *string {

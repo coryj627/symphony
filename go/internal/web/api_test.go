@@ -503,6 +503,48 @@ func TestIssueAPIRoundTripsOneEncodedSegmentAndReturnsExactPhaseTwoShape(t *test
 	}
 }
 
+func TestIssueAPIIncludesBoundedLifecycleWorkspaceAttemptsEventsAndLogs(t *testing.T) {
+	now := time.Date(2026, 8, 12, 18, 0, 0, 0, time.UTC)
+	attempt := 2
+	workspace := domain.Workspace{Path: "/safe/workspaces/SYM-7", Key: "SYM-7", CreatedNow: true, Owned: true, IssueID: "seven", IssueIdentifier: "SYM-7"}
+	run := domain.RunningRow{IssueID: "seven", IssueIdentifier: "SYM-7", State: "Open", LastEvent: "stopping", StartedAt: now, LastEventAt: now}
+	runtime := &pageRuntimeFake{
+		details: map[string]domain.IssueDetail{
+			"SYM-7": {
+				Issue:  domain.Issue{ID: "seven", Identifier: "SYM-7", Title: "Lifecycle issue", State: "Open", Labels: []string{}, BlockedBy: []domain.BlockerRef{}},
+				Status: "stopping", Routable: true, RoutingReasons: []string{}, Workspace: &workspace, Attempt: &attempt, Running: &run,
+			},
+		},
+		recent: domain.EventPage{Events: []domain.Event{
+			{Epoch: "epoch", Sequence: 1, Type: "orchestrator.run_claimed", At: now.Add(-time.Minute), Data: map[string]any{"issue_id": "other", "issue_identifier": "SYM-8"}},
+			{Epoch: "epoch", Sequence: 2, Type: "orchestrator.run_claimed", At: now, Data: map[string]any{"issue_id": "seven", "issue_identifier": "SYM-7"}},
+		}},
+	}
+	records := make([]observability.LogRecord, 105)
+	for index := range records {
+		records[index] = observability.LogRecord{Sequence: uint64(index + 1), Time: now, Level: "INFO", Message: "Bounded issue log", Fields: map[string]any{"issue_identifier": "SYM-7"}}
+	}
+	logs := &logQueryFake{page: observability.LogPage{Degraded: true, Records: records}}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime, Logs: logs})
+	recorder := serveDirect(t, handler, http.MethodGet, "/api/v1/SYM-7", "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("issue status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response issueResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "stopping" || response.Workspace == nil || response.Workspace.Path != workspace.Path || response.Workspace.Key != workspace.Key || !response.Workspace.Owned || !response.Workspace.CreatedNow {
+		t.Fatalf("lifecycle workspace/status = %q/%#v", response.Status, response.Workspace)
+	}
+	if response.Attempts.RestartCount != attempt || response.Attempts.CurrentRetryAttempt != attempt || response.Running == nil {
+		t.Fatalf("attempts/running = %#v/%#v", response.Attempts, response.Running)
+	}
+	if len(response.RecentEvents) != 1 || len(response.Logs.CodexSessionLogs) != 100 || !response.Logs.Degraded || logs.query.Search != "SYM-7" || logs.query.Limit != 100 {
+		t.Fatalf("events/logs = %d/%d degraded=%t query=%#v", len(response.RecentEvents), len(response.Logs.CodexSessionLogs), response.Logs.Degraded, logs.query)
+	}
+}
+
 func TestValidatedTrackerURLRequiresANonemptyHostname(t *testing.T) {
 	for _, value := range []string{"https://:443/path", "https://:/path"} {
 		if got := validatedTrackerURL(&value); got != nil {
@@ -670,6 +712,108 @@ func TestRefreshAPIMapsOnlyTrackerRetryability(t *testing.T) {
 	}
 }
 
+func TestRuntimeControlAPIAcceptsStartAndStopWithEffectiveState(t *testing.T) {
+	runtime := &pageRuntimeFake{snapshot: domain.Snapshot{Scheduler: domain.SchedulerStatus{Available: true, State: "paused"}}}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+	for _, test := range []struct {
+		path    string
+		enabled bool
+		state   string
+	}{
+		{path: "/api/v1/runtime/start", enabled: true, state: "running"},
+		{path: "/api/v1/runtime/start", enabled: true, state: "running"},
+		{path: "/api/v1/runtime/stop", enabled: false, state: "paused"},
+		{path: "/api/v1/runtime/stop", enabled: false, state: "paused"},
+	} {
+		recorder := serveDirect(t, handler, http.MethodPost, test.path, "{}", map[string]string{"Content-Type": "application/json"})
+		var response schedulerCommandResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if recorder.Code != http.StatusAccepted || response.Requested != test.state || response.Effective.State != test.state || response.Effective.Enabled != test.enabled || response.CorrelationID == "" || recorder.Header().Get("X-Correlation-ID") != response.CorrelationID {
+			t.Fatalf("%s response = %d %#v", test.path, recorder.Code, response)
+		}
+	}
+	if runtime.schedulerCalls.Load() != 4 {
+		t.Fatalf("scheduler calls = %d", runtime.schedulerCalls.Load())
+	}
+}
+
+func TestRuntimeControlAPIRejectsUnsupportedAndInvalidBodiesBeforeCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		body        string
+		status      int
+		code        string
+	}{
+		{name: "unsupported media type", contentType: "text/plain", body: "{}", status: http.StatusUnsupportedMediaType, code: "unsupported_media_type"},
+		{name: "invalid JSON", contentType: "application/json", body: "{", status: http.StatusBadRequest, code: "invalid_request"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &pageRuntimeFake{}
+			handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+			recorder := serveDirect(t, handler, http.MethodPost, "/api/v1/runtime/start", test.body, map[string]string{"Content-Type": test.contentType})
+			var response apiErrorResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if recorder.Code != test.status || response.Error.Code != test.code || runtime.schedulerCalls.Load() != 0 || runtime.callOrderString() != "" {
+				t.Fatalf("rejected runtime control = %d/%#v scheduler calls=%d query calls=%q", recorder.Code, response, runtime.schedulerCalls.Load(), runtime.callOrderString())
+			}
+		})
+	}
+}
+
+func TestRuntimeControlFormRedirectsWithResultAndFocusWithoutSnapshot(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		enabled  bool
+		location string
+	}{
+		{name: "start", path: "/api/v1/runtime/start", enabled: true, location: "/?result=runtime-started&focus=stop-runtime"},
+		{name: "stop", path: "/api/v1/runtime/stop", enabled: false, location: "/?result=runtime-stopped&focus=start-runtime"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &pageRuntimeFake{}
+			handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+			recorder := serveDirect(t, handler, http.MethodPost, test.path, "", map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+			if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != test.location || runtime.schedulerCalls.Load() != 1 || runtime.lastScheduler != test.enabled || runtime.callOrderString() != "" {
+				t.Fatalf("%s form response = %d location=%q scheduler calls=%d enabled=%v query calls=%q", test.path, recorder.Code, recorder.Header().Get("Location"), runtime.schedulerCalls.Load(), runtime.lastScheduler, runtime.callOrderString())
+			}
+		})
+	}
+}
+
+func TestRuntimeControlAPIReturnsServiceUnavailableWhenEffectiveSnapshotTimesOut(t *testing.T) {
+	runtime := &pageRuntimeFake{snapshotErr: context.DeadlineExceeded}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+	recorder := serveDirect(t, handler, http.MethodPost, "/api/v1/runtime/start", "{}", map[string]string{"Content-Type": "application/json"})
+	var response apiErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusServiceUnavailable || response.Error.Code != "runtime_unavailable" || !response.Error.Retryable || runtime.schedulerCalls.Load() != 1 || runtime.callOrderString() != "snapshot" {
+		t.Fatalf("snapshot failure = %d %#v calls=%q", recorder.Code, response, runtime.callOrderString())
+	}
+}
+
+func TestRuntimeControlAPIMapsUnavailableWithoutCallingSnapshot(t *testing.T) {
+	runtime := &pageRuntimeFake{schedulerErr: app.ErrAgentRuntimeUnavailable}
+	handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+	recorder := serveDirect(t, handler, http.MethodPost, "/api/v1/runtime/start", "{}", map[string]string{"Content-Type": "application/json"})
+	var response apiErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusConflict || response.Error.Code != "agent_runtime_unavailable" || response.Error.Message != "Agent runtime will be enabled in Phase 4." || runtime.schedulerCalls.Load() != 1 || runtime.callOrderString() != "" {
+		t.Fatalf("unavailable control = %d %#v calls=%q", recorder.Code, response, runtime.callOrderString())
+	}
+}
+
 func TestPageHandlerMethodPolicyUsesExactOrderedManifest(t *testing.T) {
 	handler := newTestPageHandler(t, PageOptions{})
 	cases := []struct {
@@ -680,6 +824,8 @@ func TestPageHandlerMethodPolicyUsesExactOrderedManifest(t *testing.T) {
 	}{
 		{http.MethodPost, "/api/v1/state", true, []string{http.MethodGet, http.MethodHead}},
 		{http.MethodGet, "/api/v1/refresh", true, []string{http.MethodPost}},
+		{http.MethodGet, "/api/v1/runtime/start", true, []string{http.MethodPost}},
+		{http.MethodGet, "/api/v1/runtime/stop", true, []string{http.MethodPost}},
 		{http.MethodPost, "/api/v1/TEAM%2F%2342", true, []string{http.MethodGet, http.MethodHead}},
 		{http.MethodPost, "/api/v1/config/save", true, []string{http.MethodPost}},
 		{http.MethodGet, "/issues/TEAM%2F%2342", true, []string{http.MethodGet, http.MethodHead}},
@@ -734,19 +880,22 @@ func (reader *exactEntropyReader) Read(destination []byte) (int, error) {
 }
 
 type pageRuntimeFake struct {
-	mu           sync.Mutex
-	snapshot     domain.Snapshot
-	snapshotErr  error
-	details      map[string]domain.IssueDetail
-	issueErr     error
-	recent       domain.EventPage
-	recentErr    error
-	receipt      domain.RefreshReceipt
-	refreshErr   error
-	callOrder    []string
-	lastIssue    string
-	refreshCalls atomic.Int64
-	issueCalls   atomic.Int64
+	mu             sync.Mutex
+	snapshot       domain.Snapshot
+	snapshotErr    error
+	details        map[string]domain.IssueDetail
+	issueErr       error
+	recent         domain.EventPage
+	recentErr      error
+	receipt        domain.RefreshReceipt
+	refreshErr     error
+	callOrder      []string
+	lastIssue      string
+	refreshCalls   atomic.Int64
+	issueCalls     atomic.Int64
+	schedulerErr   error
+	schedulerCalls atomic.Int64
+	lastScheduler  bool
 }
 
 func (runtime *pageRuntimeFake) Snapshot(context.Context) (domain.Snapshot, error) {
@@ -801,7 +950,23 @@ func (runtime *pageRuntimeFake) Refresh(context.Context) (domain.RefreshReceipt,
 	return runtime.receipt, runtime.refreshErr
 }
 
-func (*pageRuntimeFake) SetScheduler(context.Context, bool) error { return app.ErrUnavailableInPhase }
+func (runtime *pageRuntimeFake) SetScheduler(_ context.Context, enabled bool) error {
+	runtime.schedulerCalls.Add(1)
+	runtime.mu.Lock()
+	runtime.lastScheduler = enabled
+	if runtime.schedulerErr == nil {
+		runtime.snapshot.Scheduler = domain.SchedulerStatus{Available: true, Enabled: enabled}
+		if enabled {
+			runtime.snapshot.Scheduler.State = "running"
+			runtime.snapshot.Scheduler.Message = "The scheduler is running."
+		} else {
+			runtime.snapshot.Scheduler.State = "paused"
+			runtime.snapshot.Scheduler.Message = "The scheduler is paused."
+		}
+	}
+	runtime.mu.Unlock()
+	return runtime.schedulerErr
+}
 func (*pageRuntimeFake) Respond(context.Context, domain.OperatorResponse) error {
 	return app.ErrUnavailableInPhase
 }

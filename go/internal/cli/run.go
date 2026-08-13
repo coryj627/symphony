@@ -314,7 +314,11 @@ func startWithDependencies(ctx context.Context, options Options, _, stderr io.Wr
 		if err := queue.Start(ctx); err != nil {
 			return joinSafe(&StartupError{Code: "queue_runtime_failed", Message: "Symphony could not start the live work queue."}, shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
 		}
-		handler, responder, err := deps.newHandler(service, string(options.Mode), queue, queue, logs, logger)
+		presentationRuntime, err := app.NewOrchestratorRuntime(app.OrchestratorRuntimeOptions{Engine: queue, AgentReady: false})
+		if err != nil {
+			return joinSafe(&StartupError{Code: "orchestrator_runtime_failed", Message: "Symphony could not prepare scheduler state."}, shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
+		}
+		handler, responder, err := deps.newHandler(service, string(options.Mode), presentationRuntime, presentationRuntime, logs, logger)
 		if err != nil {
 			return joinSafe(&StartupError{Code: "web_handler_failed", Message: "Symphony could not prepare the local configuration interface."}, shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
 		}

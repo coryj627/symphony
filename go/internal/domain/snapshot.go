@@ -80,6 +80,8 @@ type IssueDetail struct {
 	Status         string      `json:"status"`
 	Routable       bool        `json:"routable"`
 	RoutingReasons []string    `json:"routing_reasons"`
+	Workspace      *Workspace  `json:"workspace"`
+	Attempt        *int        `json:"attempt"`
 	Running        *RunningRow `json:"running"`
 	Retry          *RetryRow   `json:"retry"`
 }
@@ -150,6 +152,14 @@ func (detail IssueDetail) Clone() (IssueDetail, error) {
 	}
 	clone.Issue = preserveIssueCollections(detail.Issue, issue)
 	clone.RoutingReasons = append([]string{}, detail.RoutingReasons...)
+	if detail.Workspace != nil {
+		workspace := *detail.Workspace
+		clone.Workspace = &workspace
+	}
+	if detail.Attempt != nil {
+		attempt := *detail.Attempt
+		clone.Attempt = &attempt
+	}
 	if detail.Running != nil {
 		running := cloneRunningRows([]RunningRow{*detail.Running})
 		clone.Running = &running[0]

@@ -29,14 +29,14 @@ type logFilters struct {
 }
 
 type logRecordView struct {
-	Sequence         uint64
-	DateTime         string
-	DisplayTime      string
-	Level            string
-	Message          string
-	Fields           string
-	MessageTruncated bool
-	FieldsTruncated  bool
+	Sequence         uint64 `json:"sequence"`
+	DateTime         string `json:"at"`
+	DisplayTime      string `json:"-"`
+	Level            string `json:"level"`
+	Message          string `json:"message"`
+	Fields           string `json:"fields"`
+	MessageTruncated bool   `json:"message_truncated"`
+	FieldsTruncated  bool   `json:"fields_truncated"`
 }
 
 func (handler *PageHandler) logsHTML(w http.ResponseWriter, request *http.Request) {

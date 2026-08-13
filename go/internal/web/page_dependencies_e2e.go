@@ -21,7 +21,8 @@ var e2eScenarioManifest = map[string]struct{}{
 	"empty": {}, "populated": {}, "stale-error": {}, "filtered-empty": {},
 	"issue-not-found": {}, "malicious-text": {}, "encoded-identifier": {},
 	"degraded-log": {}, "long-log": {}, "live-focus": {}, "live-structural": {},
-	"live-pause": {}, "live-resume-failure": {},
+	"live-pause": {}, "live-resume-failure": {}, "live-runtime-controls": {},
+	"runtime-unavailable": {}, "runtime-retrying": {}, "runtime-stalled": {}, "runtime-stopping": {},
 }
 
 const maximumE2ELiveClients = 64
@@ -31,6 +32,7 @@ var e2eLiveScenarios = [...]string{
 	"live-structural",
 	"live-pause",
 	"live-resume-failure",
+	"live-runtime-controls",
 }
 
 func newPageDependencyResolver() pageDependencyResolver {
@@ -368,6 +370,8 @@ func newLiveE2ERuntime(scenario string) *liveE2ERuntime {
 		runtime.replaceCandidatesLocked(liveE2ECandidate("LIVE-1", "Before pause"))
 	case "live-resume-failure":
 		runtime.replaceCandidatesLocked(liveE2ECandidate("LIVE-1", "Before resume"))
+	case "live-runtime-controls":
+		runtime.replaceCandidatesLocked(liveE2ECandidateWithID("control-one", "CTRL-1", "Control one active run"))
 	}
 	return runtime
 }
@@ -464,7 +468,50 @@ func (runtime *liveE2ERuntime) Refresh(ctx context.Context) (domain.RefreshRecei
 	return domain.RefreshReceipt{Queued: true, RequestedAt: published.At, Operations: []string{"poll"}}, nil
 }
 
-func (*liveE2ERuntime) SetScheduler(context.Context, bool) error { return app.ErrUnavailableInPhase }
+func (runtime *liveE2ERuntime) SetScheduler(ctx context.Context, enabled bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.scenario != "live-runtime-controls" {
+		return app.ErrUnavailableInPhase
+	}
+	runtime.snapshot.Scheduler = domain.SchedulerStatus{Available: true, Enabled: enabled}
+	issue := runtime.snapshot.Candidates[0].Issue
+	detail := runtime.details[issue.Identifier]
+	if enabled {
+		runtime.snapshot.Scheduler.State = "running"
+		runtime.snapshot.Scheduler.Message = "The scheduler is running."
+		run := domain.RunningRow{
+			IssueID: issue.ID, IssueIdentifier: issue.Identifier, State: issue.State,
+			LastEvent: "running", LastMessage: "Worker activity is progressing.",
+			StartedAt: e2eNow, LastEventAt: e2eNow, Tokens: domain.TokenTotals{InputTokens: 12, OutputTokens: 7, TotalTokens: 19},
+		}
+		runtime.snapshot.Running = []domain.RunningRow{run}
+		detail.Status = "running"
+		detail.Running = &run
+	} else {
+		runtime.snapshot.Scheduler.State = "paused"
+		runtime.snapshot.Scheduler.Message = "The scheduler is paused."
+		if len(runtime.snapshot.Running) > 0 {
+			run := runtime.snapshot.Running[0]
+			run.LastEvent = string(domain.RunStatusStopping)
+			run.LastMessage = "The active run is stopping safely."
+			runtime.snapshot.Running[0] = run
+			detail.Status = "stopping"
+			detail.Running = &run
+		}
+	}
+	runtime.details[issue.Identifier] = detail
+	published, err := runtime.journal.Publish(domain.Event{Type: "runtime.changed", Data: map[string]any{}})
+	if err != nil {
+		return err
+	}
+	runtime.snapshot.EventCursor = domain.EventCursor{Epoch: published.Epoch, Sequence: published.Sequence}
+	runtime.snapshot.GeneratedAt = published.At
+	return nil
+}
 func (*liveE2ERuntime) Respond(context.Context, domain.OperatorResponse) error {
 	return app.ErrUnavailableInPhase
 }
@@ -534,6 +581,39 @@ func newE2EPageFixture(scenario string) (*e2ePageRuntime, *e2eLogQueries) {
 		for sequence := 100; sequence >= 1; sequence-- {
 			logs.page.Records = append(logs.page.Records, observability.LogRecord{Sequence: uint64(sequence), Time: e2eNow.Add(-time.Duration(101-sequence) * time.Second), Level: "DEBUG", Message: "Pagination fixture entry", Fields: map[string]any{"issue_identifier": "SYM-123"}})
 		}
+	case "runtime-unavailable":
+		runtime.snapshot.Scheduler = domain.SchedulerStatus{Available: false, State: "unavailable", Message: "Agent runtime will be enabled in Phase 4."}
+	case "runtime-retrying":
+		retrying := populated
+		retrying.ID, retrying.Identifier, retrying.Title = "retry-one", "RETRY-1", "Retrying issue"
+		add(retrying, true, []string{})
+		retry := domain.RetryRow{IssueID: retrying.ID, IssueIdentifier: retrying.Identifier, Attempt: 3, DueAt: e2eNow.Add(5 * time.Minute), Error: "safe retry detail"}
+		runtime.snapshot.Retrying = []domain.RetryRow{retry}
+		detail := runtime.details[retrying.Identifier]
+		detail.Status = "retrying"
+		detail.Retry = &retry
+		runtime.details[retrying.Identifier] = detail
+	case "runtime-stalled":
+		stalled := populated
+		stalled.ID, stalled.Identifier, stalled.Title = "stalled-one", "STALL-1", "Stalled issue"
+		add(stalled, true, []string{})
+		run := domain.RunningRow{IssueID: stalled.ID, IssueIdentifier: stalled.Identifier, State: stalled.State, LastEvent: string(domain.RunStatusStalled), LastMessage: "No worker event arrived before the stall deadline.", StartedAt: e2eNow.Add(-time.Hour), LastEventAt: e2eNow.Add(-time.Hour)}
+		runtime.snapshot.Running = []domain.RunningRow{run}
+		detail := runtime.details[stalled.Identifier]
+		detail.Status = "stalled"
+		detail.Running = &run
+		runtime.details[stalled.Identifier] = detail
+	case "runtime-stopping":
+		stopping := populated
+		stopping.ID, stopping.Identifier, stopping.Title = "stopping-one", "STOP-1", "Stopping issue"
+		add(stopping, true, []string{})
+		runtime.snapshot.Scheduler = domain.SchedulerStatus{Available: true, State: "stopping", Message: "The scheduler is stopping active work."}
+		run := domain.RunningRow{IssueID: stopping.ID, IssueIdentifier: stopping.Identifier, State: stopping.State, LastEvent: string(domain.RunStatusStopping), LastMessage: "The active run is stopping safely.", StartedAt: e2eNow.Add(-time.Minute), LastEventAt: e2eNow}
+		runtime.snapshot.Running = []domain.RunningRow{run}
+		detail := runtime.details[stopping.Identifier]
+		detail.Status = "stopping"
+		detail.Running = &run
+		runtime.details[stopping.Identifier] = detail
 	}
 	return runtime, logs
 }
