@@ -1,0 +1,1 @@
+{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-2","items":[],"status":"failed","error":{"message":"fixture failure"}}}}

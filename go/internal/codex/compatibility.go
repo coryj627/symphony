@@ -21,7 +21,10 @@ var codexUserAgentPattern = regexp.MustCompile(`^(?:codex_cli_rs|Codex Desktop)/
 
 // InitializeResponse contains the initialization fields used by preflight.
 type InitializeResponse struct {
-	UserAgent string `json:"userAgent"`
+	UserAgent      string `json:"userAgent"`
+	CodexHome      string `json:"codexHome"`
+	PlatformFamily string `json:"platformFamily"`
+	PlatformOS     string `json:"platformOs"`
 }
 
 // Compatibility is a safe summary of a Codex app-server preflight result.

@@ -88,6 +88,61 @@ func TestRouterDeliversServerRequestsAndUnknownNotificationsWithoutFailing(t *te
 	}
 }
 
+func TestRouterRespondsToStringAndNumericServerRequestsExactlyOnce(t *testing.T) {
+	for _, rawID := range []json.RawMessage{json.RawMessage(`"approval-1"`), json.RawMessage(`17`)} {
+		t.Run(string(rawID), func(t *testing.T) {
+			router, transport := newPipeTransport(t, RouterOptions{})
+			transport.sendRaw(t, []byte(fmt.Sprintf(
+				`{"id":%s,"method":"item/tool/requestUserInput","params":{}}`+"\n",
+				rawID,
+			)))
+			var request ServerRequest
+			select {
+			case request = <-router.ServerRequests():
+			case <-time.After(time.Second):
+				t.Fatal("server request was not delivered")
+			}
+
+			responseDone := make(chan error, 1)
+			go func() {
+				responseDone <- router.Respond(request.ID, map[string]any{"accepted": true})
+			}()
+			response := transport.readRequest(t)
+			if err := <-responseDone; err != nil {
+				t.Fatal(err)
+			}
+			if string(response["id"]) != request.ID.Token() || string(response["result"]) != `{"accepted":true}` {
+				t.Fatalf("response = %v", response)
+			}
+			if err := router.Respond(request.ID, map[string]any{}); err == nil {
+				t.Fatal("server request was answered twice")
+			}
+			awaitEventCode(t, router.Events(), ProtocolEventServerRequestResolved)
+		})
+	}
+}
+
+func TestRouterRejectsReusedPendingServerRequestID(t *testing.T) {
+	router, transport := newPipeTransport(t, RouterOptions{})
+	request := []byte(`{"id":"approval-1","method":"item/tool/requestUserInput","params":{}}` + "\n")
+	transport.sendRaw(t, request)
+	select {
+	case <-router.ServerRequests():
+	case <-time.After(time.Second):
+		t.Fatal("first server request was not delivered")
+	}
+	transport.sendRaw(t, request)
+	select {
+	case <-router.Done():
+		var protocolError *ProtocolError
+		if !errors.As(router.Err(), &protocolError) || protocolError.Code != ProtocolErrorMalformedMessage {
+			t.Fatalf("%v", router.Err())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reused pending server request ID did not stop router")
+	}
+}
+
 func TestRouterEveryPhysicalLineEmitsActivityBeforeMalformedShutdown(t *testing.T) {
 	router, transport := newPipeTransport(t, RouterOptions{})
 	transport.sendRaw(t, []byte(`{"unknown":true}`+"\n"))
@@ -137,6 +192,30 @@ func TestRouterRejectsOversizeLine(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("oversize line did not stop router")
+	}
+}
+
+func TestRouterAcceptsValidMessageAtExactLineLimit(t *testing.T) {
+	const maxBytes = 64
+	prefix := []byte(`{"method":"future/notification","params":"`)
+	suffix := []byte(`"}`)
+	padding := bytes.Repeat([]byte("x"), maxBytes-len(prefix)-len(suffix))
+	line := append(append(prefix, padding...), suffix...)
+	if len(line) != maxBytes {
+		t.Fatalf("fixture has %d bytes", len(line))
+	}
+	router, transport := newPipeTransport(t, RouterOptions{MaxLineBytes: maxBytes})
+	transport.sendRaw(t, append(line, '\n'))
+	select {
+	case notification := <-router.Notifications():
+		if notification.Method != "future/notification" {
+			t.Fatalf("%+v", notification)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("max-sized valid message was not delivered")
+	}
+	if err := router.Err(); err != nil {
+		t.Fatalf("max-sized valid message stopped router: %v", err)
 	}
 }
 

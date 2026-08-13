@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	ProtocolEventActivity      = "activity"
-	ProtocolEventResponse      = "response"
-	ProtocolEventLateResponse  = "late_response"
-	ProtocolEventServerRequest = "server_request"
-	ProtocolEventNotification  = "notification"
+	ProtocolEventActivity              = "activity"
+	ProtocolEventResponse              = "response"
+	ProtocolEventLateResponse          = "late_response"
+	ProtocolEventServerRequest         = "server_request"
+	ProtocolEventServerRequestResolved = "server_request_resolved"
+	ProtocolEventNotification          = "notification"
 )
 
 const (
@@ -52,9 +53,11 @@ type ProtocolEvent struct {
 
 // Router owns one reader, one serialized writer, and all pending request IDs.
 type Router struct {
-	transport readWriteCloser
-	options   RouterOptions
-	pending   *pendingRegistry
+	transport     readWriteCloser
+	options       RouterOptions
+	pending       *pendingRegistry
+	serverMu      sync.Mutex
+	serverPending map[RequestID]struct{}
 
 	writeMu sync.Mutex
 	nextID  atomic.Int64
@@ -63,6 +66,7 @@ type Router struct {
 	notifications  chan Notification
 	events         chan ProtocolEvent
 	done           chan struct{}
+	readDone       chan struct{}
 
 	stopOnce sync.Once
 	errMu    sync.RWMutex
@@ -76,10 +80,12 @@ func NewRouter(transport readWriteCloser, options RouterOptions) *Router {
 		transport:      transport,
 		options:        options,
 		pending:        newPendingRegistry(),
+		serverPending:  make(map[RequestID]struct{}),
 		serverRequests: make(chan ServerRequest, options.RequestBuffer),
 		notifications:  make(chan Notification, options.NotificationBuffer),
 		events:         make(chan ProtocolEvent, options.EventBuffer),
 		done:           make(chan struct{}),
+		readDone:       make(chan struct{}),
 	}
 	go router.readLoop()
 	return router
@@ -142,6 +148,25 @@ func (router *Router) Notify(method string, params any) error {
 	return router.writeJSON(outboundMessage{Method: method, Params: params})
 }
 
+// Respond completes one app-server-owned request without allocating a client ID.
+func (router *Router) Respond(id RequestID, result any) error {
+	if !router.takeServerRequest(id) {
+		return newProtocolError("unknown_server_request", "The Codex server request is no longer pending.", false, nil)
+	}
+	if err := router.writeValue(outboundResponse{ID: id, Result: result}); err != nil {
+		return err
+	}
+	if !router.emit(ProtocolEvent{
+		Code: ProtocolEventServerRequestResolved, RequestID: boundedToken(id.Token()),
+		Summary: "A Symphony-owned Codex request was answered.",
+	}) {
+		err := backpressureError()
+		router.shutdown(err)
+		return err
+	}
+	return nil
+}
+
 // ServerRequests returns bounded app-server-owned requests.
 func (router *Router) ServerRequests() <-chan ServerRequest { return router.serverRequests }
 
@@ -153,6 +178,9 @@ func (router *Router) Events() <-chan ProtocolEvent { return router.events }
 
 // Done closes when the router reaches a terminal state.
 func (router *Router) Done() <-chan struct{} { return router.done }
+
+// ReadDone closes after the sole stdout reader has stopped routing messages.
+func (router *Router) ReadDone() <-chan struct{} { return router.readDone }
 
 // Err returns the router's terminal error, or nil while it is running.
 func (router *Router) Err() error {
@@ -173,7 +201,16 @@ type outboundMessage struct {
 	Params any        `json:"params,omitempty"`
 }
 
+type outboundResponse struct {
+	ID     RequestID `json:"id"`
+	Result any       `json:"result"`
+}
+
 func (router *Router) writeJSON(message outboundMessage) error {
+	return router.writeValue(message)
+}
+
+func (router *Router) writeValue(message any) error {
 	encoded, err := json.Marshal(message)
 	if err != nil {
 		return newProtocolError(ProtocolErrorWriteFailed, "Codex protocol request could not be encoded.", false, err)
@@ -199,6 +236,7 @@ func (router *Router) writeJSON(message outboundMessage) error {
 }
 
 func (router *Router) readLoop() {
+	defer close(router.readDone)
 	reader := bufio.NewReader(router.transport)
 	for {
 		line, readErr := ReadLine(reader, router.options.MaxLineBytes)
@@ -252,9 +290,13 @@ func (router *Router) route(envelope Envelope) error {
 		}
 	case EnvelopeServerRequest:
 		request := *envelope.ServerRequest
+		if !router.addServerRequest(request.ID) {
+			return newProtocolError(ProtocolErrorMalformedMessage, "Codex app-server reused a pending server request ID.", false, nil)
+		}
 		select {
 		case router.serverRequests <- request:
 		default:
+			router.takeServerRequest(request.ID)
 			return backpressureError()
 		}
 		if !router.emit(ProtocolEvent{
@@ -298,8 +340,31 @@ func (router *Router) shutdown(err error) {
 		router.errMu.Unlock()
 		close(router.done)
 		router.pending.close(err)
+		router.serverMu.Lock()
+		clear(router.serverPending)
+		router.serverMu.Unlock()
 		_ = router.transport.Close()
 	})
+}
+
+func (router *Router) addServerRequest(id RequestID) bool {
+	router.serverMu.Lock()
+	defer router.serverMu.Unlock()
+	if _, exists := router.serverPending[id]; exists {
+		return false
+	}
+	router.serverPending[id] = struct{}{}
+	return true
+}
+
+func (router *Router) takeServerRequest(id RequestID) bool {
+	router.serverMu.Lock()
+	defer router.serverMu.Unlock()
+	if _, exists := router.serverPending[id]; !exists {
+		return false
+	}
+	delete(router.serverPending, id)
+	return true
 }
 
 func normalizeRouterOptions(options RouterOptions) RouterOptions {
