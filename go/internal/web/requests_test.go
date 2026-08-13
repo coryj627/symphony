@@ -88,7 +88,7 @@ func TestRespondMapsQuestionAnswersClearsFormAndRestoresRequestRegionFocus(t *te
 	request.SetPathValue("request_id", "request-1")
 	recorder := httptest.NewRecorder()
 	handler.respondOperatorRequest(recorder, request)
-	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != "/issues/GH-42?focus=requests-heading&result=request-responded" {
+	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != "/issues/GH-42?focus=requests-heading&result=request-responded#requests-heading" {
 		t.Fatalf("response = %d location=%q body=%s", recorder.Code, recorder.Header().Get("Location"), recorder.Body.String())
 	}
 	runtime.mu.Lock()

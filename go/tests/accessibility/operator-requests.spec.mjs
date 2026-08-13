@@ -17,6 +17,24 @@ function requestCard(page, title) {
   return page.locator('[data-operator-request]').filter({has: page.getByRole('heading', {name: title, exact: true})});
 }
 
+test('operator response replaces a carried fragment with request-region focus', async ({page}) => {
+  await authorize(page, `${scenarioPath('/', 'live-operator-requests')}#main-content`);
+
+  const request = requestCard(page, 'Approve file changes');
+  const allowOnce = request.getByRole('radio', {name: 'Allow once'});
+  await allowOnce.focus();
+  await page.keyboard.press('Space');
+  const submit = request.getByRole('button', {name: 'Submit response'});
+  await submit.focus();
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('result') === 'request-responded'),
+    page.keyboard.press('Enter'),
+  ]);
+
+  expect(new URL(page.url()).hash).toBe('#requests-heading');
+  await expect(page.getByRole('heading', {name: 'Operator requests'})).toBeFocused();
+});
+
 test('operator requests expose finite named keyboard workflows without moving focus', async ({page}) => {
   await page.clock.install();
   await authorize(page, scenarioPath('/', 'live-operator-requests'));

@@ -116,6 +116,7 @@ func (handler *PageHandler) redirectOperatorResult(w http.ResponseWriter, reques
 	values.Set("result", result)
 	values.Set("focus", "requests-heading")
 	parsed.RawQuery = values.Encode()
+	parsed.Fragment = "requests-heading"
 	setSecurityHeaders(w.Header())
 	http.Redirect(w, request, internalURL(parsed.String(), scenario), http.StatusSeeOther)
 }
