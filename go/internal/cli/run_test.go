@@ -639,6 +639,9 @@ func (*cliQueueRuntime) SetScheduler(context.Context, bool) error { return app.E
 func (*cliQueueRuntime) Respond(context.Context, domain.OperatorResponse) error {
 	return app.ErrUnavailableInPhase
 }
+func (*cliQueueRuntime) ExtendOperatorRequest(context.Context, string) error {
+	return app.ErrUnavailableInPhase
+}
 
 type trackingResolver struct {
 	returned  []byte

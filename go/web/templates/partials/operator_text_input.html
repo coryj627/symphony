@@ -1,0 +1,1 @@
+{{define "operator-text-input"}}<label for="{{.DOMID}}-other">Your answer</label><input id="{{.DOMID}}-other" name="other.{{.ID}}" type="text" autocomplete="off" aria-describedby="{{.DOMID}}-description"{{if and .Required (not .Choices)}} required{{end}}>{{end}}

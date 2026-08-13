@@ -952,6 +952,13 @@ func (*Orchestrator) Respond(ctx context.Context, _ domain.OperatorResponse) err
 	return ErrUnavailable
 }
 
+func (*Orchestrator) ExtendOperatorRequest(ctx context.Context, _ string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ErrUnavailable
+}
+
 func (orchestrator *Orchestrator) Close(ctx context.Context) error {
 	orchestrator.closeOnce.Do(orchestrator.cancel)
 	select {

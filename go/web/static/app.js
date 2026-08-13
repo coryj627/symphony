@@ -22,6 +22,7 @@ const allowedFocusTargets = new Set([
   'refresh',
   'start-runtime',
   'stop-runtime',
+  'requests-heading',
 ]);
 
 if (focusTarget && allowedFocusTargets.has(focusTarget)) {
@@ -199,7 +200,10 @@ if (liveRoot instanceof HTMLElement && typeof window.EventSource === 'function')
       reservePresentationHeight();
       applyPendingSnapshot();
       window.scrollTo({...viewport, behavior: 'instant'});
-      window.requestAnimationFrame(() => window.scrollTo({...viewport, behavior: 'instant'}));
+      window.requestAnimationFrame(() => {
+        window.scrollTo({...viewport, behavior: 'instant'});
+        window.requestAnimationFrame(() => window.scrollTo({...viewport, behavior: 'instant'}));
+      });
     });
 
     liveRoot.addEventListener('focusout', () => {

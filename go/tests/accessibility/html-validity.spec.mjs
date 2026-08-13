@@ -9,8 +9,9 @@ import {
   manualWorkflowPath,
   validGitHubWorkflow,
   environmentManagedWorkflow,
-	  scenarioManifest,
-	  scenarioCases,
+  scenarioPath,
+  scenarioManifest,
+  scenarioCases,
 } from './fixtures.mjs';
 
 const validator = new HtmlValidate({
@@ -34,6 +35,11 @@ for (const route of routes) {
     await expectValidHTML(page);
   });
 }
+
+test('operator request scenario renders valid HTML', async ({page}) => {
+  await authorize(page, scenarioPath('/', 'live-operator-requests'));
+  await expectValidHTML(page);
+});
 
 test('every fixed queue scenario renders valid HTML', async ({page}) => {
   expect(scenarioCases.map(({scenario}) => scenario)).toEqual(scenarioManifest);

@@ -60,6 +60,9 @@ var apiErrorSpecs = map[string]apiErrorSpec{
 	"unsupported_media_type":    {http.StatusUnsupportedMediaType, "unsupported_media_type", "Use JSON or form data for this request.", false},
 	"runtime_unavailable":       {http.StatusServiceUnavailable, "runtime_unavailable", "Runtime state is temporarily unavailable.", true},
 	"refresh_failed":            {http.StatusServiceUnavailable, "refresh_failed", "The refresh could not be completed.", false},
+	"operator_request_stale":    {http.StatusConflict, "operator_request_stale", "This operator request is no longer pending.", false},
+	"operator_request_invalid":  {http.StatusBadRequest, "operator_request_invalid", "Review the operator response and try again.", false},
+	"operator_request_failed":   {http.StatusServiceUnavailable, "operator_request_failed", "The operator response could not be completed.", true},
 	"internal_error":            {http.StatusInternalServerError, "internal_error", "The request could not be completed.", false},
 }
 
@@ -349,13 +352,21 @@ type operatorChoiceResponse struct {
 	Description string `json:"description"`
 }
 
+type operatorDetailResponse struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
 type operatorQuestionResponse struct {
 	ID             string                   `json:"id"`
 	Label          string                   `json:"label"`
 	Description    string                   `json:"description"`
 	Required       bool                     `json:"required"`
 	AllowsMultiple bool                     `json:"allows_multiple"`
+	AllowsOther    bool                     `json:"allows_other"`
+	IsSecret       bool                     `json:"is_secret"`
 	Choices        []operatorChoiceResponse `json:"choices"`
+	DOMID          string                   `json:"-"`
 }
 
 type operatorRequestResponse struct {
@@ -364,6 +375,7 @@ type operatorRequestResponse struct {
 	Kind                string                     `json:"kind"`
 	Title               string                     `json:"title"`
 	Summary             string                     `json:"summary"`
+	Details             []operatorDetailResponse   `json:"details"`
 	OpenedAt            time.Time                  `json:"opened_at"`
 	WarningAt           time.Time                  `json:"warning_at"`
 	DeadlineAt          time.Time                  `json:"deadline_at"`
@@ -371,6 +383,12 @@ type operatorRequestResponse struct {
 	ExtensionsRemaining int                        `json:"extensions_remaining"`
 	Choices             []operatorChoiceResponse   `json:"choices"`
 	Questions           []operatorQuestionResponse `json:"questions"`
+	SessionID           string                     `json:"-"`
+	DOMID               string                     `json:"-"`
+	RespondPath         string                     `json:"-"`
+	ExtendPath          string                     `json:"-"`
+	DeadlineDateTime    string                     `json:"-"`
+	DeadlineDisplayTime string                     `json:"-"`
 }
 
 type issueResponse struct {

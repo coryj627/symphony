@@ -122,6 +122,33 @@ func TestRouterRespondsToStringAndNumericServerRequestsExactlyOnce(t *testing.T)
 	}
 }
 
+func TestRouterRejectsServerRequestWithBoundedErrorExactlyOnce(t *testing.T) {
+	router, transport := newPipeTransport(t, RouterOptions{})
+	transport.sendJSON(t, map[string]any{"id": "approval-1", "method": "future/request", "params": map[string]any{}})
+	var request ServerRequest
+	select {
+	case request = <-router.ServerRequests():
+	case <-time.After(time.Second):
+		t.Fatal("server request was not delivered")
+	}
+	if err := router.Reject(request.ID, 1, "invalid"); err == nil {
+		t.Fatal("invalid error code was accepted")
+	}
+	done := make(chan error, 1)
+	go func() { done <- router.Reject(request.ID, rpcMethodNotFound, "The method is not supported.") }()
+	response := transport.readRequest(t)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if string(response["id"]) != `"approval-1"` || string(response["error"]) != `{"code":-32601,"message":"The method is not supported."}` {
+		t.Fatalf("response = %v", response)
+	}
+	if err := router.Reject(request.ID, rpcMethodNotFound, "The method is not supported."); err == nil {
+		t.Fatal("server request was rejected twice")
+	}
+	awaitEventCode(t, router.Events(), ProtocolEventServerRequestResolved)
+}
+
 func TestRouterRejectsReusedPendingServerRequestID(t *testing.T) {
 	router, transport := newPipeTransport(t, RouterOptions{})
 	request := []byte(`{"id":"approval-1","method":"item/tool/requestUserInput","params":{}}` + "\n")

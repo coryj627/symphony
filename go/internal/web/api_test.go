@@ -214,7 +214,7 @@ func TestStateAPIUsesExactAllowlistedNonNullShapeAndCoherentEventSuffix(t *testi
 	if err := json.Unmarshal(top["requests"], &requests); err != nil {
 		t.Fatal(err)
 	}
-	assertExactJSONKeys(t, requests[0], "choices", "deadline_at", "extensions_remaining", "extensions_used", "issue_identifier", "kind", "opened_at", "questions", "request_id", "summary", "title", "warning_at")
+	assertExactJSONKeys(t, requests[0], "choices", "deadline_at", "details", "extensions_remaining", "extensions_used", "issue_identifier", "kind", "opened_at", "questions", "request_id", "summary", "title", "warning_at")
 	var choices []map[string]json.RawMessage
 	if err := json.Unmarshal(requests[0]["choices"], &choices); err != nil {
 		t.Fatal(err)
@@ -896,6 +896,12 @@ type pageRuntimeFake struct {
 	schedulerErr   error
 	schedulerCalls atomic.Int64
 	lastScheduler  bool
+	respondErr     error
+	extendErr      error
+	respondCalls   atomic.Int64
+	extendCalls    atomic.Int64
+	lastResponse   domain.OperatorResponse
+	lastExtended   string
 }
 
 func (runtime *pageRuntimeFake) Snapshot(context.Context) (domain.Snapshot, error) {
@@ -967,8 +973,19 @@ func (runtime *pageRuntimeFake) SetScheduler(_ context.Context, enabled bool) er
 	runtime.mu.Unlock()
 	return runtime.schedulerErr
 }
-func (*pageRuntimeFake) Respond(context.Context, domain.OperatorResponse) error {
-	return app.ErrUnavailableInPhase
+func (runtime *pageRuntimeFake) Respond(_ context.Context, response domain.OperatorResponse) error {
+	runtime.respondCalls.Add(1)
+	runtime.mu.Lock()
+	runtime.lastResponse = response.Clone()
+	runtime.mu.Unlock()
+	return runtime.respondErr
+}
+func (runtime *pageRuntimeFake) ExtendOperatorRequest(_ context.Context, requestID string) error {
+	runtime.extendCalls.Add(1)
+	runtime.mu.Lock()
+	runtime.lastExtended = requestID
+	runtime.mu.Unlock()
+	return runtime.extendErr
 }
 
 func (runtime *pageRuntimeFake) callOrderString() string {

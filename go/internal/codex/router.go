@@ -156,6 +156,24 @@ func (router *Router) Respond(id RequestID, result any) error {
 	if err := router.writeValue(outboundResponse{ID: id, Result: result}); err != nil {
 		return err
 	}
+	return router.serverRequestResolved(id)
+}
+
+// Reject answers one app-server-owned request with a bounded JSON-RPC error.
+func (router *Router) Reject(id RequestID, code int64, message string) error {
+	if code >= 0 || len(message) == 0 || len(message) > 512 {
+		return newProtocolError(ProtocolErrorWriteFailed, "Codex protocol error response is invalid.", false, nil)
+	}
+	if !router.takeServerRequest(id) {
+		return newProtocolError("unknown_server_request", "The Codex server request is no longer pending.", false, nil)
+	}
+	if err := router.writeValue(outboundErrorResponse{ID: id, Error: outboundRPCError{Code: code, Message: message}}); err != nil {
+		return err
+	}
+	return router.serverRequestResolved(id)
+}
+
+func (router *Router) serverRequestResolved(id RequestID) error {
 	if !router.emit(ProtocolEvent{
 		Code: ProtocolEventServerRequestResolved, RequestID: boundedToken(id.Token()),
 		Summary: "A Symphony-owned Codex request was answered.",
@@ -204,6 +222,16 @@ type outboundMessage struct {
 type outboundResponse struct {
 	ID     RequestID `json:"id"`
 	Result any       `json:"result"`
+}
+
+type outboundErrorResponse struct {
+	ID    RequestID        `json:"id"`
+	Error outboundRPCError `json:"error"`
+}
+
+type outboundRPCError struct {
+	Code    int64  `json:"code"`
+	Message string `json:"message"`
 }
 
 func (router *Router) writeJSON(message outboundMessage) error {

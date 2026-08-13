@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coryj627/symphony/go/internal/app"
+	"github.com/coryj627/symphony/go/internal/codex"
 	"github.com/coryj627/symphony/go/internal/domain"
 	"github.com/coryj627/symphony/go/internal/observability"
 )
@@ -23,6 +24,7 @@ var e2eScenarioManifest = map[string]struct{}{
 	"degraded-log": {}, "long-log": {}, "live-focus": {}, "live-structural": {},
 	"live-pause": {}, "live-resume-failure": {}, "live-runtime-controls": {},
 	"runtime-unavailable": {}, "runtime-retrying": {}, "runtime-stalled": {}, "runtime-stopping": {},
+	"live-operator-requests": {},
 }
 
 const maximumE2ELiveClients = 64
@@ -33,6 +35,7 @@ var e2eLiveScenarios = [...]string{
 	"live-pause",
 	"live-resume-failure",
 	"live-runtime-controls",
+	"live-operator-requests",
 }
 
 func newPageDependencyResolver() pageDependencyResolver {
@@ -277,6 +280,9 @@ func (*e2ePageRuntime) SetScheduler(context.Context, bool) error { return app.Er
 func (*e2ePageRuntime) Respond(context.Context, domain.OperatorResponse) error {
 	return app.ErrUnavailableInPhase
 }
+func (*e2ePageRuntime) ExtendOperatorRequest(context.Context, string) error {
+	return app.ErrUnavailableInPhase
+}
 
 type e2eLogQueries struct {
 	page observability.LogPage
@@ -372,6 +378,37 @@ func newLiveE2ERuntime(scenario string) *liveE2ERuntime {
 		runtime.replaceCandidatesLocked(liveE2ECandidate("LIVE-1", "Before resume"))
 	case "live-runtime-controls":
 		runtime.replaceCandidatesLocked(liveE2ECandidateWithID("control-one", "CTRL-1", "Control one active run"))
+	case "live-operator-requests":
+		runtime.replaceCandidatesLocked(liveE2ECandidateWithID("request-one", "REQ-1", "Operator request accessibility"))
+		now := time.Now().UTC()
+		request := func(id, kind, title string) domain.OperatorRequest {
+			return domain.OperatorRequest{
+				ID: id, SessionID: "thread-1-turn-1", IssueID: "request-one", IssueIdentifier: "REQ-1", Kind: kind,
+				Title: title, Summary: "Codex is waiting for an operator response.", OpenedAt: now,
+				WarningAt: now.Add(9*time.Minute + 40*time.Second), DeadlineAt: now.Add(10 * time.Minute), ExtensionsRemaining: 10,
+				Choices: []domain.OperatorChoice{}, Questions: []domain.OperatorQuestion{}, Details: []domain.OperatorDetail{},
+			}
+		}
+		command := request("command-request", "command_approval", "Approve command execution")
+		command.Details = []domain.OperatorDetail{{Label: "Command", Value: "go test ./..."}, {Label: "Working directory", Value: "/workspace/REQ-1"}}
+		command.Choices = []domain.OperatorChoice{{ID: "accept", Label: "Allow once", Description: "Run this command once."}, {ID: "decline", Label: "Deny", Description: "Do not run this command."}}
+		file := request("file-request", "file_approval", "Approve file changes")
+		file.Details = []domain.OperatorDetail{{Label: "Grant root", Value: "/workspace/REQ-1"}}
+		file.Choices = []domain.OperatorChoice{{ID: "accept", Label: "Allow once", Description: "Apply these file changes once."}, {ID: "decline", Label: "Deny", Description: "Do not apply the file changes."}}
+		permission := request("permission-request", "permission_approval", "Approve additional permissions")
+		permission.Details = []domain.OperatorDetail{{Label: "Requested permission profile", Value: `{"network":{"enabled":true}}`}}
+		permission.Choices = []domain.OperatorChoice{{ID: "grant_turn", Label: "Allow for this turn", Description: "Grant exactly the displayed permission profile."}, {ID: "decline", Label: "Deny", Description: "Do not grant the requested permissions."}}
+		questions := request("question-request", "user_input", "Codex needs your input")
+		questions.Questions = []domain.OperatorQuestion{
+			{ID: "platform", Label: "Platform", Description: "Choose a platform.", Required: true, Choices: []domain.OperatorChoice{{ID: "option-1", Label: "Windows", Description: "Use Windows."}, {ID: "option-2", Label: "macOS", Description: "Use macOS."}}},
+			{ID: "detail", Label: "Detail", Description: "Provide additional detail.", Required: true, AllowsOther: true, Choices: []domain.OperatorChoice{}},
+			{ID: "token", Label: "Token", Description: "Enter a temporary secret.", Required: true, AllowsOther: true, IsSecret: true, Choices: []domain.OperatorChoice{}},
+		}
+		expiring := request("expiring-request", "file_approval", "Expiring approval")
+		expiring.Choices = []domain.OperatorChoice{{ID: "decline", Label: "Deny", Description: "Do not apply the file changes."}}
+		stale := request("stale-request", "command_approval", "Stale approval example")
+		stale.Choices = []domain.OperatorChoice{{ID: "decline", Label: "Deny", Description: "Do not run this command."}}
+		runtime.snapshot.Requests = []domain.OperatorRequest{command, file, permission, questions, expiring, stale}
 	}
 	return runtime
 }
@@ -512,8 +549,52 @@ func (runtime *liveE2ERuntime) SetScheduler(ctx context.Context, enabled bool) e
 	runtime.snapshot.GeneratedAt = published.At
 	return nil
 }
-func (*liveE2ERuntime) Respond(context.Context, domain.OperatorResponse) error {
-	return app.ErrUnavailableInPhase
+func (runtime *liveE2ERuntime) Respond(ctx context.Context, response domain.OperatorResponse) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.scenario != "live-operator-requests" {
+		return app.ErrUnavailableInPhase
+	}
+	if response.RequestID == "stale-request" {
+		return codex.ErrStaleRequest
+	}
+	for index, request := range runtime.snapshot.Requests {
+		if request.ID != response.RequestID || request.SessionID != response.SessionID {
+			continue
+		}
+		runtime.snapshot.Requests = append(runtime.snapshot.Requests[:index:index], runtime.snapshot.Requests[index+1:]...)
+		return nil
+	}
+	return codex.ErrStaleRequest
+}
+func (runtime *liveE2ERuntime) ExtendOperatorRequest(ctx context.Context, requestID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.scenario != "live-operator-requests" {
+		return app.ErrUnavailableInPhase
+	}
+	for index := range runtime.snapshot.Requests {
+		request := &runtime.snapshot.Requests[index]
+		if request.ID != requestID {
+			continue
+		}
+		if request.ExtensionsRemaining <= 0 {
+			return codex.ErrExtensionLimit
+		}
+		request.ExtensionsUsed++
+		request.ExtensionsRemaining--
+		now := time.Now().UTC()
+		request.WarningAt = now.Add(9*time.Minute + 40*time.Second)
+		request.DeadlineAt = now.Add(10 * time.Minute)
+		return nil
+	}
+	return codex.ErrStaleRequest
 }
 
 var _ app.RuntimeQueries = (*liveE2ERuntime)(nil)

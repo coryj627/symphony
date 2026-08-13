@@ -209,6 +209,11 @@ func (session *Session) RespondRequest(id RequestID, result any) error {
 	return session.router.Respond(id, result)
 }
 
+// RejectRequest completes one app-server-owned request with a bounded error.
+func (session *Session) RejectRequest(id RequestID, code int64, message string) error {
+	return session.router.Reject(id, code, message)
+}
+
 // Close interrupts an active turn when possible and closes the router.
 func (session *Session) Close() error {
 	session.closeOnce.Do(func() {

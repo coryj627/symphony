@@ -20,6 +20,7 @@ type Page struct {
 	FocusTarget          string
 	Scenario             string
 	IssueListURL         string
+	OperatorReturnURL    string
 	LiveRoute            string
 	EventCursorID        string
 	StateURL             string
@@ -72,6 +73,7 @@ type overviewContent struct {
 	StartReason    string
 	StopDisabled   bool
 	StopReason     string
+	Requests       []operatorRequestResponse
 }
 
 type issuesContent struct {

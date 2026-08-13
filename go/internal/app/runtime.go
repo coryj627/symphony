@@ -25,4 +25,13 @@ type RuntimeCommands interface {
 	Refresh(context.Context) (domain.RefreshReceipt, error)
 	SetScheduler(context.Context, bool) error
 	Respond(context.Context, domain.OperatorResponse) error
+	ExtendOperatorRequest(context.Context, string) error
+}
+
+// OperatorRequests is the memory-only request surface owned by the active
+// Codex worker composition.
+type OperatorRequests interface {
+	Pending() []domain.OperatorRequest
+	Respond(domain.OperatorResponse) error
+	Extend(string) error
 }

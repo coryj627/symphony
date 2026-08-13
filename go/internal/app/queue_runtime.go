@@ -552,6 +552,13 @@ func (runtime *QueueRuntime) Respond(ctx context.Context, _ domain.OperatorRespo
 	return ErrUnavailableInPhase
 }
 
+func (runtime *QueueRuntime) ExtendOperatorRequest(ctx context.Context, _ string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ErrUnavailableInPhase
+}
+
 func (runtime *QueueRuntime) NotifyCredentialChanged() {
 	if !runtime.options.Enabled {
 		return
