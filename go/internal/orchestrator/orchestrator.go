@@ -634,7 +634,7 @@ func (orchestrator *Orchestrator) handleScheduler(ctx context.Context, options O
 			if entry.Status == domain.RunStatusStopping || entry.Status == domain.RunStatusStoppingFailed {
 				continue
 			}
-			orchestrator.requestStop(ctx, options, state, issueID, domain.StopReasonOperatorStop, false)
+			orchestrator.requestStop(ctx, options, state, issueID, domain.StopReasonOperatorStop)
 		}
 	}
 	if request.enabled && state.poll == nil {

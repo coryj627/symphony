@@ -44,17 +44,17 @@ func (orchestrator *Orchestrator) handleReconcileFetched(ctx context.Context, op
 			continue
 		}
 		if stallExceeded(options.Clock.Now(), entry, state.workflow.Config.Codex.StallTimeout) {
-			orchestrator.requestStop(ctx, options, state, issueID, domain.StopReasonStalled, false)
+			orchestrator.requestStop(ctx, options, state, issueID, domain.StopReasonStalled)
 			continue
 		}
 		issue, found := byID[issueID]
 		switch {
 		case !found:
-			orchestrator.requestStop(ctx, options, state, issueID, domain.StopReasonMissing, false)
+			orchestrator.requestStop(ctx, options, state, issueID, domain.StopReasonMissing)
 		case isTerminalIssue(issue, state):
 			entry.Issue = issue
 			state.model.Running[issueID] = entry
-			orchestrator.requestStop(ctx, options, state, issueID, domain.StopReasonTerminal, true)
+			orchestrator.requestStop(ctx, options, state, issueID, domain.StopReasonTerminal)
 		case !retryIssueRoutable(issue, retryRoutingConfig(state)):
 			entry.Issue = issue
 			state.model.Running[issueID] = entry
@@ -62,7 +62,7 @@ func (orchestrator *Orchestrator) handleReconcileFetched(ctx context.Context, op
 			if containsNormalized(state.workflow.Config.Tracker.ActiveStates, normalizeComparable(issue.State)) {
 				reason = domain.StopReasonUnroutable
 			}
-			orchestrator.requestStop(ctx, options, state, issueID, reason, false)
+			orchestrator.requestStop(ctx, options, state, issueID, reason)
 		default:
 			entry.Issue = issue
 			state.model.Running[issueID] = entry
@@ -82,7 +82,7 @@ func stallExceeded(now time.Time, entry RunningEntry, timeout time.Duration) boo
 	return now.Sub(basis) > timeout
 }
 
-func (orchestrator *Orchestrator) requestStop(ctx context.Context, options Options, state *actorState, issueID string, reason domain.StopReason, cleanup bool) {
+func (orchestrator *Orchestrator) requestStop(ctx context.Context, options Options, state *actorState, issueID string, reason domain.StopReason) {
 	entry, found := state.model.Running[issueID]
 	if !found {
 		return
@@ -90,9 +90,6 @@ func (orchestrator *Orchestrator) requestStop(ctx context.Context, options Optio
 	entry.Status = domain.RunStatusStopping
 	entry.StopReason = reason
 	entry.StopGeneration++
-	if cleanup {
-		entry.CleanupConfig = state.workflow.Config
-	}
 	state.model.Running[issueID] = entry
 	orchestrator.publish(options, "runtime.changed", map[string]any{"issue_id": entry.Issue.ID, "issue_identifier": entry.Issue.Identifier})
 	if cancel := state.cancels[issueID]; cancel != nil {
