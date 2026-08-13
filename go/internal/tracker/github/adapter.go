@@ -23,8 +23,12 @@ type Adapter struct {
 	origin        apiOrigin
 	collectionURL *url.URL
 
-	stateMu   sync.Mutex
-	pageCache map[string]cachedPage
+	stateMu          sync.Mutex
+	pageCache        map[string]cachedPage
+	tokenMu          sync.RWMutex
+	toolMu           sync.Mutex
+	idempotencyCache map[string]githubIdempotencyRecord
+	idempotencyBytes int
 }
 
 func New(config tracker.GitHubConfig, token []byte, client *http.Client, logger *slog.Logger) (*Adapter, error) {
@@ -48,17 +52,43 @@ func New(config tracker.GitHubConfig, token []byte, client *http.Client, logger 
 	config.ActiveStates = append([]string(nil), config.ActiveStates...)
 	config.TerminalStates = append([]string(nil), config.TerminalStates...)
 	return &Adapter{
-		config:        config,
-		token:         append([]byte(nil), token...),
-		client:        cloneHTTPClient(client, origin),
-		logger:        logger,
-		origin:        origin,
-		collectionURL: collectionURL,
-		pageCache:     make(map[string]cachedPage),
+		config:           config,
+		token:            append([]byte(nil), token...),
+		client:           cloneHTTPClient(client, origin),
+		logger:           logger,
+		origin:           origin,
+		collectionURL:    collectionURL,
+		pageCache:        make(map[string]cachedPage),
+		idempotencyCache: make(map[string]githubIdempotencyRecord),
 	}, nil
 }
 
 func (adapter *Adapter) Kind() string { return "github" }
+
+func (adapter *Adapter) Close() error {
+	adapter.toolMu.Lock()
+	for key, record := range adapter.idempotencyCache {
+		clear(record.result)
+		delete(adapter.idempotencyCache, key)
+	}
+	adapter.idempotencyBytes = 0
+	adapter.tokenMu.Lock()
+	clear(adapter.token)
+	adapter.token = nil
+	adapter.tokenMu.Unlock()
+	adapter.toolMu.Unlock()
+	return nil
+}
+
+func (adapter *Adapter) authorization() string {
+	return "Bearer " + adapter.credential()
+}
+
+func (adapter *Adapter) credential() string {
+	adapter.tokenMu.RLock()
+	defer adapter.tokenMu.RUnlock()
+	return string(adapter.token)
+}
 
 func (adapter *Adapter) FetchIssuesByStates(ctx context.Context, states []string) ([]domain.Issue, error) {
 	wanted := supportedStates(states)
@@ -146,12 +176,28 @@ func (adapter *Adapter) FetchIssuesByIDs(ctx context.Context, ids []string) ([]d
 	return issues, nil
 }
 
-func (adapter *Adapter) AgentTools(tracker.Session) []domain.ToolSpec {
-	return []domain.ToolSpec{}
+func (adapter *Adapter) AgentTools(session tracker.Session) []domain.ToolSpec {
+	if _, code := githubToolSessionScope(session, adapter.config); code != "" {
+		return []domain.ToolSpec{}
+	}
+	return []domain.ToolSpec{githubToolSpec()}
 }
 
-func (adapter *Adapter) ExecuteAgentTool(context.Context, domain.ToolCall, tracker.Session) domain.ToolResult {
-	return domain.ToolUnavailableResult()
+func (adapter *Adapter) ExecuteAgentTool(ctx context.Context, call domain.ToolCall, session tracker.Session) domain.ToolResult {
+	if call.Name != githubAPIToolName {
+		return domain.ToolUnavailableResult()
+	}
+	parsed, code := parseGitHubToolCall(call.Arguments, session, adapter.config)
+	if code != "" {
+		return githubToolFailure(code)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if parsed.operation == "create_comment" {
+		return adapter.executeIdempotentComment(ctx, parsed, session)
+	}
+	return adapter.executeGitHubToolRequest(ctx, parsed)
 }
 
 func (adapter *Adapter) SecretEnvironmentNames() []string {

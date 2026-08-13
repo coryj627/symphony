@@ -61,6 +61,7 @@ func (handler *PageHandler) overviewHTML(w http.ResponseWriter, request *http.Re
 			UsingLastGood: snapshot.Config.UsingLastGood, HasError: snapshot.Config.ErrorCode != "", ErrorCode: configCode, Message: safeStatusMessage(snapshot.Config.Message, snapshot.Config.ErrorCode != "", configCode, "Configuration status needs attention."), ChangedAt: snapshot.Config.ChangedAt,
 		},
 		ConfigError: snapshot.Config.ErrorCode != "", TrackerError: snapshot.Tracker.ErrorCode != "",
+		Requests: operatorRequestResponses(snapshot.Requests),
 	}
 	content.StartDisabled, content.StartReason, content.StopDisabled, content.StopReason = schedulerControlState(snapshot.Scheduler)
 	populateTrackerTimeViews(&content.Tracker)
@@ -75,7 +76,7 @@ func (handler *PageHandler) overviewHTML(w http.ResponseWriter, request *http.Re
 	if handler.mode == "configure" {
 		status = "No scheduler is running. Current tracker work is shown."
 	}
-	page := Page{Title: "Overview — Symphony", Route: "/", Heading: "Overview", Mode: handler.mode, Status: status, CSRFToken: csrf, Scenario: dependencies.scenario, Content: content}
+	page := Page{Title: "Overview — Symphony", Route: "/", Heading: "Overview", Mode: handler.mode, Status: status, CSRFToken: csrf, Scenario: dependencies.scenario, OperatorReturnURL: "/", Content: content}
 	configureLivePage(&page, "overview", snapshot.EventCursor, nil)
 	if firstQueryValue(request.URL.Query(), "result") == "refresh-requested" {
 		page.Flash = "Refresh requested."
@@ -88,8 +89,12 @@ func (handler *PageHandler) overviewHTML(w http.ResponseWriter, request *http.Re
 		page.Flash = "Scheduler start requested."
 	case "runtime-stopped":
 		page.Flash = "Scheduler stop requested."
+	case "request-responded":
+		page.Flash = "Operator response submitted."
+	case "request-extended":
+		page.Flash = "Operator request extended."
 	}
-	if target := firstQueryValue(request.URL.Query(), "focus"); target == "start-runtime" || target == "stop-runtime" {
+	if target := firstQueryValue(request.URL.Query(), "focus"); target == "start-runtime" || target == "stop-runtime" || target == "requests-heading" {
 		page.FocusTarget = target
 	}
 	if err := handler.renderHTML(w, "overview", page); err != nil {
@@ -355,9 +360,19 @@ func (handler *PageHandler) issueHTML(w http.ResponseWriter, request *http.Reque
 		retry := retryResponseFrom(*detail.Retry)
 		content.Retry = &retry
 	}
+	csrf, _ := CSRFToken(request.Context())
 	page := Page{
 		Title: response.Issue.Identifier + " — Symphony", Route: "/issues", Heading: "Issue " + response.Issue.Identifier, Mode: handler.mode,
-		Status: "Issue details are shown.", Scenario: dependencies.scenario, Content: content,
+		Status: "Issue details are shown.", CSRFToken: csrf, Scenario: dependencies.scenario, OperatorReturnURL: "/issues/" + url.PathEscape(response.IssueIdentifier), Content: content,
+	}
+	switch firstQueryValue(request.URL.Query(), "result") {
+	case "request-responded":
+		page.Flash = "Operator response submitted."
+	case "request-extended":
+		page.Flash = "Operator request extended."
+	}
+	if firstQueryValue(request.URL.Query(), "focus") == "requests-heading" {
+		page.FocusTarget = "requests-heading"
 	}
 	if returnURL := issueListURL(filters); returnURL != "/issues" {
 		page.IssueListURL = returnURL
@@ -725,20 +740,30 @@ func coherentEventViews(cursor domain.EventCursor, tail domain.EventPage) ([]eve
 
 func operatorRequestResponses(source []domain.OperatorRequest) []operatorRequestResponse {
 	result := make([]operatorRequestResponse, 0, len(source))
-	for _, request := range source {
+	for requestIndex, request := range source {
 		choices := operatorChoiceResponses(request.Choices)
+		details := make([]operatorDetailResponse, 0, min(len(request.Details), maximumRequestItems))
+		for _, detail := range request.Details[:min(len(request.Details), maximumRequestItems)] {
+			details = append(details, operatorDetailResponse{Label: cleanDisplayValue(detail.Label, maximumShortTextBytes), Value: cleanDisplayValue(detail.Value, 16<<10)})
+		}
 		questions := make([]operatorQuestionResponse, 0, min(len(request.Questions), maximumRequestItems))
-		for _, question := range request.Questions[:min(len(request.Questions), maximumRequestItems)] {
+		for questionIndex, question := range request.Questions[:min(len(request.Questions), maximumRequestItems)] {
 			questions = append(questions, operatorQuestionResponse{
 				ID: cleanMachine(question.ID, maximumShortTextBytes), Label: cleanDisplayValue(question.Label, maximumDisplayBytes), Description: cleanDisplayValue(question.Description, 2<<10),
-				Required: question.Required, AllowsMultiple: question.AllowsMultiple, Choices: operatorChoiceResponses(question.Choices),
+				Required: question.Required, AllowsMultiple: question.AllowsMultiple, AllowsOther: question.AllowsOther, IsSecret: question.IsSecret,
+				Choices: operatorChoiceResponses(question.Choices), DOMID: "operator-question-" + strconv.Itoa(requestIndex+1) + "-" + strconv.Itoa(questionIndex+1),
 			})
 		}
-		result = append(result, operatorRequestResponse{
+		response := operatorRequestResponse{
 			RequestID: cleanMachine(request.ID, maximumShortTextBytes), IssueIdentifier: cleanMachine(request.IssueIdentifier, maximumShortTextBytes), Kind: cleanMachine(request.Kind, maximumShortTextBytes),
 			Title: cleanDisplayValue(request.Title, maximumDisplayBytes), Summary: cleanDisplayValue(request.Summary, 2<<10), OpenedAt: request.OpenedAt, WarningAt: request.WarningAt, DeadlineAt: request.DeadlineAt,
-			ExtensionsUsed: request.ExtensionsUsed, ExtensionsRemaining: request.ExtensionsRemaining, Choices: choices, Questions: questions,
-		})
+			Details: details, ExtensionsUsed: request.ExtensionsUsed, ExtensionsRemaining: request.ExtensionsRemaining, Choices: choices, Questions: questions,
+			SessionID: cleanMachine(request.SessionID, maximumDisplayBytes), DOMID: "operator-request-" + strconv.Itoa(requestIndex+1),
+		}
+		response.RespondPath = "/api/v1/requests/" + url.PathEscape(response.RequestID) + "/respond"
+		response.ExtendPath = "/api/v1/requests/" + url.PathEscape(response.RequestID) + "/extend"
+		response.DeadlineDateTime, response.DeadlineDisplayTime = semanticTimeStrings(response.DeadlineAt)
+		result = append(result, response)
 	}
 	return result
 }

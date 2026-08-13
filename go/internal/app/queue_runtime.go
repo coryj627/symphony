@@ -27,6 +27,7 @@ type QueueOptions struct {
 	Resolver secrets.Resolver
 	Journal  *observability.Journal
 	Logger   *slog.Logger
+	Redactor *observability.Redactor
 }
 
 type queueDependencies struct {
@@ -546,6 +547,13 @@ func (runtime *QueueRuntime) SetScheduler(ctx context.Context, enabled bool) err
 }
 
 func (runtime *QueueRuntime) Respond(ctx context.Context, _ domain.OperatorResponse) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ErrUnavailableInPhase
+}
+
+func (runtime *QueueRuntime) ExtendOperatorRequest(ctx context.Context, _ string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

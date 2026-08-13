@@ -2,6 +2,8 @@ package tracker
 
 import (
 	"context"
+	"strconv"
+	"sync/atomic"
 
 	"github.com/coryj627/symphony/go/internal/domain"
 	"github.com/coryj627/symphony/go/internal/secrets"
@@ -31,7 +33,10 @@ type Factory interface {
 type Session struct {
 	Issue          domain.Issue
 	ProviderConfig ProviderConfig
+	toolScopeID    string
 }
+
+var toolScopeSequence atomic.Uint64
 
 func NewSession(issue domain.Issue, providerConfig ProviderConfig) (Session, error) {
 	issueSnapshot, err := NormalizeIssue(issue)
@@ -41,12 +46,24 @@ func NewSession(issue domain.Issue, providerConfig ProviderConfig) (Session, err
 	return Session{
 		Issue:          issueSnapshot,
 		ProviderConfig: cloneProviderConfig(providerConfig),
+		toolScopeID:    "tracker-session-" + strconv.FormatUint(toolScopeSequence.Add(1), 36),
 	}, nil
 }
 
 func (session Session) Clone() (Session, error) {
-	return NewSession(session.Issue, session.ProviderConfig)
+	issueSnapshot, err := NormalizeIssue(session.Issue)
+	if err != nil {
+		return Session{}, err
+	}
+	return Session{
+		Issue: issueSnapshot, ProviderConfig: cloneProviderConfig(session.ProviderConfig), toolScopeID: session.toolScopeID,
+	}, nil
 }
+
+// ToolScopeID is an opaque process-local identity used only for bounded tool
+// state such as mutation idempotency. It is never serialized or sent to a
+// provider or child process.
+func (session Session) ToolScopeID() string { return session.toolScopeID }
 
 func cloneProviderConfig(providerConfig ProviderConfig) ProviderConfig {
 	switch config := providerConfig.(type) {

@@ -1258,6 +1258,9 @@ func (*sseJournalRuntime) SetScheduler(context.Context, bool) error {
 func (*sseJournalRuntime) Respond(context.Context, domain.OperatorResponse) error {
 	return app.ErrUnavailableInPhase
 }
+func (*sseJournalRuntime) ExtendOperatorRequest(context.Context, string) error {
+	return app.ErrUnavailableInPhase
+}
 
 type sseEventResult struct {
 	page domain.EventPage
@@ -1327,6 +1330,9 @@ func (*sseRuntimeFake) Refresh(context.Context) (domain.RefreshReceipt, error) {
 func (*sseRuntimeFake) SetScheduler(context.Context, bool) error { return app.ErrUnavailableInPhase }
 
 func (*sseRuntimeFake) Respond(context.Context, domain.OperatorResponse) error {
+	return app.ErrUnavailableInPhase
+}
+func (*sseRuntimeFake) ExtendOperatorRequest(context.Context, string) error {
 	return app.ErrUnavailableInPhase
 }
 

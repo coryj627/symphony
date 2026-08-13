@@ -1,4 +1,6 @@
 import {spawnSync} from 'node:child_process';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -42,6 +44,10 @@ const liveEnvironmentNames = [
   'SYMPHONY_RUN_LINEAR_LIVE',
   'SYMPHONY_LINEAR_TEST_PROJECT',
   'SYMPHONY_LINEAR_TEST_TOKEN',
+  'SYMPHONY_REAL_CODEX_SMOKE',
+  'SYMPHONY_REAL_CODEX_WORKFLOW',
+  'SYMPHONY_REAL_CODEX_COMMAND',
+  'SYMPHONY_REAL_CODEX_LOGIN_COMMAND',
 ];
 
 function deterministicEnvironment(source) {
@@ -82,10 +88,19 @@ export function run({
     return 2;
   }
 
+  let buildDirectory;
+  try {
+    buildDirectory = mkdtempSync(path.join(tmpdir(), 'symphony-verify-'));
+  } catch (filesystemError) {
+    error(`Verification could not create its temporary build directory: ${filesystemError.message}`);
+    return 2;
+  }
+  const buildOutput = path.join(buildDirectory, platform === 'win32' ? 'symphony.exe' : 'symphony');
+
   const npm = platform === 'win32' ? 'npm.cmd' : 'npm';
   const commands = [
-    {command: process.execPath, args: ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']},
-    {command: selectedGo.command, args: [...selectedGo.prefix, 'build', './cmd/symphony']},
+    {command: process.execPath, args: ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/git-attributes.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']},
+    {command: selectedGo.command, args: [...selectedGo.prefix, 'build', '-o', buildOutput, './cmd/symphony']},
     {command: selectedGo.command, args: [...selectedGo.prefix, 'test', './...']},
     ...(platform === 'darwin'
       ? [{command: selectedGo.command, args: [...selectedGo.prefix, 'test', '-race', './...']}]
@@ -110,22 +125,26 @@ export function run({
   ];
 
   const options = {cwd: path.resolve(repoRoot), env: deterministicEnvironment(environment), error};
-  for (const gate of commands) {
-    if (gate.sentinel !== undefined) {
-      const result = capture(gate.command, gate.args, options) ?? {};
-      const code = Number.isInteger(result.status) ? result.status : 2;
-      if (code !== 0) return code;
-      const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      if (!output.includes(gate.sentinel)) {
-        error(`${gate.profile} disabled profile did not report ${gate.sentinel}.`);
-        return 2;
+  try {
+    for (const gate of commands) {
+      if (gate.sentinel !== undefined) {
+        const result = capture(gate.command, gate.args, options) ?? {};
+        const code = Number.isInteger(result.status) ? result.status : 2;
+        if (code !== 0) return code;
+        const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+        if (!output.includes(gate.sentinel)) {
+          error(`${gate.profile} disabled profile did not report ${gate.sentinel}.`);
+          return 2;
+        }
+        continue;
       }
-      continue;
+      const code = exec(gate.command, gate.args, options);
+      if (code !== 0) return code;
     }
-    const code = exec(gate.command, gate.args, options);
-    if (code !== 0) return code;
+    return 0;
+  } finally {
+    rmSync(buildDirectory, {recursive: true, force: true});
   }
-  return 0;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === thisFile) {

@@ -67,6 +67,14 @@ is Chromium-only. These engines are useful runtime coverage, but Playwright
 Chromium is not stable Chrome with NVDA, and Playwright WebKit is not Safari
 with VoiceOver.
 
+Phase 4 adds dedicated Codex runtime coverage in
+`tests/accessibility/codex-runtime.spec.mjs` and
+`tests/accessibility/codex-runtime.axe.spec.mjs`. Those tests exercise named
+operator approval and user-input groups, password treatment for secret
+answers, deadline warnings, stale-response recovery focus, incompatible Codex
+readiness, provider-tool failure text, and process-cleanup failure text. Each
+fixed state is also included in the generated-HTML manifest.
+
 The individual full-tree source scan is:
 
 ```bash

@@ -1,0 +1,14 @@
+{
+  "data": {
+    "viewer": null
+  },
+  "errors": [
+    {
+      "message": "Viewer is unavailable.",
+      "path": ["viewer"],
+      "extensions": {
+        "code": "FORBIDDEN"
+      }
+    }
+  ]
+}

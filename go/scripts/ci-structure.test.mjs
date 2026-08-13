@@ -15,8 +15,10 @@ const integrationsWorkflow = existsSync(integrationsPath)
 
 const githubSentinel = 'SKIPPED: GitHub live profile not enabled';
 const linearSentinel = 'SKIPPED: Linear live profile not enabled';
+const codexSentinel = 'SKIPPED: real Codex smoke';
 const disabledGitHubCommand = 'go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/github';
 const disabledLinearCommand = 'go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/linear';
+const disabledCodexCommand = "go test -v -count=1 -run '^TestRealCodexAppServerSmoke$' ./internal/codex";
 const secretExpressionPattern = /\$\{\{\s*secrets\b/;
 
 function workflowHeader(source) {
@@ -94,8 +96,8 @@ function secretNames(source) {
 
 function assertManualDispatchInputs(header) {
   const inputNames = [...header.matchAll(/^      ([A-Za-z0-9_-]+):$/gm)].map((match) => match[1]);
-  assert.deepEqual(inputNames, ['github', 'linear'], 'manual dispatch must define exactly github and linear inputs');
-  for (const provider of ['github', 'linear']) {
+  assert.deepEqual(inputNames, ['github', 'linear', 'codex'], 'manual dispatch must define exactly github, linear, and codex inputs');
+  for (const provider of ['github', 'linear', 'codex']) {
     const input = header.match(new RegExp(`\\n      ${provider}:\\n([\\s\\S]*?)(?=\\n      [a-z]|\\npermissions:)`));
     assert.ok(input, `${provider} input is missing`);
     assert.match(input[1], /required: true/);
@@ -172,11 +174,12 @@ test('main CI runs build, default Go, race, disabled profiles, and every accessi
   assert.match(build, /run: go test \.\/\.\.\./);
   assert.match(build, /run: go vet \.\/\.\.\./);
   assert.match(build, /if: runner\.os == 'macOS'\n\s+run: go test -race \.\/\.\.\./);
-  for (const [name, command, sentinel] of [
-    ['GitHub', disabledGitHubCommand, githubSentinel],
-    ['Linear', disabledLinearCommand, linearSentinel],
+  for (const [stepName, command, sentinel] of [
+    ['Verify disabled GitHub live profile', disabledGitHubCommand, githubSentinel],
+    ['Verify disabled Linear live profile', disabledLinearCommand, linearSentinel],
+    ['Verify disabled real Codex smoke', disabledCodexCommand, codexSentinel],
   ]) {
-    const step = namedStep(build, `Verify disabled ${name} live profile`);
+    const step = namedStep(build, stepName);
     assert.match(step, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(step, new RegExp(sentinel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(step, /status=\$\?/);
@@ -193,7 +196,7 @@ test('manual integration workflow is dispatch-only with exact boolean inputs and
   assert.notEqual(integrationsWorkflow, '', 'manual integration workflow is missing');
   const header = workflowHeader(integrationsWorkflow);
 
-  assert.match(header, /^name: Go provider integrations$/m);
+  assert.match(header, /^name: Go live integrations$/m);
   assert.match(header, /on:\n  workflow_dispatch:\n    inputs:/);
   assert.doesNotMatch(header, /\n  (?:push|pull_request|pull_request_target|schedule):/);
   assert.match(header, /permissions:\n  contents: read/);
@@ -201,26 +204,26 @@ test('manual integration workflow is dispatch-only with exact boolean inputs and
   assertPinnedActions(integrationsWorkflow);
 });
 
-test('manual dispatch input validation rejects a third input key', () => {
+test('manual dispatch input validation rejects a fourth input key', () => {
   const header = workflowHeader(integrationsWorkflow);
   const unsafeHeader = header.replace(
     '\npermissions:\n',
     '\n      extra:\n        required: true\n        type: boolean\n        default: false\n\npermissions:\n',
   );
 
-  assert.throws(() => assertManualDispatchInputs(unsafeHeader), /exactly github and linear/);
+  assert.throws(() => assertManualDispatchInputs(unsafeHeader), /exactly github, linear, and codex/);
 });
 
-test('selected providers on a non-main dispatch fail visibly without credentials', () => {
+test('selected integrations on a non-main dispatch fail visibly without credentials', () => {
   const guard = jobBlock(integrationsWorkflow, 'selected-ref-guard');
 
-  assert.ok(guard.includes("if: ${{ (inputs.github == true || inputs.linear == true) && github.ref != 'refs/heads/main' }}"));
+  assert.ok(guard.includes("if: ${{ (inputs.github == true || inputs.linear == true || inputs.codex == true) && github.ref != 'refs/heads/main' }}"));
   assert.match(guard, /runs-on: macos-15/);
   assert.doesNotMatch(guard, /environment:|SYMPHONY_[A-Z_]+/);
   assert.doesNotMatch(guard, secretExpressionPattern);
   assert.doesNotMatch(guard, /uses:|go test|npm|playwright|https?:\/\//i);
 
-  const reject = namedStep(guard, 'Reject selected providers outside main');
+  const reject = namedStep(guard, 'Reject selected integrations outside main');
   assert.match(reject, /refs\/heads\/main/);
   assert.match(reject, /exit 1/);
 });
@@ -318,6 +321,34 @@ for (const provider of ['github', 'linear']) {
   });
 }
 
+test('real Codex selected job is main-only, native, pinned, and genuinely opt-in', () => {
+  const job = jobBlock(integrationsWorkflow, 'codex-live');
+  assertNativeMatrix(job);
+  assertPinnedGoSetup(job);
+  assert.ok(job.includes("if: ${{ inputs.codex == true && github.ref == 'refs/heads/main' }}"));
+  assert.match(job, /environment: codex-live/);
+  assert.doesNotMatch(job, secretExpressionPattern);
+  assert.match(namedStep(job, 'Set up Node.js'), /node-version: 24\.18\.0/);
+  assert.match(namedStep(job, 'Install reviewed Codex CLI'), /@openai\/codex@0\.144\.1/);
+  const smoke = namedStep(job, 'Run real Codex app-server smoke');
+  assert.match(smoke, /SYMPHONY_REAL_CODEX_SMOKE: '1'/);
+  assert.match(smoke, /SYMPHONY_REAL_CODEX_WORKFLOW: \$\{\{ github\.workspace \}\}\/go\/testdata\/manual\/WORKFLOW\.md/);
+  assert.match(smoke, /go test -v -count=1 -timeout=2m -run '\^TestRealCodexAppServerSmoke\$' \.\/internal\/codex/);
+  assert.doesNotMatch(smoke, /SKIPPED: real Codex smoke|\|\|\s*true/);
+});
+
+test('real Codex unselected job proves the exact disabled sentinel without install or network', () => {
+  const job = jobBlock(integrationsWorkflow, 'codex-disabled');
+  assertNativeMatrix(job);
+  assertPinnedGoSetup(job);
+  assert.ok(job.includes("if: ${{ inputs.codex == false }}"));
+  assert.doesNotMatch(job, /environment:|secrets\.|npm|playwright|https?:\/\//i);
+  const step = namedStep(job, 'Verify disabled real Codex smoke');
+  assert.match(step, new RegExp(disabledCodexCommand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(step, /SKIPPED: real Codex smoke/);
+  assert.match(step, /test "\$status" -eq 0/);
+});
+
 test('manual provider secrets and environments occur only in their selected provider jobs', () => {
   const githubJob = jobBlock(integrationsWorkflow, 'github-live');
   const linearJob = jobBlock(integrationsWorkflow, 'linear-live');
@@ -340,7 +371,7 @@ test('workflows disable caches and contain no artifact, trace, or command-argume
   );
   assert.doesNotMatch(combined, /set -x|ACTIONS_STEP_DEBUG|--trace|trace:\s*(?!off)/i);
   for (const workflow of [mainWorkflow, integrationsWorkflow]) {
-    for (const identifier of ['build-test', 'source-accessibility', 'github-live', 'linear-live', 'github-disabled', 'linear-disabled']) {
+    for (const identifier of ['build-test', 'source-accessibility', 'github-live', 'linear-live', 'codex-live', 'github-disabled', 'linear-disabled', 'codex-disabled']) {
       if (!workflow.includes(`\n  ${identifier}:\n`)) continue;
       for (const step of namedSteps(jobBlock(workflow, identifier))) {
         const runStart = step.source.indexOf('\n        run:');

@@ -1,0 +1,31 @@
+{{define "operator-requests"}}{{$page := .}}<section aria-labelledby="requests-heading" data-operator-requests>
+  <h2 id="requests-heading" tabindex="-1">Operator requests</h2>
+  {{if .Content.Requests}}<ol class="operator-request-list">{{range .Content.Requests}}{{$request := .}}<li id="{{.DOMID}}" class="operator-request" data-operator-request data-deadline="{{.DeadlineDateTime}}" data-warning-at="{{.WarningAt.Format "2006-01-02T15:04:05Z07:00"}}">
+    <h3>{{.Title}}</h3>
+    <p id="{{.DOMID}}-summary">{{.Summary}}</p>
+    {{if .Details}}<dl class="operator-request-details">{{range .Details}}<div><dt>{{.Label}}</dt><dd><code>{{.Value}}</code></dd></div>{{end}}</dl>{{end}}
+    <dl class="identity-list">
+      <div><dt>Issue</dt><dd>{{if .IssueIdentifier}}<a href="{{$page.InternalURL (printf "/issues/%s" .IssueIdentifier)}}">{{.IssueIdentifier}}</a>{{else}}Not available{{end}}</dd></div>
+      <div><dt>Session</dt><dd class="provider-text">{{.SessionID}}</dd></div>
+      <div><dt>Response due</dt><dd><time datetime="{{.DeadlineDateTime}}" data-request-deadline aria-live="off">{{.DeadlineDisplayTime}}</time></dd></div>
+      <div><dt>Extensions remaining</dt><dd>{{.ExtensionsRemaining}}</dd></div>
+    </dl>
+    <p class="status-warning" data-request-warning role="status" aria-live="polite" aria-atomic="true" hidden>This request expires in 20 seconds.</p>
+    <form method="post" action="{{$page.InternalURL .RespondPath}}" aria-describedby="{{.DOMID}}-summary" data-operator-response-form>
+      <input type="hidden" name="csrf_token" value="{{$page.CSRFToken}}">
+      <input type="hidden" name="session_id" value="{{.SessionID}}">
+      <input type="hidden" name="return_to" value="{{$page.OperatorReturnURL}}">
+      {{if .Choices}}<fieldset><legend>Choose a response</legend>{{range $index, $choice := .Choices}}<div class="choice-row"><input id="{{$request.DOMID}}-choice-{{$index}}" name="choice_id" type="radio" value="{{$choice.ID}}"{{if $choice.Description}} aria-describedby="{{$request.DOMID}}-choice-{{$index}}-description"{{end}}{{if eq $index 0}} required{{end}}><label for="{{$request.DOMID}}-choice-{{$index}}">{{$choice.Label}}</label>{{if $choice.Description}}<p id="{{$request.DOMID}}-choice-{{$index}}-description">{{$choice.Description}}</p>{{end}}</div>{{end}}</fieldset>{{end}}
+      {{range .Questions}}{{$question := .}}<fieldset><legend>{{.Label}}</legend><p id="{{.DOMID}}-description">{{.Description}}</p>
+        {{range $index, $choice := .Choices}}<div class="choice-row"><input id="{{$question.DOMID}}-choice-{{$index}}" name="answer.{{$question.ID}}" type="{{if $question.AllowsMultiple}}checkbox{{else}}radio{{end}}" value="{{$choice.ID}}" aria-describedby="{{$question.DOMID}}-choice-{{$index}}-description"{{if and $question.Required (not $question.AllowsMultiple) (eq $index 0)}} required{{end}}><label for="{{$question.DOMID}}-choice-{{$index}}">{{$choice.Label}}</label><p id="{{$question.DOMID}}-choice-{{$index}}-description">{{$choice.Description}}</p></div>{{end}}
+        {{if .AllowsOther}}{{if .Choices}}<div class="choice-row"><input id="{{.DOMID}}-other-choice" name="answer.{{.ID}}" type="{{if .AllowsMultiple}}checkbox{{else}}radio{{end}}" value="__other__"><label for="{{.DOMID}}-other-choice">Other answer</label></div>{{end}}{{if .IsSecret}}{{template "operator-secret-input" .}}{{else}}{{template "operator-text-input" .}}{{end}}{{end}}
+      </fieldset>{{end}}
+      <button type="submit">Submit response</button>
+    </form>
+    {{if gt .ExtensionsRemaining 0}}<form method="post" action="{{$page.InternalURL .ExtendPath}}">
+      <input type="hidden" name="csrf_token" value="{{$page.CSRFToken}}">
+      <input type="hidden" name="return_to" value="{{$page.OperatorReturnURL}}">
+      <button type="submit">Extend response time</button>
+    </form>{{end}}
+  </li>{{end}}</ol>{{else}}<p>No operator requests are waiting.</p>{{end}}
+</section>{{end}}

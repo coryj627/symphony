@@ -41,6 +41,9 @@ export const scenarioManifest = [
   'runtime-retrying',
   'runtime-stalled',
   'runtime-stopping',
+  'codex-incompatible',
+  'codex-tool-failure',
+  'runtime-stopping-failed',
 ];
 
 export function scenarioPath(pathname, scenario) {
@@ -63,6 +66,9 @@ export const scenarioCases = [
   {scenario: 'runtime-retrying', path: scenarioPath('/issues/RETRY-1', 'runtime-retrying')},
   {scenario: 'runtime-stalled', path: scenarioPath('/issues/STALL-1', 'runtime-stalled')},
   {scenario: 'runtime-stopping', path: scenarioPath('/', 'runtime-stopping')},
+  {scenario: 'codex-incompatible', path: scenarioPath('/', 'codex-incompatible')},
+  {scenario: 'codex-tool-failure', path: scenarioPath('/issues/CODEX-TOOL-1', 'codex-tool-failure')},
+  {scenario: 'runtime-stopping-failed', path: scenarioPath('/issues/STOPFAIL-1', 'runtime-stopping-failed')},
 ];
 
 export const validLinearWorkflow = `---

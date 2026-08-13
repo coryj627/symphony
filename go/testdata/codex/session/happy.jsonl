@@ -1,0 +1,8 @@
+{"id":1,"method":"initialize","params":{"clientInfo":{"name":"symphony-go","title":"Symphony","version":"0.1.0-test"},"capabilities":{"experimentalApi":true}}}
+{"id":1,"result":{"codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"macos","userAgent":"codex_cli_rs/0.144.1"}}
+{"method":"initialized"}
+{"id":2,"method":"thread/start","params":{"approvalPolicy":"on-request","cwd":"/tmp/workspace","dynamicTools":[{"type":"function","name":"github_api","description":"Issue-scoped GitHub API","inputSchema":{"type":"object"}}],"runtimeWorkspaceRoots":["/tmp/workspace"],"sandbox":"workspace-write"}}
+{"id":2,"result":{"approvalPolicy":"on-request","approvalsReviewer":"user","cwd":"/tmp/workspace","model":"gpt-5.6-terra","modelProvider":"openai","sandbox":{"type":"workspaceWrite","writableRoots":["/tmp/workspace"],"networkAccess":false},"thread":{"cliVersion":"0.144.1","createdAt":1,"cwd":"/tmp/workspace","ephemeral":true,"id":"thread-1","modelProvider":"openai","preview":"","sessionId":"session-1","source":"appServer","status":{"type":"idle"},"turns":[],"updatedAt":1}}}
+{"id":3,"method":"turn/start","params":{"threadId":"thread-1","input":[{"type":"text","text":"Do the work"}],"cwd":"/tmp/workspace","runtimeWorkspaceRoots":["/tmp/workspace"],"sandboxPolicy":{"type":"workspaceWrite","writableRoots":["/tmp/workspace"],"networkAccess":false}}}
+{"id":3,"result":{"turn":{"id":"turn-1","items":[],"status":"inProgress"}}}
+{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"status":"completed"}}}

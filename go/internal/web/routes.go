@@ -73,6 +73,9 @@ func (s *Server) protectedHandler() http.Handler {
 		}
 
 		setSecurityHeaders(w.Header())
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/requests/") {
+			r.Body = http.MaxBytesReader(w, r.Body, maximumOperatorFormBytes)
+		}
 		if policy, ok := s.handler.(MethodPolicy); ok {
 			allowed, defined := policy.AllowedMethods(r)
 			if defined && !methodAllowed(r.Method, allowed) {

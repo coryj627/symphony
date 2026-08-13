@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/coryj627/symphony/go/internal/domain"
 	"github.com/coryj627/symphony/go/internal/tracker"
@@ -21,6 +22,7 @@ type Adapter struct {
 	client   *http.Client
 	logger   *slog.Logger
 	endpoint *url.URL
+	tokenMu  sync.RWMutex
 }
 
 func New(config tracker.LinearConfig, token []byte, client *http.Client, logger *slog.Logger) (*Adapter, error) {
@@ -46,6 +48,20 @@ func New(config tracker.LinearConfig, token []byte, client *http.Client, logger 
 }
 
 func (adapter *Adapter) Kind() string { return "linear" }
+
+func (adapter *Adapter) Close() error {
+	adapter.tokenMu.Lock()
+	clear(adapter.token)
+	adapter.token = nil
+	adapter.tokenMu.Unlock()
+	return nil
+}
+
+func (adapter *Adapter) authorization() string {
+	adapter.tokenMu.RLock()
+	defer adapter.tokenMu.RUnlock()
+	return string(adapter.token)
+}
 
 func (adapter *Adapter) FetchIssuesByStates(ctx context.Context, states []string) ([]domain.Issue, error) {
 	stateNames := normalizedStateNames(states)
@@ -142,12 +158,35 @@ func (adapter *Adapter) FetchIssuesByIDs(ctx context.Context, ids []string) ([]d
 	return issues, nil
 }
 
-func (adapter *Adapter) AgentTools(tracker.Session) []domain.ToolSpec {
-	return []domain.ToolSpec{}
+func (adapter *Adapter) AgentTools(session tracker.Session) []domain.ToolSpec {
+	switch config := session.ProviderConfig.(type) {
+	case tracker.LinearConfig:
+		if config.ProjectSlug != adapter.config.ProjectSlug || config.Endpoint != adapter.config.Endpoint {
+			return []domain.ToolSpec{}
+		}
+	case *tracker.LinearConfig:
+		if config == nil || config.ProjectSlug != adapter.config.ProjectSlug || config.Endpoint != adapter.config.Endpoint {
+			return []domain.ToolSpec{}
+		}
+	default:
+		return []domain.ToolSpec{}
+	}
+	return []domain.ToolSpec{linearGraphQLToolSpec()}
 }
 
-func (adapter *Adapter) ExecuteAgentTool(context.Context, domain.ToolCall, tracker.Session) domain.ToolResult {
-	return domain.ToolUnavailableResult()
+func (adapter *Adapter) ExecuteAgentTool(ctx context.Context, call domain.ToolCall, _ tracker.Session) domain.ToolResult {
+	if call.Name != linearGraphQLToolName {
+		return domain.ToolUnavailableResult()
+	}
+	input, code := parseLinearToolArguments(call.Arguments)
+	if code != "" {
+		return linearToolFailure(code)
+	}
+	operation, code := parseLinearGraphQLDocument(input.Query)
+	if code != "" {
+		return linearToolFailure(code)
+	}
+	return adapter.executeLinearGraphQL(ctx, input, operation)
 }
 
 func (adapter *Adapter) SecretEnvironmentNames() []string {

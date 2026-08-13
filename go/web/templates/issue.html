@@ -24,10 +24,7 @@
   {{if .Content.Eligibility.Reasons}}<ul>{{range .Content.Eligibility.Reasons}}<li>{{.Message}}</li>{{end}}</ul>{{end}}
 </section>
 
-<section aria-labelledby="requests-heading">
-  <h2 id="requests-heading">Operator requests</h2>
-  {{if .Content.Requests}}<ul>{{range .Content.Requests}}<li class="provider-text"><h3>{{.Title}}</h3><p>{{.Summary}}</p>{{if .Choices}}<ul>{{range .Choices}}<li class="provider-text"><strong>{{.Label}}</strong>{{if .Description}} — {{.Description}}{{end}}</li>{{end}}</ul>{{end}}{{if .Questions}}<ol>{{range .Questions}}<li class="provider-text"><strong>{{.Label}}</strong>{{if .Description}} — {{.Description}}{{end}}</li>{{end}}</ol>{{end}}</li>{{end}}</ul>{{else}}<p>No operator requests are waiting.</p>{{end}}
-</section>
+{{template "operator-requests" .}}
 
 <section aria-labelledby="run-heading"><h2 id="run-heading">Current run</h2>{{if .Content.Running}}<dl><div><dt>State</dt><dd>{{.Content.Running.State}}</dd></div><div><dt>Turns</dt><dd>{{.Content.Running.TurnCount}}</dd></div><div><dt>Last event</dt><dd>{{.Content.Running.LastEvent}}</dd></div><div><dt>Last message</dt><dd>{{.Content.Running.LastMessage}}</dd></div><div><dt>Started</dt><dd><time datetime="{{.Content.Running.StartedDateTime}}">{{.Content.Running.StartedDisplayTime}}</time></dd></div><div><dt>Tokens</dt><dd>{{.Content.Running.Tokens.TotalTokens}} total</dd></div></dl>{{else}}<p>No run is active.</p>{{end}}</section>
 <section aria-labelledby="retry-heading"><h2 id="retry-heading">Retry history</h2>{{if .Content.Retry}}<dl><div><dt>Attempt</dt><dd>{{.Content.Retry.Attempt}}</dd></div><div><dt>Due</dt><dd><time datetime="{{.Content.Retry.DueDateTime}}">{{.Content.Retry.DueDisplayTime}}</time></dd></div>{{if .Content.Retry.Error}}<div><dt>Status</dt><dd>{{.Content.Retry.Error}}</dd></div>{{end}}</dl>{{else}}<p>No retries have been recorded.</p>{{end}}</section>

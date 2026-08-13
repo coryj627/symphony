@@ -163,6 +163,8 @@ func newPageHandlerWithEntropy(options PageOptions, entropy io.Reader) (*PageHan
 	mux.HandleFunc("POST /api/v1/refresh", handler.refreshAPI)
 	mux.HandleFunc("POST /api/v1/runtime/start", handler.startRuntimeAPI)
 	mux.HandleFunc("POST /api/v1/runtime/stop", handler.stopRuntimeAPI)
+	mux.HandleFunc("POST /api/v1/requests/{request_id}/respond", handler.respondOperatorRequest)
+	mux.HandleFunc("POST /api/v1/requests/{request_id}/extend", handler.extendOperatorRequest)
 	mux.HandleFunc("GET /api/v1/{issue_identifier}", handler.issueAPI)
 	mux.HandleFunc("GET /{$}", handler.overviewHTML)
 	mux.HandleFunc("GET /issues", handler.issuesHTML)
@@ -251,6 +253,9 @@ func (h *PageHandler) AllowedMethods(request *http.Request) ([]string, bool) {
 	case "/", "/issues", "/activity", "/configuration", "/logs", "/api/v1/state", "/api/v1/events":
 		return []string{http.MethodGet, http.MethodHead}, true
 	case "/api/v1/refresh", "/api/v1/runtime/start", "/api/v1/runtime/stop", "/api/v1/config/validate", "/api/v1/config/save", "/api/v1/config/credential", "/api/v1/config/credential/delete":
+		return []string{http.MethodPost}, true
+	}
+	if canonicalOperatorRequestAction(request) {
 		return []string{http.MethodPost}, true
 	}
 	if strings.HasPrefix(escaped, "/static/") {
@@ -453,6 +458,9 @@ func (emptyPageRuntime) Refresh(context.Context) (domain.RefreshReceipt, error) 
 }
 func (emptyPageRuntime) SetScheduler(context.Context, bool) error { return app.ErrUnavailableInPhase }
 func (emptyPageRuntime) Respond(context.Context, domain.OperatorResponse) error {
+	return app.ErrUnavailableInPhase
+}
+func (emptyPageRuntime) ExtendOperatorRequest(context.Context, string) error {
 	return app.ErrUnavailableInPhase
 }
 

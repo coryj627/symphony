@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import {existsSync} from 'node:fs';
 import test from 'node:test';
+import path from 'node:path';
 
 import {run} from './verify.mjs';
 
@@ -18,7 +20,7 @@ function successfulCapture(command, args, options) {
   };
 }
 
-test('runs every Phase 2 gate in order on macOS including build, disabled profiles, and race', () => {
+test('runs every deterministic gate in order on macOS including build, disabled profiles, and race', () => {
   const calls = [];
   const code = run({
     platform: 'darwin',
@@ -32,12 +34,18 @@ test('runs every Phase 2 gate in order on macOS including build, disabled profil
       calls.push(['capture', command, args]);
       return successfulCapture(command, args, options);
     },
+    repoRoot: '/fixture/repository',
   });
 
   assert.equal(code, 0);
+  const buildArgs = calls[1][2];
+  assert.deepEqual(buildArgs.slice(0, 2), ['build', '-o']);
+  assert.equal(buildArgs.at(-1), './cmd/symphony');
+  assert.notEqual(path.dirname(buildArgs[2]), '/fixture/repository');
+  assert.equal(existsSync(path.dirname(buildArgs[2])), false, 'temporary build directory was not cleaned');
   assert.deepEqual(calls.map(([kind, , args]) => [kind, args]), [
-    ['exec', ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']],
-    ['exec', ['build', './cmd/symphony']],
+    ['exec', ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/git-attributes.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']],
+    ['exec', buildArgs],
     ['exec', ['test', './...']],
     ['exec', ['test', '-race', './...']],
     ['exec', ['vet', './...']],
@@ -50,7 +58,7 @@ test('runs every Phase 2 gate in order on macOS including build, disabled profil
   ]);
 });
 
-test('runs deterministic Phase 2 gates on Windows without claiming race support', () => {
+test('runs deterministic gates on Windows without claiming race support', () => {
   const calls = [];
   const code = run({
     platform: 'win32',
@@ -68,7 +76,7 @@ test('runs deterministic Phase 2 gates on Windows without claiming race support'
 
   assert.equal(code, 0);
   assert.equal(calls.some(([, , args]) => args.includes('-race')), false);
-  assert.equal(calls.some(([, , args]) => args[0] === 'build' && args[1] === './cmd/symphony'), true);
+  assert.equal(calls.some(([, , args]) => args[0] === 'build' && args[1] === '-o' && args.at(-1) === './cmd/symphony'), true);
   assert.equal(calls.filter(([kind]) => kind === 'capture').length, 2);
 });
 
@@ -81,8 +89,13 @@ test('disabled profile gates remove every live variable from their child environ
     SYMPHONY_RUN_LINEAR_LIVE: '1',
     SYMPHONY_LINEAR_TEST_PROJECT: 'project-slug',
     SYMPHONY_LINEAR_TEST_TOKEN: 'linear-token-canary',
+    SYMPHONY_REAL_CODEX_SMOKE: '1',
+    SYMPHONY_REAL_CODEX_WORKFLOW: '/unsafe/ambient/workflow',
+    SYMPHONY_REAL_CODEX_COMMAND: 'unsafe-ambient-command',
+    SYMPHONY_REAL_CODEX_LOGIN_COMMAND: 'unsafe-ambient-login',
     symphony_run_github_live: '1',
     Symphony_Linear_Test_Token: 'case-variant-token-canary',
+    symphony_real_codex_smoke: '1',
   };
   const environments = [];
   const code = run({
@@ -107,8 +120,13 @@ test('disabled profile gates remove every live variable from their child environ
       'SYMPHONY_RUN_LINEAR_LIVE',
       'SYMPHONY_LINEAR_TEST_PROJECT',
       'SYMPHONY_LINEAR_TEST_TOKEN',
+      'SYMPHONY_REAL_CODEX_SMOKE',
+      'SYMPHONY_REAL_CODEX_WORKFLOW',
+      'SYMPHONY_REAL_CODEX_COMMAND',
+      'SYMPHONY_REAL_CODEX_LOGIN_COMMAND',
       'symphony_run_github_live',
       'Symphony_Linear_Test_Token',
+      'symphony_real_codex_smoke',
     ]) {
       assert.equal(Object.hasOwn(environment, name), false, name);
     }
@@ -206,7 +224,9 @@ test('runs Go gates through the pinned mise fallback when ambient Go is absent',
   });
 
   assert.equal(code, 0);
-  assert.deepEqual(calls[1], ['mise', ['exec', '--', 'go', 'build', './cmd/symphony']]);
+  assert.equal(calls[1][0], 'mise');
+  assert.deepEqual(calls[1][1].slice(0, 5), ['exec', '--', 'go', 'build', '-o']);
+  assert.equal(calls[1][1].at(-1), './cmd/symphony');
   assert.deepEqual(calls[2], ['mise', ['exec', '--', 'go', 'test', './...']]);
   assert.deepEqual(calls[3], ['mise', ['exec', '--', 'go', 'vet', './...']]);
 });

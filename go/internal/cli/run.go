@@ -139,6 +139,13 @@ func defaultStartDependencies() startDependencies {
 			return store.Close()
 		},
 		newRuntime: func(options app.QueueOptions) queueRuntime {
+			if options.Enabled {
+				return app.NewAgentRuntime(app.AgentRuntimeOptions{
+					Store: options.Store, Factory: options.Factory, Resolver: options.Resolver,
+					Events: options.Journal, Logger: options.Logger, Redactor: options.Redactor,
+					Build: app.ProductionAgentBuilder(options.Redactor, options.Logger),
+				})
+			}
 			return app.NewQueueRuntime(options)
 		},
 		newHandler: func(service *app.ConfigService, mode string, queries app.RuntimeQueries, commands app.RuntimeCommands, logs *observability.LogStore, logger *slog.Logger) (http.Handler, web.ErrorResponder, error) {
@@ -297,12 +304,12 @@ func startWithDependencies(ctx context.Context, options Options, _, stderr io.Wr
 		if err != nil || logger == nil || logs == nil {
 			return joinSafe(&StartupError{Code: "observability_failed", Message: "Symphony could not prepare safe local logging."}, store.Close(), closeLogStore(deps, logs), lock.Release())
 		}
-		factory := newProductionTrackerFactory(info.WorkflowID, deps.lookupEnv, redactor, logger)
+		factory := newTrackerFactory(info.WorkflowID, deps.lookupEnv, redactor, logger)
 		resolver := productionCredentialResolver{vault: vault, lookupEnv: deps.lookupEnv}
 		journal := observability.NewJournal(observability.JournalOptions{})
 		queue := deps.newRuntime(app.QueueOptions{
 			Enabled: options.Mode == ModeRun, Store: store, Factory: factory, Resolver: resolver,
-			Journal: journal, Logger: logger,
+			Journal: journal, Logger: logger, Redactor: redactor,
 		})
 		if queue == nil {
 			return joinSafe(&StartupError{Code: "queue_runtime_failed", Message: "Symphony could not prepare the live work queue."}, store.Close(), closeLogStore(deps, logs), lock.Release())
@@ -314,7 +321,13 @@ func startWithDependencies(ctx context.Context, options Options, _, stderr io.Wr
 		if err := queue.Start(ctx); err != nil {
 			return joinSafe(&StartupError{Code: "queue_runtime_failed", Message: "Symphony could not start the live work queue."}, shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
 		}
-		presentationRuntime, err := app.NewOrchestratorRuntime(app.OrchestratorRuntimeOptions{Engine: queue, AgentReady: false})
+		var operatorRequests app.OperatorRequests
+		if provider, ok := queue.(interface{ OperatorRequests() app.OperatorRequests }); ok {
+			operatorRequests = provider.OperatorRequests()
+		}
+		presentationRuntime, err := app.NewOrchestratorRuntime(app.OrchestratorRuntimeOptions{
+			Engine: queue, AgentReady: options.Mode == ModeRun, Requests: operatorRequests,
+		})
 		if err != nil {
 			return joinSafe(&StartupError{Code: "orchestrator_runtime_failed", Message: "Symphony could not prepare scheduler state."}, shutdownQueue(queue), store.Close(), closeLogStore(deps, logs), lock.Release())
 		}

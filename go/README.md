@@ -4,7 +4,8 @@ This directory contains Symphony's local browser application for macOS 14+ and
 Windows 11. It is developed alongside, and does not modify, the upstream Elixir
 reference implementation in [`../elixir`](../elixir). Linux is not supported.
 
-The current Phase 2 GitHub and Linear integrations are read-only. Automated
+The Phase 4 runtime launches the reviewed Codex app-server locally and exposes
+only the selected provider adapter's scoped tool contract. Automated
 accessibility checks are in place, but the planned stable-browser screen-reader
 sessions are still pending; see [Accessibility testing](docs/accessibility-testing.md)
 for the evidence boundary.
@@ -13,9 +14,13 @@ for the evidence boundary.
 
 - Go 1.26.5
 - Node.js 24.18.0
+- Codex CLI 0.144.1 for run mode
+- Bash (`/bin/bash` on macOS; a native Git for Windows Bash on Windows)
 - A local Chrome-compatible browser for ordinary use
 
-The pinned versions are declared in [`mise.toml`](mise.toml).
+The pinned Go and Node.js versions are declared in [`mise.toml`](mise.toml);
+the reviewed Codex version is enforced by the embedded protocol manifest and
+the runtime compatibility preflight.
 
 ## CLI contract
 
@@ -76,6 +81,10 @@ Provider configuration and least-privilege credential guidance are in:
 - [GitHub tracker](docs/github.md)
 - [Linear tracker](docs/linear.md)
 
+Codex compatibility, provider tool boundaries, and local security controls are
+documented in [Codex runtime](docs/codex.md), [Provider tools](docs/provider-tools.md),
+and [Security](docs/security.md).
+
 An omitted `credential_ref` or `os-vault` uses macOS Keychain or Windows
 Credential Manager. A `$NAME` reference reads that environment variable and
 cannot be replaced through the UI. Never store a raw credential in
@@ -123,9 +132,10 @@ Outbound network access remains necessary for the selected tracker:
 - GitHub mode makes HTTPS requests to the configured GitHub API endpoint.
 - Linear mode makes HTTPS requests to the configured Linear GraphQL endpoint.
 
-The current Phase 2 binary does not launch Codex or require OpenAI service
-access. A later agent-execution phase may add a local Codex process and its
-corresponding outbound service requirement; that is not current behavior.
+Run mode launches the configured local Codex app-server after an exact-version
+compatibility preflight. Codex may require outbound OpenAI service access under
+the operator's local Codex configuration. Symphony does not expose the local UI
+or app-server transport as a remote network service.
 
 Remote inbound access is neither required nor enabled. Restrict outbound rules
 to the endpoints your tracker and Codex configuration actually use.

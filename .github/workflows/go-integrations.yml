@@ -1,4 +1,4 @@
-name: Go provider integrations
+name: Go live integrations
 
 on:
   workflow_dispatch:
@@ -13,21 +13,26 @@ on:
         required: true
         type: boolean
         default: false
+      codex:
+        description: Run the real Codex app-server compatibility smoke
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   selected-ref-guard:
-    name: Reject selected providers outside main
-    if: ${{ (inputs.github == true || inputs.linear == true) && github.ref != 'refs/heads/main' }}
+    name: Reject selected integrations outside main
+    if: ${{ (inputs.github == true || inputs.linear == true || inputs.codex == true) && github.ref != 'refs/heads/main' }}
     runs-on: macos-15
 
     steps:
-      - name: Reject selected providers outside main
+      - name: Reject selected integrations outside main
         shell: bash
         run: |
-          echo "::error::Selected provider integrations require refs/heads/main."
+          echo "::error::Selected live integrations require refs/heads/main."
           exit 1
 
   github-live:
@@ -136,6 +141,50 @@ jobs:
           SYMPHONY_LINEAR_TEST_TOKEN: ${{ secrets.SYMPHONY_LINEAR_TEST_TOKEN }}
         run: go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/linear
 
+  codex-live:
+    name: Real Codex smoke (${{ matrix.os }})
+    if: ${{ inputs.codex == true && github.ref == 'refs/heads/main' }}
+    environment: codex-live
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os:
+          - macos-15
+          - windows-2025
+    defaults:
+      run:
+        working-directory: go
+
+    steps:
+      - name: Checkout dispatched SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+
+      - name: Install reviewed Codex CLI
+        run: npm install --global --ignore-scripts @openai/codex@0.144.1
+
+      - name: Run real Codex app-server smoke
+        shell: bash
+        env:
+          SYMPHONY_REAL_CODEX_SMOKE: '1'
+          SYMPHONY_REAL_CODEX_WORKFLOW: ${{ github.workspace }}/go/testdata/manual/WORKFLOW.md
+        run: go test -v -count=1 -timeout=2m -run '^TestRealCodexAppServerSmoke$' ./internal/codex
+
   github-disabled:
     name: GitHub disabled (${{ matrix.os }})
     if: ${{ inputs.github == false }}
@@ -224,6 +273,52 @@ jobs:
             *"SKIPPED: Linear live profile not enabled"*) ;;
             *)
               echo "::error::Linear disabled profile did not emit its exact sentinel" >&2
+              exit 1
+              ;;
+          esac
+
+  codex-disabled:
+    name: Real Codex smoke disabled (${{ matrix.os }})
+    if: ${{ inputs.codex == false }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os:
+          - macos-15
+          - windows-2025
+    defaults:
+      run:
+        working-directory: go
+
+    steps:
+      - name: Checkout dispatched SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
+      - name: Verify disabled real Codex smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(go test -v -count=1 -run '^TestRealCodexAppServerSmoke$' ./internal/codex 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 0
+          case "$output" in
+            *"SKIPPED: real Codex smoke"*) ;;
+            *)
+              echo "::error::Disabled real Codex smoke did not emit its exact sentinel" >&2
               exit 1
               ;;
           esac

@@ -427,6 +427,7 @@ func (orchestrator *Orchestrator) handleWorkerExit(ctx context.Context, options 
 			state.workflow = current
 		}
 	}
+	accumulateRunTotals(&state.model, entry, message.result, options.Clock.Now())
 	delete(state.model.Running, message.issueID)
 	if entry.StopReason != "" {
 		if entry.StopReason == domain.StopReasonTerminal && options.Workspace != nil {
@@ -446,7 +447,16 @@ func (orchestrator *Orchestrator) handleWorkerExit(ctx context.Context, options 
 	switch message.result.Reason {
 	case domain.StopReasonNormal:
 		orchestrator.scheduleRetry(ctx, options, state, entry.Issue, 1, ContinuationDelay, "")
-	case domain.StopReasonTerminal, domain.StopReasonOperatorStop:
+	case domain.StopReasonTerminal:
+		delete(state.model.Claimed, message.issueID)
+		if options.Workspace != nil {
+			go func(issue domain.Issue, config workflow.EffectiveConfig) {
+				if err := options.Workspace.Remove(ctx, issue, config); err != nil {
+					options.Logger.Warn("terminal workspace cleanup failed", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+				}
+			}(entry.Issue, entry.CleanupConfig)
+		}
+	case domain.StopReasonInactive, domain.StopReasonUnroutable, domain.StopReasonMissing, domain.StopReasonOperatorStop:
 		delete(state.model.Claimed, message.issueID)
 	default:
 		attempt := nextFailureAttempt(entry.Attempt)
@@ -624,7 +634,7 @@ func (orchestrator *Orchestrator) handleScheduler(ctx context.Context, options O
 			if entry.Status == domain.RunStatusStopping || entry.Status == domain.RunStatusStoppingFailed {
 				continue
 			}
-			orchestrator.requestStop(ctx, options, state, issueID, domain.StopReasonOperatorStop, false)
+			orchestrator.requestStop(ctx, options, state, issueID, domain.StopReasonOperatorStop)
 		}
 	}
 	if request.enabled && state.poll == nil {
@@ -946,6 +956,13 @@ func (orchestrator *Orchestrator) SetScheduler(ctx context.Context, enabled bool
 }
 
 func (*Orchestrator) Respond(ctx context.Context, _ domain.OperatorResponse) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ErrUnavailable
+}
+
+func (*Orchestrator) ExtendOperatorRequest(ctx context.Context, _ string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

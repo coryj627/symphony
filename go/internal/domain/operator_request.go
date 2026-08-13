@@ -14,7 +14,14 @@ type OperatorQuestion struct {
 	Description    string           `json:"description"`
 	Required       bool             `json:"required"`
 	AllowsMultiple bool             `json:"allows_multiple"`
+	AllowsOther    bool             `json:"allows_other"`
+	IsSecret       bool             `json:"is_secret"`
 	Choices        []OperatorChoice `json:"choices"`
+}
+
+type OperatorDetail struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 type OperatorRequest struct {
@@ -25,6 +32,7 @@ type OperatorRequest struct {
 	Kind                string             `json:"kind"`
 	Title               string             `json:"title"`
 	Summary             string             `json:"summary"`
+	Details             []OperatorDetail   `json:"details"`
 	OpenedAt            time.Time          `json:"opened_at"`
 	WarningAt           time.Time          `json:"warning_at"`
 	DeadlineAt          time.Time          `json:"deadline_at"`
@@ -43,6 +51,9 @@ type OperatorResponse struct {
 
 func (request OperatorRequest) Clone() OperatorRequest {
 	clone := request
+	if request.Details != nil {
+		clone.Details = append(make([]OperatorDetail, 0, len(request.Details)), request.Details...)
+	}
 	clone.Choices = cloneOperatorChoices(request.Choices)
 	if request.Questions != nil {
 		clone.Questions = make([]OperatorQuestion, len(request.Questions))

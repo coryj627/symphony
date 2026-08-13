@@ -1,9 +1,10 @@
 # GitHub tracker
 
-The GitHub adapter reads issues from one repository per Symphony process. It
-does not create, edit, label, assign, close, or comment on issues, and it does
-not expose a GitHub mutation tool to Codex. See the [main README](../README.md)
-for running more than one repository at the same time.
+The GitHub adapter polls issues from one repository per Symphony process. During
+an active Codex attempt it also exposes the allowlisted, current-issue-only
+`github_api` tool described in [Provider tools](provider-tools.md). See the
+[main README](../README.md) for running more than one repository at the same
+time.
 
 ## Configuration
 
@@ -52,15 +53,17 @@ the replacement is tested.
 ## Credential permissions
 
 Prefer a dedicated fine-grained personal access token restricted to the one
-configured repository. The minimum repository permissions are:
+configured repository. For queue polling only, the minimum repository
+permissions are:
 
 - Metadata: read-only (GitHub includes this permission for fine-grained
   tokens).
 - Issues: read-only.
 
-No repository write permission is needed for the Phase 2 adapter. Organization
-policy or single sign-on may impose additional authorization requirements, but
-do not add write permissions for Symphony.
+If the authored workflow permits Codex to use `github_api` mutations, grant
+Issues read/write for the configured repository. Do not grant Contents,
+Administration, Actions, or organization-wide access. Organization policy or
+single sign-on may impose additional authorization requirements.
 
 For the protected `integration_live` workflow, use a dedicated test repository
 rather than an operator or production repository. Keep at least one stable open
@@ -127,5 +130,7 @@ reset timestamp and caps the represented delay at 24 hours. Redirects are
 limited to the same HTTPS origin. Responses are bounded to 16 MiB and requests
 time out after 30 seconds.
 
-These controls describe the current read-only provider boundary. They do not
-claim that a credentialed live profile has passed in a particular repository.
+These controls describe queue reads. The separate tool boundary and its tighter
+1 MiB response limit are documented in [Provider tools](provider-tools.md).
+They do not claim that a credentialed live profile has passed in a particular
+repository.

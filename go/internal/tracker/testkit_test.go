@@ -105,6 +105,16 @@ func TestSessionSnapshotDoesNotAliasIssueOrConcreteProviderConfig(t *testing.T) 
 	if clone.Issue.NativeRef["id"] != providerID || clone.Issue.Labels[0] != "bug" || clone.ProviderConfig.(GitHubConfig).ActiveStates[0] != "open" {
 		t.Fatalf("cloned session aliases source: %#v", clone)
 	}
+	if session.ToolScopeID() == "" || clone.ToolScopeID() != session.ToolScopeID() {
+		t.Fatalf("tool scope identity did not survive clone: %q %q", session.ToolScopeID(), clone.ToolScopeID())
+	}
+	later, err := NewSession(clone.Issue, clone.ProviderConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if later.ToolScopeID() == session.ToolScopeID() {
+		t.Fatalf("later session reused tool scope identity %q", later.ToolScopeID())
+	}
 }
 
 func TestSessionSnapshotClonesPointerLinearConfig(t *testing.T) {

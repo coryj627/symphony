@@ -226,6 +226,24 @@ func TestToolContractsRejectUnsafeAndContradictoryValues(t *testing.T) {
 				return (ToolResult{Success: true, Data: func() {}}).Validate()
 			},
 		},
+		{
+			name: "unsafe result errors",
+			validate: func() error {
+				return (ToolResult{Success: false, Errors: []any{func() {}}, Error: &ToolError{Code: "failed", Message: "failed"}}).Validate()
+			},
+		},
+		{
+			name: "invalid result status",
+			validate: func() error {
+				return (ToolResult{Success: true, Status: 42}).Validate()
+			},
+		},
+		{
+			name: "invalid result request ID",
+			validate: func() error {
+				return (ToolResult{Success: true, RequestID: " request-id "}).Validate()
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := test.validate(); !errors.Is(err, ErrInvalidToolContract) {

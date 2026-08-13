@@ -20,9 +20,25 @@ import (
 
 var _ tracker.Adapter = (*Adapter)(nil)
 
-func TestAdapterImplementsLiveTaskOneContract(t *testing.T) {
-	// Break caught: nil collections or Phase 4 tool behavior would violate the
-	// shared adapter boundary before the runtime can consume this provider.
+func TestAdapterCloseRetiresCapturedCredentialBytes(t *testing.T) {
+	adapter := &Adapter{token: []byte("credential-canary")}
+	captured := adapter.token
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(adapter.token) != 0 {
+		t.Fatalf("retired token length = %d", len(adapter.token))
+	}
+	for _, value := range captured {
+		if value != 0 {
+			t.Fatal("retired Linear credential bytes were retained")
+		}
+	}
+}
+
+func TestAdapterImplementsLiveTrackerAndToolContract(t *testing.T) {
+	// Break caught: the live adapter must retain issue reads while exposing only
+	// the captured Linear GraphQL tool at the shared boundary.
 	server := linearFixtureServer(t)
 	adapter := newLinearAdapter(t, server)
 	if adapter.Kind() != "linear" {
@@ -36,10 +52,15 @@ func TestAdapterImplementsLiveTaskOneContract(t *testing.T) {
 	if err != nil || ids == nil || len(ids) != 0 {
 		t.Fatalf("empty IDs = %#v, %v", ids, err)
 	}
-	if tools := adapter.AgentTools(tracker.Session{}); tools == nil || len(tools) != 0 {
-		t.Fatalf("tools = %#v, want non-nil empty", tools)
+	issue := domain.Issue{ID: "linear-1", Identifier: "LIN-1", Title: "Task", State: "Todo", NativeRef: map[string]any{}, Labels: []string{}, BlockedBy: []domain.BlockerRef{}}
+	session, err := tracker.NewSession(issue, defaultLinearConfig(server.URL()))
+	if err != nil {
+		t.Fatal(err)
 	}
-	result := adapter.ExecuteAgentTool(context.Background(), domain.ToolCall{Name: "linear_graphql"}, tracker.Session{})
+	if tools := adapter.AgentTools(session); len(tools) != 1 || tools[0].Name != linearGraphQLToolName {
+		t.Fatalf("tools = %#v, want linear_graphql", tools)
+	}
+	result := adapter.ExecuteAgentTool(context.Background(), domain.ToolCall{Name: "future_tool"}, tracker.Session{})
 	if result.Success || result.Error == nil || result.Error.Code != domain.ToolUnavailableCode {
 		t.Fatalf("tool result = %#v", result)
 	}

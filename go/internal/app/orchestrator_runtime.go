@@ -8,7 +8,7 @@ import (
 	"github.com/coryj627/symphony/go/internal/domain"
 )
 
-const phase3UnavailableMessage = "Agent runtime will be enabled in Phase 4."
+const agentUnavailableMessage = "The agent runtime is available only in run mode."
 
 type OrchestratorEngine interface {
 	RuntimeQueries
@@ -18,11 +18,13 @@ type OrchestratorEngine interface {
 type OrchestratorRuntimeOptions struct {
 	Engine     OrchestratorEngine
 	AgentReady bool
+	Requests   OperatorRequests
 }
 
 type OrchestratorRuntime struct {
 	engine     OrchestratorEngine
 	agentReady bool
+	requests   OperatorRequests
 	controlMu  sync.Mutex
 }
 
@@ -30,7 +32,7 @@ func NewOrchestratorRuntime(options OrchestratorRuntimeOptions) (*OrchestratorRu
 	if options.Engine == nil {
 		return nil, errors.New("orchestrator runtime engine is required")
 	}
-	return &OrchestratorRuntime{engine: options.Engine, agentReady: options.AgentReady}, nil
+	return &OrchestratorRuntime{engine: options.Engine, agentReady: options.AgentReady, requests: options.Requests}, nil
 }
 
 func (runtime *OrchestratorRuntime) Snapshot(ctx context.Context) (domain.Snapshot, error) {
@@ -40,8 +42,11 @@ func (runtime *OrchestratorRuntime) Snapshot(ctx context.Context) (domain.Snapsh
 	}
 	if !runtime.agentReady {
 		snapshot.Scheduler = domain.SchedulerStatus{
-			Available: false, Enabled: false, State: "unavailable", Message: phase3UnavailableMessage,
+			Available: false, Enabled: false, State: "unavailable", Message: agentUnavailableMessage,
 		}
+	}
+	if runtime.requests != nil {
+		snapshot.Requests = runtime.requests.Pending()
 	}
 	return snapshot.Clone()
 }
@@ -82,7 +87,23 @@ func (runtime *OrchestratorRuntime) SetScheduler(ctx context.Context, enabled bo
 }
 
 func (runtime *OrchestratorRuntime) Respond(ctx context.Context, response domain.OperatorResponse) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if runtime.requests != nil {
+		return runtime.requests.Respond(response)
+	}
 	return runtime.engine.Respond(ctx, response)
+}
+
+func (runtime *OrchestratorRuntime) ExtendOperatorRequest(ctx context.Context, requestID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if runtime.requests == nil {
+		return ErrUnavailableInPhase
+	}
+	return runtime.requests.Extend(requestID)
 }
 
 var _ RuntimeQueries = (*OrchestratorRuntime)(nil)

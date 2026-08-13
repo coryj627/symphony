@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/coryj627/symphony/go/internal/domain"
+	"github.com/coryj627/symphony/go/internal/workflow"
 )
 
 func TestReconcileTransitions(t *testing.T) {
@@ -98,8 +99,19 @@ func TestReconcileWaitsForExitBeforeCleanupAndPreservesRecordedRoot(t *testing.T
 		t.Fatal("worker did not start")
 	}
 	changed := snapshot
+	changed.Digest = "changed-digest"
 	changed.Config.Workspace.Root = "new-root"
 	store.setCurrent(changed)
+	store.changes <- workflow.Change{
+		Snapshot: changed,
+		Digest:   changed.Digest,
+		Validation: workflow.ValidationResult{
+			Valid:        true,
+			FieldErrors:  []workflow.FieldError{},
+			GlobalErrors: []workflow.SafeError{},
+		},
+	}
+	waitForActiveConfig(t, orchestrator, changed.Digest)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if _, err := orchestrator.Refresh(ctx); err != nil {
@@ -127,6 +139,18 @@ func TestReconcileWaitsForExitBeforeCleanupAndPreservesRecordedRoot(t *testing.T
 	if roots := workspace.roots(); len(roots) != 1 || roots[0] != "old-root" {
 		t.Fatalf("cleanup roots = %#v, want recorded old-root", roots)
 	}
+}
+
+func waitForActiveConfig(t *testing.T, orchestrator *Orchestrator, digest string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if mustSnapshot(t, orchestrator).Config.ActiveDigest == digest {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("active config digest did not become %q", digest)
 }
 
 func TestStallUsesLastEventAndSchedulesFailureOnlyAfterExit(t *testing.T) {
