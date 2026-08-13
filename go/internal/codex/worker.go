@@ -30,7 +30,10 @@ type AgentRunner interface {
 	Start(context.Context, RunnerRequest) (AgentSession, error)
 }
 
-// RunnerRequest is an immutable, credential-free snapshot for one launch.
+type AgentToolExecutor func(context.Context, domain.ToolCall, tracker.Session) domain.ToolResult
+
+// RunnerRequest is an immutable, credential-free protocol snapshot for one
+// launch. ExecuteTool remains host-side and is never serialized to the child.
 // TrackerSession may carry provider scope but never the resolved credential.
 type RunnerRequest struct {
 	Issue          domain.Issue
@@ -41,6 +44,7 @@ type RunnerRequest struct {
 	RequiredLabels []string
 	SecretNames    []string
 	DynamicTools   []DynamicToolSpec
+	ExecuteTool    AgentToolExecutor
 	OnSessionEvent func(SessionEvent)
 }
 
@@ -129,6 +133,12 @@ func (attempt AgentAttempt) Run(
 	if err != nil {
 		return safeRunResult(domain.StopReasonFailed, "tool_contract_invalid", "The tracker tool contract is invalid.")
 	}
+	var executeTool AgentToolExecutor
+	if len(dynamicTools) > 0 {
+		executeTool = func(ctx context.Context, call domain.ToolCall, session tracker.Session) domain.ToolResult {
+			return attempt.Tracker.ExecuteAgentTool(ctx, call, session)
+		}
+	}
 	maxTurns := request.Workflow.Config.Agent.MaxTurns
 	requiredLabels := append([]string(nil), request.Workflow.Config.Tracker.RequiredLabels...)
 	codexConfig := cloneCodexConfig(request.Workflow.Config.Codex)
@@ -150,8 +160,10 @@ func (attempt AgentAttempt) Run(
 	session, err = attempt.Runner.Start(ctx, RunnerRequest{
 		Issue: issue, Workspace: request.Workspace, TrackerSession: trackerSession,
 		Codex: codexConfig, MaxTurns: maxTurns, RequiredLabels: requiredLabels,
-		SecretNames:  append([]string(nil), attempt.Tracker.SecretEnvironmentNames()...),
-		DynamicTools: dynamicTools, OnSessionEvent: onSessionEvent,
+		SecretNames:    append([]string(nil), attempt.Tracker.SecretEnvironmentNames()...),
+		DynamicTools:   dynamicTools,
+		ExecuteTool:    executeTool,
+		OnSessionEvent: onSessionEvent,
 	})
 	if err != nil {
 		logger.Warn("Codex session startup failed", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", redactor.Value(err))

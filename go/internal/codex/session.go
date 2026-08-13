@@ -191,6 +191,12 @@ func (session *Session) StartThread(ctx context.Context) (string, error) {
 // ServerRequests exposes bounded app-server-owned requests to the broker.
 func (session *Session) ServerRequests() <-chan ServerRequest { return session.router.ServerRequests() }
 
+func (session *Session) matchesActiveTurn(threadID, turnID string) bool {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return threadID != "" && turnID != "" && session.threadID == threadID && session.active != nil && session.active.turnID == turnID
+}
+
 // Respond answers one string-ID server request and resumes silence accounting.
 func (session *Session) Respond(id string, result any) error {
 	encoded, err := json.Marshal(id)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/coryj627/symphony/go/internal/buildinfo"
 	"github.com/coryj627/symphony/go/internal/observability"
+	"github.com/coryj627/symphony/go/internal/tracker"
 )
 
 const runnerCloseWait = 2 * time.Second
@@ -101,6 +102,9 @@ func (runner ProcessRunner) prepare(request RunnerRequest) (preparedRunnerReques
 			return preparedRunnerRequest{}, err
 		}
 	}
+	if (len(request.DynamicTools) > 0) != (request.ExecuteTool != nil) {
+		return preparedRunnerRequest{}, errors.New("Codex dynamic tools and executor must be configured together")
+	}
 	request.Issue, err = request.Issue.Clone()
 	if err != nil {
 		return preparedRunnerRequest{}, err
@@ -150,7 +154,9 @@ func (runner ProcessRunner) open(ctx context.Context, request preparedRunnerRequ
 	})
 	return &liveAgentSession{
 		protocol: protocol, broker: broker, issueID: request.Issue.ID,
-		issueIdentifier: request.Issue.Identifier, process: process, sessionIDs: make(map[string]struct{}),
+		issueIdentifier: request.Issue.Identifier, process: process,
+		trackerSession: request.TrackerSession, executeTool: request.ExecuteTool,
+		dynamicTools: dynamicToolNameSet(request.DynamicTools), sessionIDs: make(map[string]struct{}),
 	}, nil
 }
 
@@ -160,6 +166,9 @@ type liveAgentSession struct {
 	issueID         string
 	issueIdentifier string
 	process         Process
+	trackerSession  tracker.Session
+	executeTool     AgentToolExecutor
+	dynamicTools    map[string]struct{}
 
 	mu         sync.Mutex
 	sessionIDs map[string]struct{}
@@ -182,7 +191,7 @@ func (session *liveAgentSession) startBroker(parent context.Context) {
 	session.mu.Unlock()
 	go func() {
 		defer close(done)
-		_ = session.broker.Run(brokerCtx, session.protocol, session.requestContext)
+		_ = session.broker.RunWithHandler(brokerCtx, session.protocol, session.requestContext, session.handleServerRequest)
 	}()
 }
 

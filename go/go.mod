@@ -9,6 +9,7 @@ require (
 	github.com/gofrs/flock v0.13.0
 	github.com/osteele/liquid v1.8.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	github.com/vektah/gqlparser/v2 v2.5.36
 	github.com/zalando/go-keyring v0.2.8
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/mod v0.29.0

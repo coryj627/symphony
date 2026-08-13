@@ -115,6 +115,16 @@ type DynamicToolSpec struct {
 	DeferLoading bool            `json:"deferLoading,omitempty"`
 }
 
+type DynamicToolCallResponse struct {
+	Success      bool                         `json:"success"`
+	ContentItems []DynamicToolCallContentItem `json:"contentItems"`
+}
+
+type DynamicToolCallContentItem struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
 type ThreadStartParams struct {
 	ApprovalPolicy        ApprovalPolicy    `json:"approvalPolicy"`
 	Cwd                   string            `json:"cwd"`

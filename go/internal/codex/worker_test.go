@@ -189,6 +189,35 @@ func TestWorkerCapturesTrackerSessionAndWorkflowBeforeRunnerStarts(t *testing.T)
 	}
 }
 
+func TestWorkerCapturesTrackerToolExecutorForTheRunner(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	runner := &fakeAgentRunner{session: &fakeAgentSession{turns: []TurnResult{{Status: TurnCompleted}}}, started: started, release: release}
+	want, err := domain.ToolSuccess(map[string]any{"ok": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &fakeAttemptTracker{
+		issues:     [][]domain.Issue{{}},
+		tools:      []domain.ToolSpec{{Name: "linear_graphql", Description: "Captured Linear GraphQL", InputSchema: map[string]any{"type": "string"}}},
+		toolResult: want,
+	}
+	result := make(chan domain.RunResult, 1)
+	go func() { result <- newAttemptForTest(adapter, runner).Run(t.Context(), attemptRequest(1), nil) }()
+	<-started
+	if runner.request.ExecuteTool == nil || len(runner.request.DynamicTools) != 1 {
+		t.Fatalf("runner request=%+v", runner.request)
+	}
+	got := runner.request.ExecuteTool(t.Context(), domain.ToolCall{Name: "linear_graphql", Arguments: "{ viewer { id } }"}, runner.request.TrackerSession)
+	if !got.Success || adapter.toolCalls != 1 {
+		t.Fatalf("result=%+v calls=%d", got, adapter.toolCalls)
+	}
+	close(release)
+	if gotRun := <-result; gotRun.Reason != domain.StopReasonMissing {
+		t.Fatalf("run=%+v", gotRun)
+	}
+}
+
 func TestWorkerContainsRunnerPanicAndReturnsUTCOnce(t *testing.T) {
 	clock := fixedAttemptClock{now: time.Date(2026, 8, 7, 12, 30, 0, 0, time.FixedZone("offset", -4*60*60))}
 	attempt := newAttemptForTest(&fakeAttemptTracker{}, panicAgentRunner{})
@@ -310,9 +339,12 @@ func (session *fakeAgentSession) Turn(_ context.Context, prompt string) (TurnRes
 func (session *fakeAgentSession) Close() error { session.closed = true; return session.closeErr }
 
 type fakeAttemptTracker struct {
-	issues  [][]domain.Issue
-	err     error
-	fetches int
+	issues     [][]domain.Issue
+	err        error
+	fetches    int
+	tools      []domain.ToolSpec
+	toolResult domain.ToolResult
+	toolCalls  int
 }
 
 func (*fakeAttemptTracker) Kind() string { return "github" }
@@ -334,8 +366,14 @@ func (adapter *fakeAttemptTracker) FetchIssuesByIDs(_ context.Context, ids []str
 	adapter.issues = adapter.issues[1:]
 	return issues, nil
 }
-func (*fakeAttemptTracker) AgentTools(tracker.Session) []domain.ToolSpec { return []domain.ToolSpec{} }
-func (*fakeAttemptTracker) ExecuteAgentTool(context.Context, domain.ToolCall, tracker.Session) domain.ToolResult {
+func (adapter *fakeAttemptTracker) AgentTools(tracker.Session) []domain.ToolSpec {
+	return append([]domain.ToolSpec(nil), adapter.tools...)
+}
+func (adapter *fakeAttemptTracker) ExecuteAgentTool(context.Context, domain.ToolCall, tracker.Session) domain.ToolResult {
+	adapter.toolCalls++
+	if adapter.toolResult.Error != nil || adapter.toolResult.Success {
+		return adapter.toolResult
+	}
 	return domain.ToolUnavailableResult()
 }
 func (*fakeAttemptTracker) SecretEnvironmentNames() []string { return []string{"GITHUB_TOKEN"} }

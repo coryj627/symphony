@@ -159,11 +159,22 @@ func (adapter *Adapter) FetchIssuesByIDs(ctx context.Context, ids []string) ([]d
 }
 
 func (adapter *Adapter) AgentTools(tracker.Session) []domain.ToolSpec {
-	return []domain.ToolSpec{}
+	return []domain.ToolSpec{linearGraphQLToolSpec()}
 }
 
-func (adapter *Adapter) ExecuteAgentTool(context.Context, domain.ToolCall, tracker.Session) domain.ToolResult {
-	return domain.ToolUnavailableResult()
+func (adapter *Adapter) ExecuteAgentTool(ctx context.Context, call domain.ToolCall, _ tracker.Session) domain.ToolResult {
+	if call.Name != linearGraphQLToolName {
+		return domain.ToolUnavailableResult()
+	}
+	input, code := parseLinearToolArguments(call.Arguments)
+	if code != "" {
+		return linearToolFailure(code)
+	}
+	operation, code := parseLinearGraphQLDocument(input.Query)
+	if code != "" {
+		return linearToolFailure(code)
+	}
+	return adapter.executeLinearGraphQL(ctx, input, operation)
 }
 
 func (adapter *Adapter) SecretEnvironmentNames() []string {

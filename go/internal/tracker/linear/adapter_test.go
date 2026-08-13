@@ -36,9 +36,9 @@ func TestAdapterCloseRetiresCapturedCredentialBytes(t *testing.T) {
 	}
 }
 
-func TestAdapterImplementsLiveTaskOneContract(t *testing.T) {
-	// Break caught: nil collections or Phase 4 tool behavior would violate the
-	// shared adapter boundary before the runtime can consume this provider.
+func TestAdapterImplementsLiveTrackerAndToolContract(t *testing.T) {
+	// Break caught: the live adapter must retain issue reads while exposing only
+	// the captured Linear GraphQL tool at the shared boundary.
 	server := linearFixtureServer(t)
 	adapter := newLinearAdapter(t, server)
 	if adapter.Kind() != "linear" {
@@ -52,10 +52,10 @@ func TestAdapterImplementsLiveTaskOneContract(t *testing.T) {
 	if err != nil || ids == nil || len(ids) != 0 {
 		t.Fatalf("empty IDs = %#v, %v", ids, err)
 	}
-	if tools := adapter.AgentTools(tracker.Session{}); tools == nil || len(tools) != 0 {
-		t.Fatalf("tools = %#v, want non-nil empty", tools)
+	if tools := adapter.AgentTools(tracker.Session{}); len(tools) != 1 || tools[0].Name != linearGraphQLToolName {
+		t.Fatalf("tools = %#v, want linear_graphql", tools)
 	}
-	result := adapter.ExecuteAgentTool(context.Background(), domain.ToolCall{Name: "linear_graphql"}, tracker.Session{})
+	result := adapter.ExecuteAgentTool(context.Background(), domain.ToolCall{Name: "future_tool"}, tracker.Session{})
 	if result.Success || result.Error == nil || result.Error.Code != domain.ToolUnavailableCode {
 		t.Fatalf("tool result = %#v", result)
 	}

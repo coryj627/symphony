@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -97,6 +98,107 @@ func TestRunnerLaunchesInitializesStartsOneThreadAndClosesProcess(t *testing.T) 
 	if !process.wasStopped() {
 		t.Fatal("process tree was not stopped before Close returned")
 	}
+}
+
+func TestRunnerExecutesAdvertisedDynamicToolAndReturnsOneInputTextItem(t *testing.T) {
+	process, transport := newRunnerTestProcess(t)
+	runner := ProcessRunner{Launch: func(context.Context, LaunchOptions) (Process, error) { return process, nil }}
+	request := runnerRequestForTest(t)
+	request.DynamicTools = []DynamicToolSpec{{
+		Type: "function", Name: "linear_graphql", Description: "Captured Linear GraphQL",
+		InputSchema: json.RawMessage(`{"oneOf":[{"type":"string"},{"type":"object"}]}`),
+	}}
+	called := make(chan domain.ToolCall, 2)
+	request.ExecuteTool = func(_ context.Context, call domain.ToolCall, session tracker.Session) domain.ToolResult {
+		if session.Issue.ID != request.Issue.ID {
+			t.Errorf("tracker session issue=%q", session.Issue.ID)
+		}
+		called <- call
+		if _, ok := call.Arguments.(map[string]any); !ok {
+			return domain.ToolFailure("invalid_arguments", "The linear_graphql arguments are invalid.")
+		}
+		result, err := domain.ToolSuccess(map[string]any{"viewer": map[string]any{"id": "viewer-1"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	session := startRunnerForTest(t, runner, request, process, transport)
+	turnDone := startRunnerTurnForTest(t, session, transport, "turn-1")
+	transport.sendJSON(t, map[string]any{
+		"id": 17, "method": "item/tool/call",
+		"params": map[string]any{
+			"arguments": map[string]any{"query": "{ viewer { id } }"}, "callId": "call-1",
+			"threadId": "thread-1", "tool": "linear_graphql", "turnId": "turn-1",
+		},
+	})
+	response := transport.readRequest(t)
+	if string(response["id"]) != "17" {
+		t.Fatalf("response id=%s", response["id"])
+	}
+	var result DynamicToolCallResponse
+	mustUnmarshalRaw(t, response["result"], &result)
+	if !result.Success || len(result.ContentItems) != 1 || result.ContentItems[0].Type != "inputText" || !strings.Contains(result.ContentItems[0].Text, `"viewer"`) {
+		t.Fatalf("result=%+v", result)
+	}
+	select {
+	case call := <-called:
+		if call.Name != "linear_graphql" {
+			t.Fatalf("call=%+v", call)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("tool executor was not called")
+	}
+	transport.sendJSON(t, map[string]any{
+		"id": "tool-failure", "method": "item/tool/call",
+		"params": map[string]any{
+			"arguments": 42, "callId": "call-2", "threadId": "thread-1", "tool": "linear_graphql", "turnId": "turn-1",
+		},
+	})
+	failureResponse := transport.readRequest(t)
+	mustUnmarshalRaw(t, failureResponse["result"], &result)
+	if result.Success || len(result.ContentItems) != 1 || !strings.Contains(result.ContentItems[0].Text, `"code":"invalid_arguments"`) {
+		t.Fatalf("failure result=%+v", result)
+	}
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("invalid tool call was not returned as a normal tool failure")
+	}
+	completeRunnerTurnForTest(t, transport, turnDone, "turn-1")
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunnerRejectsMalformedOrUnadvertisedDynamicToolWithoutCallingExecutor(t *testing.T) {
+	process, transport := newRunnerTestProcess(t)
+	runner := ProcessRunner{Launch: func(context.Context, LaunchOptions) (Process, error) { return process, nil }}
+	request := runnerRequestForTest(t)
+	request.DynamicTools = []DynamicToolSpec{{Type: "function", Name: "linear_graphql", Description: "Captured Linear GraphQL", InputSchema: json.RawMessage(`{"type":"string"}`)}}
+	called := 0
+	request.ExecuteTool = func(context.Context, domain.ToolCall, tracker.Session) domain.ToolResult {
+		called++
+		return domain.ToolUnavailableResult()
+	}
+	session := startRunnerForTest(t, runner, request, process, transport)
+	turnDone := startRunnerTurnForTest(t, session, transport, "turn-1")
+	for index, params := range []map[string]any{
+		{"arguments": "{ viewer { id } }", "callId": "call-1", "threadId": "wrong-thread", "tool": "linear_graphql", "turnId": "turn-1"},
+		{"arguments": "{ viewer { id } }", "callId": "call-2", "threadId": "thread-1", "tool": "future_tool", "turnId": "turn-1"},
+	} {
+		transport.sendJSON(t, map[string]any{"id": index + 1, "method": "item/tool/call", "params": params})
+		response := transport.readRequest(t)
+		var rejection RPCError
+		if json.Unmarshal(response["error"], &rejection) != nil || rejection.Code != rpcInvalidParams {
+			t.Fatalf("response=%+v", response)
+		}
+	}
+	if called != 0 {
+		t.Fatalf("executor calls=%d", called)
+	}
+	completeRunnerTurnForTest(t, transport, turnDone, "turn-1")
+	_ = session.Close()
 }
 
 func TestRunnerRejectsIncompatibleHandshakeAndStopsProcessBeforeThread(t *testing.T) {
@@ -207,6 +309,63 @@ func runnerRequestForTest(t *testing.T) RunnerRequest {
 
 func compatibleInitializeResponse(workspace string) map[string]any {
 	return map[string]any{"userAgent": "codex_cli_rs/0.144.1", "codexHome": workspace, "platformFamily": "unix", "platformOs": "macos"}
+}
+
+func startRunnerForTest(t *testing.T, runner ProcessRunner, request RunnerRequest, _ Process, transport *pipeTransport) AgentSession {
+	t.Helper()
+	started := make(chan struct {
+		session AgentSession
+		err     error
+	}, 1)
+	go func() {
+		session, err := runner.Start(t.Context(), request)
+		started <- struct {
+			session AgentSession
+			err     error
+		}{session, err}
+	}()
+	initialize := transport.readRequest(t)
+	respondResult(t, transport, initialize, compatibleInitializeResponse(request.Workspace.Path))
+	if initialized := transport.readRequest(t); methodOf(t, initialized) != "initialized" {
+		t.Fatalf("method=%s", methodOf(t, initialized))
+	}
+	threadStart := transport.readRequest(t)
+	respondThreadStarted(t, transport, threadStart, request.Workspace.Path, "thread-1")
+	got := <-started
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	return got.session
+}
+
+func startRunnerTurnForTest(t *testing.T, session AgentSession, transport *pipeTransport, turnID string) <-chan TurnResult {
+	t.Helper()
+	done := make(chan TurnResult, 1)
+	go func() {
+		result, err := session.Turn(t.Context(), "Original task")
+		if err != nil {
+			t.Errorf("turn: %v", err)
+		}
+		done <- result
+	}()
+	turnStart := transport.readRequest(t)
+	if methodOf(t, turnStart) != "turn/start" {
+		t.Fatalf("method=%s", methodOf(t, turnStart))
+	}
+	respondTurnStarted(t, transport, turnStart, turnID)
+	return done
+}
+
+func completeRunnerTurnForTest(t *testing.T, transport *pipeTransport, done <-chan TurnResult, turnID string) {
+	t.Helper()
+	transport.sendJSON(t, map[string]any{
+		"method": "turn/completed",
+		"params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": turnID, "status": "completed", "items": []any{}}},
+	})
+	result := <-done
+	if result.ThreadID != "thread-1" || result.TurnID != turnID || result.Status != TurnCompleted {
+		t.Fatalf("result=%+v", result)
+	}
 }
 
 func mkdirPrivate(path string) error { return os.Mkdir(path, 0o700) }

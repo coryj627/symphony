@@ -317,12 +317,29 @@ func randomOperatorRequestID() string {
 // Run consumes the session's bounded server-request stream until either side
 // closes. Unsupported requests are rejected by Open and never block the turn.
 func (broker *RequestBroker) Run(ctx context.Context, session *Session, requestContext func(ServerRequest) ServerRequestContext) error {
+	return broker.RunWithHandler(ctx, session, requestContext, nil)
+}
+
+// RunWithHandler lets the host consume non-operator server requests, such as
+// captured dynamic-tool calls, without creating a second channel consumer.
+func (broker *RequestBroker) RunWithHandler(
+	ctx context.Context,
+	session *Session,
+	requestContext func(ServerRequest) ServerRequestContext,
+	handle func(context.Context, ServerRequest) bool,
+) error {
 	if ctx == nil || session == nil || requestContext == nil {
 		return fmt.Errorf("%w: request broker run configuration is incomplete", ErrMalformedServerRequest)
 	}
 	for {
 		select {
-		case request := <-session.ServerRequests():
+		case request, ok := <-session.ServerRequests():
+			if !ok {
+				return session.router.Err()
+			}
+			if handle != nil && handle(ctx, request) {
+				continue
+			}
 			context := requestContext(request)
 			context.Request = request
 			if _, err := broker.Open(context); err != nil {
