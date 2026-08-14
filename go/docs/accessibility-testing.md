@@ -141,7 +141,7 @@ following stable-browser sessions remain a Phase 5 manual requirement:
 | Platform | Browser and assistive technology | Status |
 | --- | --- | --- |
 | Windows 11 | Stable Chrome with NVDA, including Windows forced-colors behavior | Pending manual validation |
-| macOS 14+ | Safari with VoiceOver | Pending manual validation |
+| macOS 14+ | Safari with VoiceOver | [Configuration and Keychain slice recorded](accessibility/macos-safari-configuration-2026-08-14.md); full speech, rotor, and cross-route validation pending |
 
 Also perform keyboard-only and zoom review and native Keychain/Credential
 Manager smoke tests. For every manual session, record the operating-system,
