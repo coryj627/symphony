@@ -49,6 +49,41 @@ var configurationControlIDs = map[string]string{
 	"confirm_delete":                      "credential-delete-confirm",
 }
 
+var configurationControlLabels = map[string]string{
+	"tracker-kind":                        "Provider",
+	"github-owner":                        "Owner",
+	"github-repository":                   "Repository",
+	"linear-project-slug":                 "Project slug",
+	"tracker-endpoint":                    "Provider endpoint",
+	"credential-reference":                "Credential source",
+	"github-assignee":                     "Assignee filter",
+	"tracker-required-labels":             "Required labels",
+	"tracker-active-states":               "Active states",
+	"tracker-terminal-states":             "Terminal states",
+	"polling-interval-ms":                 "Polling interval",
+	"workspace-root":                      "Workspace root",
+	"hook-after-create":                   "After create",
+	"hook-before-run":                     "Before run",
+	"hook-after-run":                      "After run",
+	"hook-before-remove":                  "Before remove",
+	"hook-timeout-ms":                     "Hook timeout",
+	"agent-max-concurrent":                "Maximum concurrent agents",
+	"agent-max-turns":                     "Maximum turns",
+	"agent-max-retry-backoff-ms":          "Maximum retry backoff",
+	"codex-command":                       "Codex command",
+	"codex-approval-policy":               "Approval policy",
+	"codex-thread-sandbox":                "Thread sandbox",
+	"codex-turn-timeout-ms":               "Turn timeout",
+	"codex-read-timeout-ms":               "Read timeout",
+	"codex-stall-timeout-ms":              "Stall timeout",
+	"server-port":                         "Server port",
+	"server-operator-response-timeout-ms": "Operator response timeout",
+	"raw-source":                          "Complete WORKFLOW.md",
+	"credential":                          "Credential",
+	"delete-credential":                   "Delete credential",
+	"credential-delete-confirm":           "Delete credential",
+}
+
 var structuredFormFields = map[string]string{
 	"tracker_kind": "tracker.kind", "provider_owner": "tracker.provider.owner",
 	"provider_repository": "tracker.provider.repository", "provider_project_slug": "tracker.provider.project_slug",
@@ -370,7 +405,7 @@ func pageErrors(fieldErrors []workflow.FieldError, globalErrors []workflow.SafeE
 		}
 		if _, exists := errorsByControl[control]; !exists {
 			errorsByControl[control] = message
-			summary = append(summary, PageError{ControlID: control, Message: message})
+			summary = append(summary, PageError{ControlID: control, Label: configurationControlLabels[control], Message: message})
 		}
 	}
 	for _, problem := range globalErrors {
@@ -380,7 +415,7 @@ func pageErrors(fieldErrors []workflow.FieldError, globalErrors []workflow.SafeE
 		}
 		if _, exists := errorsByControl["raw-source"]; !exists {
 			errorsByControl["raw-source"] = message
-			summary = append(summary, PageError{ControlID: "raw-source", Message: message})
+			summary = append(summary, PageError{ControlID: "raw-source", Label: configurationControlLabels["raw-source"], Message: message})
 		}
 	}
 	return errorsByControl, summary
@@ -603,6 +638,7 @@ func applyResultCode(page *Page, query url.Values) {
 	case "credential-deleted":
 		page.Flash = "Credential deleted."
 	}
+	page.AnnounceFlashOnLoad = page.Flash != ""
 	page.FocusTarget = normalizedFocus(query.Get("focus"))
 }
 

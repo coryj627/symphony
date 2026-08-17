@@ -15,6 +15,7 @@ type Page struct {
 	Mode                 string
 	Flash                string
 	FlashKind            string
+	AnnounceFlashOnLoad  bool
 	Status               string
 	CSRFToken            string
 	FocusTarget          string
@@ -52,6 +53,7 @@ func internalURL(target, scenario string) string {
 
 type PageError struct {
 	ControlID string
+	Label     string
 	Message   string
 }
 

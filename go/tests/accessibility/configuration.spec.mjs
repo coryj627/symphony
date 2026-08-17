@@ -41,7 +41,25 @@ async function expectFocusedAndUnobscured(page, locator) {
   expect(unobscured).toBe(true);
 }
 
+async function expectPageLoadAnnouncement(page, message) {
+  await expect.poll(() => page.evaluate(() => window.__symphonyPageLoadAnnouncements ?? []))
+    .toEqual([message]);
+}
+
 test.beforeEach(async ({page}) => {
+  await page.addInitScript(() => {
+    window.__symphonyPageLoadAnnouncements = [];
+    new MutationObserver(records => {
+      for (const record of records) {
+        const element = record.target instanceof Element ? record.target : record.target.parentElement;
+        const target = element?.closest?.('[data-page-load-announcement-target]');
+        const message = target?.textContent?.trim();
+        if (message && window.__symphonyPageLoadAnnouncements.at(-1) !== message) {
+          window.__symphonyPageLoadAnnouncements.push(message);
+        }
+      }
+    }).observe(document, {subtree: true, childList: true, characterData: true});
+  });
   await resetWorkflow();
   await authorize(page, '/configuration');
 });
@@ -96,6 +114,26 @@ test('invalid raw workflow focuses linked summary and retains submitted bytes', 
   await expectNoAxeViolations(page);
 });
 
+test('structured validation summary names and focuses the invalid field', async ({page}) => {
+  await page.getByLabel('Provider', {exact: true}).selectOption('linear');
+  await page.getByLabel('Project slug').fill('');
+  const response = await Promise.all([
+    page.waitForResponse(res => new URL(res.url()).pathname === '/api/v1/config/save'),
+    page.getByRole('button', {name: 'Save structured settings'}).click(),
+  ]).then(([res]) => res);
+  expect(response.status()).toBe(422);
+  const summary = page.locator('#error-summary');
+  await expect(summary).toBeFocused();
+  const link = summary.getByRole('link', {name: 'Project slug: is required'});
+  await expect(link).toHaveAttribute('href', '#linear-project-slug');
+  await page.keyboard.press('Tab');
+  await expect(link).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Project slug')).toBeFocused();
+  await expect(page).toHaveURL(/#linear-project-slug$/);
+  await expectNoAxeViolations(page);
+});
+
 test('conflict retains unsaved source and shows freshly read disk source', async ({page}) => {
   const unsaved = validGitHubWorkflow.replace('repository: symphony', 'repository: operator-unsaved');
   const external = validGitHubWorkflow.replace('repository: symphony', 'repository: externally-edited');
@@ -122,6 +160,7 @@ test('credential success announces once, restores focus, and leaves no canary ar
   await expect(page).toHaveURL(/result=credential-stored/);
   await expect(page.getByRole('status')).toHaveCount(1);
   await expect(page.getByRole('status')).toHaveText('Credential stored.');
+  await expectPageLoadAnnouncement(page, 'Credential stored.');
   await expect(page.getByRole('button', {name: 'Replace credential'})).toBeFocused();
   await expect(page.getByText('Current state:')).toContainText(storedCredentialLabel);
   expect(await page.content()).not.toContain(canary);
@@ -133,6 +172,7 @@ test('credential success announces once, restores focus, and leaves no canary ar
     page.getByRole('button', {name: 'Delete credential', exact: true}).last().click(),
   ]);
   await expect(page.getByRole('status')).toHaveText('Credential deleted.');
+  await expectPageLoadAnnouncement(page, 'Credential deleted.');
 });
 
 test('environment-managed credential is labelled and vault actions are unavailable', async ({page}) => {
@@ -142,6 +182,7 @@ test('environment-managed credential is labelled and vault actions are unavailab
     page.getByRole('button', {name: 'Save complete workflow'}).click(),
   ]);
   await expect(page.getByRole('status')).toContainText('Configuration saved');
+  await expectPageLoadAnnouncement(page, 'Configuration saved.');
   await expect(page.getByText('Current state:')).toContainText('Environment managed');
   await expect(page.getByRole('button', {name: 'Replace credential'})).toBeDisabled();
   await expect(page.getByRole('button', {name: 'Delete credential'})).toBeDisabled();

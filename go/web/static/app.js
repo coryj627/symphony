@@ -33,6 +33,46 @@ if (focusTarget && allowedFocusTargets.has(focusTarget)) {
   }
 }
 
+const errorSummary = document.getElementById('error-summary');
+
+if (errorSummary instanceof HTMLElement) {
+  errorSummary.addEventListener('click', event => {
+    const link = event.target instanceof Element ? event.target.closest('a[href^="#"]') : null;
+    if (!(link instanceof HTMLAnchorElement) || link.hash.length < 2) return;
+    const target = document.getElementById(link.hash.slice(1));
+    if (!(target instanceof HTMLElement)) return;
+    event.preventDefault();
+    window.history.pushState(window.history.state, '', link.hash);
+    target.focus({preventScroll: true});
+    target.scrollIntoView({block: 'nearest'});
+  });
+}
+
+const pageLoadStatus = document.querySelector('[data-page-load-announcement][role="status"]');
+
+if (pageLoadStatus instanceof HTMLElement) {
+  const message = pageLoadStatus.textContent.trim();
+  if (message) {
+    const visibleMessage = document.createElement('span');
+    visibleMessage.setAttribute('aria-hidden', 'true');
+    visibleMessage.textContent = message;
+    const announcement = document.createElement('span');
+    announcement.className = 'visually-hidden';
+    announcement.setAttribute('role', 'status');
+    announcement.setAttribute('aria-live', 'polite');
+    announcement.setAttribute('aria-atomic', 'true');
+    announcement.dataset.pageLoadAnnouncementTarget = '';
+    pageLoadStatus.removeAttribute('role');
+    pageLoadStatus.removeAttribute('aria-live');
+    pageLoadStatus.removeAttribute('aria-atomic');
+    pageLoadStatus.replaceChildren(visibleMessage, announcement);
+    // Give Chrome and NVDA time to register the empty live region after focus restoration.
+    window.setTimeout(() => {
+      announcement.textContent = message;
+    }, 1000);
+  }
+}
+
 const responsiveBreakpoint = window.matchMedia('(max-width: 40rem)');
 let responsiveFocusKey = '';
 
