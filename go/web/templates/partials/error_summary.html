@@ -1,4 +1,4 @@
 {{define "error-summary"}}<div id="error-summary" role="alert" tabindex="-1">
   <h2>There is a problem</h2>
-  <ul>{{range .ErrorSummary}}<li><a href="#{{.ControlID}}" tabindex="0">{{.Message}}</a></li>{{end}}</ul>
+  <ul>{{range .ErrorSummary}}<li><a href="#{{.ControlID}}" tabindex="0">{{with .Label}}{{.}}: {{end}}{{.Message}}</a></li>{{end}}</ul>
 </div>{{end}}

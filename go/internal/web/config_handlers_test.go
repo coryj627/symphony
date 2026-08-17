@@ -106,6 +106,22 @@ func TestInvalidStructuredSaveRetainsSubmittedValuesWhenTrackerKindIsBlank(t *te
 		t.Fatalf("invalid structured save = %d, body %s", response.StatusCode, body)
 	}
 	assertContains(t, body, `value="/tmp/operator-retained"`)
+	assertContains(t, body, `href="#tracker-kind" tabindex="0">Provider: Choose GitHub or Linear.</a>`)
+}
+
+func TestInvalidLinearScopeNamesProjectSlugInLinkedSummary(t *testing.T) {
+	t.Parallel()
+	server, _, _ := configuredHTTPApp(t, validGitHubSource, secrets.Status{})
+	cookie := exchange(t, server)
+	csrf := csrfForCookie(t, server, cookie)
+	response := postForm(t, server, cookie, "/api/v1/config/save", completeStructuredForm(csrf, digestOf(validGitHubSource), map[string]string{
+		"tracker_kind": "linear", "provider_project_slug": "",
+	}))
+	body := readResponse(t, response)
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid Linear scope = %d, body %s", response.StatusCode, body)
+	}
+	assertContains(t, body, `href="#linear-project-slug" tabindex="0">Project slug: is required</a>`)
 }
 
 func TestStructuredAndRawSavePayloadsAreIsolated(t *testing.T) {

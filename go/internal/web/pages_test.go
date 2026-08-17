@@ -530,11 +530,12 @@ func TestNonemptyFlashUsesTheSinglePersistentStatusRegion(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	err = renderer.Render(recorder, "overview", Page{
-		Title:   "Overview — Symphony",
-		Route:   "/",
-		Heading: "Overview",
-		Flash:   "Configuration saved.",
-		Content: overviewContent{TrackerScope: "Tracker scope not selected"},
+		Title:               "Overview — Symphony",
+		Route:               "/",
+		Heading:             "Overview",
+		Flash:               "Configuration saved.",
+		AnnounceFlashOnLoad: true,
+		Content:             overviewContent{TrackerScope: "Tracker scope not selected"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -543,8 +544,8 @@ func TestNonemptyFlashUsesTheSinglePersistentStatusRegion(t *testing.T) {
 	if count := strings.Count(html, `role="status"`); count != 1 {
 		t.Fatalf("rendered flash status region count = %d, want 1", count)
 	}
-	if !strings.Contains(html, `role="status" aria-live="polite" aria-atomic="true">Configuration saved.`) {
-		t.Fatal("single status region did not contain the flash message")
+	if !strings.Contains(html, `role="status" aria-live="polite" aria-atomic="true" data-page-load-announcement>Configuration saved.`) {
+		t.Fatal("single status region did not contain the announced flash message")
 	}
 	if strings.Contains(html, "Scheduler configuration is ready.") {
 		t.Fatal("fallback route status remained alongside the flash message")
