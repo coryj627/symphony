@@ -110,7 +110,12 @@ test('log filtering and pagination work without JavaScript and preserve scenario
   expect(current.searchParams.has('before')).toBeFalsy();
 
   await page.getByLabel('Level').selectOption('INFO');
-  await page.getByRole('button', {name: 'Apply log filters'}).click();
+  await Promise.all([
+    page.waitForURL(url => url.pathname === '/logs'
+      && url.searchParams.get('__e2e_scenario') === 'long-log'
+      && url.searchParams.get('level') === 'INFO'),
+    page.getByRole('button', {name: 'Apply log filters'}).click(),
+  ]);
   current = new URL(page.url());
   expect(current.searchParams.get('__e2e_scenario')).toBe('long-log');
   expect(current.searchParams.get('level')).toBe('INFO');
