@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import {test, expect, authorize, scenarioPath} from './fixtures.mjs';
+import {formatE2EDisplayTime} from './timezone.mjs';
 
 async function expectNoAxeViolations(page) {
   const results = await new AxeBuilder({page})
@@ -226,14 +227,13 @@ test('maximum-length provider error reflows at 320 pixels with WCAG text spacing
 });
 
 test('issue metadata preserves RFC3339 values and displays workstation-local time', async ({page}) => {
+  const instant = '2026-08-08T16:00:00Z';
   await authorize(page, scenarioPath('/issues/SYM-123', 'populated'));
   const times = page.locator('section[aria-labelledby="metadata-heading"] time');
   await expect(times).toHaveCount(2);
-  await expect(times.first()).toHaveAttribute('datetime', '2026-08-08T16:00:00Z');
-  await expect(times.last()).toHaveAttribute('datetime', '2026-08-08T16:00:00Z');
-  const localTime = process.platform === 'win32'
-    ? 'Aug 8, 2026 4:00 PM UTC'
-    : 'Aug 8, 2026 12:00 PM EDT';
+  await expect(times.first()).toHaveAttribute('datetime', instant);
+  await expect(times.last()).toHaveAttribute('datetime', instant);
+  const localTime = formatE2EDisplayTime(instant);
   await expect(times).toHaveText([localTime, localTime]);
 });
 
