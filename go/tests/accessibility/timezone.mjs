@@ -1,4 +1,9 @@
-export const e2eTimeZone = 'America/New_York';
+const configuredE2ETimeZone = 'America/New_York';
+
+// Go uses the workstation timezone on Windows and honors TZ on macOS.
+export const e2eTimeZone = process.platform === 'win32'
+  ? Intl.DateTimeFormat().resolvedOptions().timeZone
+  : configuredE2ETimeZone;
 
 const e2eTimeFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: e2eTimeZone,
