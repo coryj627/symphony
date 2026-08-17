@@ -219,6 +219,43 @@ func TestOverviewShowsSafeScopeCountsSchedulerAndPersistentFailures(t *testing.T
 	}
 }
 
+func TestOverviewActionResultsUseSinglePageLoadAnnouncement(t *testing.T) {
+	tests := []struct {
+		name    string
+		result  string
+		focus   string
+		message string
+	}{
+		{name: "refresh", result: "refresh-requested", focus: "refresh", message: "Refresh requested."},
+		{name: "start runtime", result: "runtime-started", focus: "stop-runtime", message: "Scheduler start requested."},
+		{name: "stop runtime", result: "runtime-stopped", focus: "start-runtime", message: "Scheduler stop requested."},
+		{name: "respond to request", result: "request-responded", focus: "requests-heading", message: "Operator response submitted."},
+		{name: "extend request", result: "request-extended", focus: "requests-heading", message: "Operator request extended."},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &pageRuntimeFake{}
+			handler := newTestPageHandler(t, PageOptions{Queries: runtime, Commands: runtime})
+			path := "/?result=" + test.result + "&focus=" + test.focus
+			recorder := serveDirect(t, handler, http.MethodGet, path, "", nil)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("overview status = %d body=%s", recorder.Code, recorder.Body.String())
+			}
+			html := recorder.Body.String()
+			announcement := `role="status" aria-live="polite" aria-atomic="true" data-page-load-announcement>` + test.message
+			if !strings.Contains(html, announcement) {
+				t.Fatalf("overview action result omitted page-load announcement %q", announcement)
+			}
+			if count := strings.Count(html, "data-page-load-announcement"); count != 1 {
+				t.Fatalf("page-load announcement hook count = %d, want 1", count)
+			}
+			if !strings.Contains(html, `data-focus-target="`+test.focus+`"`) {
+				t.Fatalf("overview action result omitted focus target %q", test.focus)
+			}
+		})
+	}
+}
+
 func TestOverviewLabelsGitHubAndLinearScopesProviderNeutrally(t *testing.T) {
 	for _, tracker := range []domain.TrackerStatus{
 		{Kind: "github", Scope: "github:owner/repository"},

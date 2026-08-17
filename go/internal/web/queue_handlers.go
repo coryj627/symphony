@@ -94,6 +94,7 @@ func (handler *PageHandler) overviewHTML(w http.ResponseWriter, request *http.Re
 	case "request-extended":
 		page.Flash = "Operator request extended."
 	}
+	page.AnnounceFlashOnLoad = page.Flash != ""
 	if target := firstQueryValue(request.URL.Query(), "focus"); target == "start-runtime" || target == "stop-runtime" || target == "requests-heading" {
 		page.FocusTarget = target
 	}
