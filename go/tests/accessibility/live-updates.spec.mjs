@@ -529,8 +529,9 @@ test('failed resume announces once on a later frame and keeps focus on the reusa
   await pause.focus();
   await page.keyboard.press('Enter');
   await page.getByRole('button', {name: 'Refresh tracker work'}).click();
-  await expect(page.getByRole('status')).toHaveText('Refresh requested.');
-  await expect(page.getByRole('status')).toHaveCount(1);
+  const pageLoadStatus = page.locator('[data-page-load-announcement-target]');
+  await expect(pageLoadStatus).toHaveText('Refresh requested.');
+  await expect(pageLoadStatus).toHaveCount(1);
   await page.evaluate(() => {
     const target = document.querySelector('[data-live-feedback]');
     window.__liveFeedbackFrames = [];
@@ -549,7 +550,7 @@ test('failed resume announces once on a later frame and keeps focus on the reusa
   const resume = page.getByRole('button', {name: 'Resume live updates'});
   await resume.focus();
   await page.keyboard.press('Enter');
-  const status = page.getByRole('status');
+  const status = page.locator('[data-live-feedback][role="status"]');
   await expect(status).toHaveText('Live updates could not be resumed.');
   await expect(status).toHaveCount(1);
   await expect(resume).toBeFocused();

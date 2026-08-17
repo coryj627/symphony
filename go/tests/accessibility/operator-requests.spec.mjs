@@ -84,7 +84,8 @@ test('operator requests expose finite named keyboard workflows without moving fo
     page.keyboard.press('Enter'),
   ]);
   await expect(requestCard(page, 'Approve command execution')).toHaveCount(0);
-  await expect(page.locator('.persistent-status[role="status"]')).toHaveText('Operator response submitted.');
+  await expect(page.locator('.persistent-status')).toHaveText('Operator response submitted.');
+  await expect(page.locator('[data-page-load-announcement-target]')).toHaveText('Operator response submitted.');
   await expect(page.getByRole('heading', {name: 'Operator requests'})).toBeFocused();
 
   const stale = requestCard(page, 'Stale approval example');

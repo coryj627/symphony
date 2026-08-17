@@ -40,7 +40,7 @@ test('keyboard start and stop preserve focus on the next available control', asy
     page.keyboard.press('Enter'),
   ]);
   await expect(page.getByText('Running', {exact: true})).toBeVisible();
-  await expect(page.getByRole('status')).toHaveText('Scheduler start requested.');
+  await expect(page.locator('[data-page-load-announcement-target]')).toHaveText('Scheduler start requested.');
   const stop = page.getByRole('button', {name: 'Stop scheduler'});
   await expect(stop).toBeFocused();
   await expectNoAxeViolations(page);
@@ -50,7 +50,7 @@ test('keyboard start and stop preserve focus on the next available control', asy
     page.keyboard.press('Enter'),
   ]);
   await expect(page.getByText('Paused', {exact: true})).toBeVisible();
-  await expect(page.getByRole('status')).toHaveText('Scheduler stop requested.');
+  await expect(page.locator('[data-page-load-announcement-target]')).toHaveText('Scheduler stop requested.');
   await expect(page.getByRole('button', {name: 'Start scheduler'})).toBeFocused();
 
   await page.goto(scenarioPath('/issues/CTRL-1', 'live-runtime-controls'));
