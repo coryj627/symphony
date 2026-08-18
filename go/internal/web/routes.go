@@ -38,7 +38,7 @@ func (s *Server) protectedHandler() http.Handler {
 		}
 
 		if token, present := bootstrapCandidate(r); present {
-			if r.Method != http.MethodGet || r.URL.Path != "/" || !s.bootstrap.exchange(token, s.now) {
+			if !validBootstrapRequest(r, token) || !s.bootstrap.exchange(token, s.now) {
 				s.respondError(w, r, http.StatusUnauthorized, "unauthorized")
 				return
 			}
@@ -138,6 +138,25 @@ func bootstrapCandidate(r *http.Request) (string, bool) {
 		return "", present
 	}
 	return values[0], true
+}
+
+func validBootstrapRequest(r *http.Request, token string) bool {
+	if r.Method != http.MethodGet || r.URL.Path != "/" || r.URL.RawPath != "" || r.URL.EscapedPath() != r.URL.Path {
+		return false
+	}
+	query := r.URL.Query()
+	values := query["access_token"]
+	if len(query) != 1 || len(values) != 1 || values[0] != token || query.Encode() != r.URL.RawQuery {
+		return false
+	}
+	// A production launch comes from the operating system as a user navigation,
+	// not from another document. Reject browser-supplied origins and cross-site
+	// fetch metadata before consuming the one-time capability.
+	if len(r.Header.Values("Origin")) != 0 {
+		return false
+	}
+	fetchSites := r.Header.Values("Sec-Fetch-Site")
+	return len(fetchSites) == 0 || (len(fetchSites) == 1 && strings.EqualFold(strings.TrimSpace(fetchSites[0]), "none"))
 }
 
 func (s *Server) validHost(hostport string) bool {

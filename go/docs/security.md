@@ -5,6 +5,15 @@ binds only to loopback and uses a one-time bootstrap capability to establish a
 protected local session. The Codex app-server transport is private JSONL over
 the child process's standard streams.
 
+The bootstrap exchange accepts only the exact generated root URL from a native
+browser launch: the request must use the bound numeric loopback host and port,
+contain only the one canonical capability query parameter, carry no `Origin`,
+and have either no `Sec-Fetch-Site` header or `Sec-Fetch-Site: none`. A rejected
+request does not consume the one-time capability. Authenticated mutations then
+reject foreign-origin and cross-site browser signals and require both the
+session cookie and its session-bound CSRF token before application handlers
+run.
+
 ## Child-process containment
 
 Before every launch, Symphony revalidates that the issue workspace remains
