@@ -5,13 +5,14 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestPinnedSpecificationsHaveReviewedDigests(t *testing.T) {
 	root := repositoryRoot(t)
-	assertFileSHA256(t, filepath.Join(root, "..", "SPEC.md"), "adb93eb2349ccbf39a8ca389ac29c0f2034f1204776319b4535a2f9424f4322d")
-	assertFileSHA256(t, filepath.Join(root, "..", "docs", "superpowers", "specs", "2026-08-06-symphony-accessible-cross-platform-design.md"), "801a8ab935e78faaa6a89794d623674684bff3a7f237699a251be5c802c09c00")
+	assertFileSHA256(t, filepath.Join(root, "..", "SPEC.md"), "29d6b45a85453e045883c064c0e08595f9d4a33f9a2527f649bc1363b74e0176")
+	assertFileSHA256(t, filepath.Join(root, "..", "docs", "superpowers", "specs", "2026-08-06-symphony-accessible-cross-platform-design.md"), "c566bfb531bdd94a2be961748f652bfd143e97af7856e6029022623843da7267")
 }
 
 func assertFileSHA256(t *testing.T, path, want string) {
@@ -20,7 +21,8 @@ func assertFileSHA256(t *testing.T, path, want string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(data)
+	canonical := strings.ReplaceAll(strings.ReplaceAll(string(data), "\r\n", "\n"), "\r", "\n")
+	digest := sha256.Sum256([]byte(canonical))
 	if got := hex.EncodeToString(digest[:]); got != want {
 		t.Fatalf("%s SHA-256 = %s, want reviewed %s", path, got, want)
 	}

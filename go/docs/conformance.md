@@ -17,10 +17,11 @@ hashes, enumerates referenced Go tests and Playwright titles, and verifies
 report anchors. Missing, duplicated, stale, malformed, or nonexistent evidence
 fails the command.
 
-The reviewed source pins for this ledger revision are:
+The reviewed source pins use canonical LF line endings so they remain identical
+on Windows and macOS:
 
-- `SPEC.md`: `adb93eb2349ccbf39a8ca389ac29c0f2034f1204776319b4535a2f9424f4322d`
-- approved cross-platform design: `801a8ab935e78faaa6a89794d623674684bff3a7f237699a251be5c802c09c00`
+- `SPEC.md`: `29d6b45a85453e045883c064c0e08595f9d4a33f9a2527f649bc1363b74e0176`
+- approved cross-platform design: `c566bfb531bdd94a2be961748f652bfd143e97af7856e6029022623843da7267`
 
 A source change intentionally breaks the pin and affected row hashes until a
 reviewer re-evaluates the requirement-to-evidence mapping.
