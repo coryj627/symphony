@@ -140,7 +140,7 @@ following stable-browser sessions remain a Phase 5 manual requirement:
 
 | Platform | Browser and assistive technology | Status |
 | --- | --- | --- |
-| Windows 11 | Stable Chrome with NVDA, including Windows forced-colors behavior | [Configuration and Windows Credential Manager slice recorded](accessibility/windows-chrome-nvda-2026-08-16.md); validation-summary and status-announcement fixes, manual text spacing, remaining routes, and complete-ledger reconciliation pending |
+| Windows 11 | Stable Chrome with NVDA, including Windows forced-colors behavior | [Phase 5 Windows validation recorded](accessibility/windows-chrome-nvda-2026-08-17.md), including configuration, native Credential Manager cleanup, manual text spacing, cross-route keyboard/NVDA evidence, and a complete A/AA ledger reconciliation; see the report's explicit limitations and non-conformance statement. The [earlier configuration slice](accessibility/windows-chrome-nvda-2026-08-16.md) remains historical discovery evidence. |
 | macOS 14+ | Safari with VoiceOver | [Configuration and Keychain slice recorded](accessibility/macos-safari-configuration-2026-08-14.md); full speech, rotor, and cross-route validation pending |
 
 Also perform keyboard-only and zoom review and native Keychain/Credential
