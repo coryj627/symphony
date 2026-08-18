@@ -186,6 +186,7 @@ test('main CI runs build, default Go, race, disabled profiles, and every accessi
     assert.match(step, /test "\$status" -eq 0/);
   }
   assert.match(build, /run: npm run test:wrappers/);
+  assert.match(build, /run: npm run conformance:upstream/);
   assert.match(build, /run: npm run html:validate/);
   assert.match(build, /run: npm run test:a11y/);
   assert.match(build, /npx playwright install chromium webkit/);
