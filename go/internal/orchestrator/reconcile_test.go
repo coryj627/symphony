@@ -47,6 +47,38 @@ func TestReconcileTransitions(t *testing.T) {
 	}
 }
 
+func TestActiveRefreshUpdatesRunningIssueState(t *testing.T) {
+	issue := readyIssue("1", "open", "symphony")
+	refreshed := issue
+	refreshed.State = "in progress"
+	snapshot := testWorkflowSnapshot()
+	snapshot.Config.Tracker.ActiveStates = []string{"open", "in progress"}
+	adapter := &fakeTracker{
+		stateResponses: []fakeTrackerResponse{
+			{issues: []domain.Issue{}},
+			{issues: issueSlice(issue)},
+			{issues: issueSlice(refreshed)},
+		},
+		idResponses: []fakeTrackerResponse{
+			{issues: issueSlice(issue)},
+			{issues: issueSlice(refreshed)},
+		},
+	}
+	worker := newBlockingWorker()
+	orchestrator := startTestOrchestrator(t, adapter, worker, func(options *Options) {
+		options.Workflow = newFakeWorkflowStore(snapshot)
+	})
+	worker.waitStarted(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := orchestrator.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rows := mustSnapshot(t, orchestrator).Running; len(rows) != 1 || rows[0].State != refreshed.State {
+		t.Fatalf("running rows = %#v, want refreshed state %q", rows, refreshed.State)
+	}
+}
+
 func TestReconcileWithoutRunningIssuesSkipsIDRead(t *testing.T) {
 	adapter := &fakeTracker{stateResponses: []fakeTrackerResponse{{issues: []domain.Issue{}}, {issues: []domain.Issue{}}}}
 	orchestrator := startTestOrchestrator(t, adapter, newBlockingWorker(), func(options *Options) { options.InitiallyPaused = true })

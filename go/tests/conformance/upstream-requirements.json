@@ -1,0 +1,1397 @@
+{
+  "schema_version": 1,
+  "spec_path": "../SPEC.md",
+  "rows": [
+    {
+      "id": "S17.1-01-workflow-file-path-precedence",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "Workflow file path precedence:",
+      "source_text_sha256": "b7ac5091bb4426e43a9ba0dbac8de5f5075893a408217c182d298db2be25dce3",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/cli::TestParseDefaultsToRunAndCurrentWorkflow",
+        "go:./internal/cli::TestParseConfigureAndOverrides"
+      ]
+    },
+    {
+      "id": "S17.1-02-explicit-runtime-path-is-used-when-provided",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "explicit runtime path is used when provided",
+      "source_text_sha256": "75a4baacba64aa8836ff3743dfbddb2531e22a0b9231094c809665d631a0f121",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/cli::TestParseConfigureAndOverrides"
+      ]
+    },
+    {
+      "id": "S17.1-03-cwd-default-is-workflow-md-when-no",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "cwd default is `WORKFLOW.md` when no explicit runtime path is provided",
+      "source_text_sha256": "a4869679414c6ccbe99a274947426268ac66b1634cc13db5227dda226bc365ef",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/cli::TestParseDefaultsToRunAndCurrentWorkflow"
+      ]
+    },
+    {
+      "id": "S17.1-04-workflow-file-changes-are-detected-and-trigger",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "Workflow file changes are detected and trigger re-read/re-apply without restart",
+      "source_text_sha256": "6302fc4ddec3b3ecd7e77042e889dad9e385ea23a098ed95cfa511ddba084ac1",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestWatcherDetectsSameInodeWriteAndAtomicReplacement"
+      ]
+    },
+    {
+      "id": "S17.1-05-invalid-workflow-reload-keeps-last-known-good",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "Invalid workflow reload keeps last known good effective configuration and emits an operator-visible error",
+      "source_text_sha256": "53381697e9ec34c2930298a7d2e206867c6b0b2c470ce1f68831da4a3cf61b0a",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestInvalidReloadRetainsCurrentAndRecoversOnLaterValidReload"
+      ]
+    },
+    {
+      "id": "S17.1-06-missing-workflow-md-returns-typed-error",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "Missing `WORKFLOW.md` returns typed error",
+      "source_text_sha256": "c8c2b1f106335d7f63b6e9a6cb1dee06b05a00017966e5e85a26c377e8122ea6",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestLoadMissingFileIsTyped"
+      ]
+    },
+    {
+      "id": "S17.1-07-invalid-yaml-front-matter-returns-typed-error",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "Invalid YAML front matter returns typed error",
+      "source_text_sha256": "f394c6bc8e6f23efa6d7b24b5599fdbd80011a3867f1b4a5db904d981f2509d7",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestParseErrorCarriesWorkflowPathAndLocation"
+      ]
+    },
+    {
+      "id": "S17.1-08-front-matter-non-map-returns-typed-error",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "Front matter non-map returns typed error",
+      "source_text_sha256": "2328721b02ec58d59e8d4f63e0e8c06f263b1d4728eb5fcbb7382470e5a2b69c",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestParseRejectsNonMapFrontMatter"
+      ]
+    },
+    {
+      "id": "S17.1-09-config-defaults-apply-when-optional-values-are",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "Config defaults apply when OPTIONAL values are missing",
+      "source_text_sha256": "7dbc02f4936fc9f33a048e2b828ddf269d1d35689aa56569a62e2cbc456e3ecb",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestResolveAppliesCoreDefaultsAndTargetedExpansion"
+      ]
+    },
+    {
+      "id": "S17.1-10-tracker-kind-validation-enforces-an-implementation-supported",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "`tracker.kind` validation enforces an implementation-supported adapter",
+      "source_text_sha256": "c9ec696da2194e49c8020bcd81800295fbee8aa3ae2d4fab585ddf8dcebc569e",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/app::TestTrackerValidationAndScopeCoverGitHubAndLinear"
+      ]
+    },
+    {
+      "id": "S17.1-11-tracker-provider-preserves-adapter-owned-keys-and",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "`tracker.provider` preserves adapter-owned keys and validates them through the selected adapter",
+      "source_text_sha256": "bbb9a0885b02b6202d947e3688ae87e261315caa26d4d6acd04b076a1d6dd796",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestStoreProviderValidationUsesResolvedConfig"
+      ]
+    },
+    {
+      "id": "S17.1-12-var-resolution-works-for-documented-adapter-secret",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "`$VAR` resolution works for documented adapter secret keys and path values",
+      "source_text_sha256": "2d530eed31167989cd3828f9ca32cc68f21a8b6ab981fd974ba45ad7c1de378f",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestResolveAppliesCoreDefaultsAndTargetedExpansion"
+      ]
+    },
+    {
+      "id": "S17.1-13-path-expansion-works",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "`~` path expansion works",
+      "source_text_sha256": "f2cd37525231aedc558cb57e52d2c1532d82d19a4500af7dc2378c7426e230da",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestResolveMakesRelativeAndHomeWorkspaceRootsAbsolute"
+      ]
+    },
+    {
+      "id": "S17.1-14-codex-command-is-preserved-as-a-shell",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "`codex.command` is preserved as a shell command string",
+      "source_text_sha256": "41a189b45550440aec8590c794677f4caeeaa8a74797c4846c2b0a6f1d82a243",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestResolvePreservesCodexPolicyValues"
+      ]
+    },
+    {
+      "id": "S17.1-15-per-state-concurrency-override-map-normalizes-state",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "Per-state concurrency override map normalizes state names and ignores invalid values",
+      "source_text_sha256": "128ff6a310f71d1bfd5e2bc5662d0dbfd804462b68a44cab59eb0a1752c70010",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestResolveNormalizesStateLimitsAndPreservesUnknownData"
+      ]
+    },
+    {
+      "id": "S17.1-16-prompt-template-renders-issue-and-attempt",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "Prompt template renders `issue` and `attempt`",
+      "source_text_sha256": "e9500313b7fbc39c7e2598cbaf99fc61d7a6b72cce34a31e1d399e99eca40e49",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestRenderBindsIssueAndAttempt"
+      ]
+    },
+    {
+      "id": "S17.1-17-prompt-rendering-fails-on-unknown-variables-strict",
+      "section": "17.1",
+      "profile": "core",
+      "source_text": "Prompt rendering fails on unknown variables (strict mode)",
+      "source_text_sha256": "a42331688889cdbdd7c2953358bf6f82672d433be0ef2a65322a030b9ef4333e",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestRenderRejectsUnknownVariableAndFilter"
+      ]
+    },
+    {
+      "id": "S17.2-01-deterministic-workspace-path-per-issue-identifier",
+      "section": "17.2",
+      "profile": "core",
+      "source_text": "Deterministic workspace path per issue identifier",
+      "source_text_sha256": "ee7d043418bfa0aec36ffb465d50c847d77a8b15dba88d88cb1c04755ae3c74f",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestChangedIdentifiersUseDistinctStableHashSuffixes"
+      ]
+    },
+    {
+      "id": "S17.2-02-missing-workspace-directory-is-created",
+      "section": "17.2",
+      "profile": "core",
+      "source_text": "Missing workspace directory is created",
+      "source_text_sha256": "bd8f9f3987a9d8f6eba4c8bccd7a3c74a191e03df6af31038e60bd14d332e7ad",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestEnsureCreatesOwnedWorkspaceOnceAndRunsAfterCreateOnce"
+      ]
+    },
+    {
+      "id": "S17.2-03-existing-workspace-directory-is-reused",
+      "section": "17.2",
+      "profile": "core",
+      "source_text": "Existing workspace directory is reused",
+      "source_text_sha256": "c65a14d0ab52e2b34bed213184c4af82a9159707682f033ce8a3aad9efeddf7b",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestEnsureReusesUnmarkedDirectoryWithoutTakingOwnership"
+      ]
+    },
+    {
+      "id": "S17.2-04-existing-non-directory-path-at-workspace-location",
+      "section": "17.2",
+      "profile": "core",
+      "source_text": "Existing non-directory path at workspace location is handled safely (replace or fail per implementation policy)",
+      "source_text_sha256": "cdda5d42980c6502f96f4b6916a95da8ce63628ff680b705fae96b84170f9856",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestEnsureRejectsExistingFileAndPreservesIt"
+      ]
+    },
+    {
+      "id": "S17.2-05-optional-workspace-population-synchronization-errors-are-surfaced",
+      "section": "17.2",
+      "profile": "extension",
+      "source_text": "OPTIONAL workspace population/synchronization errors are surfaced",
+      "source_text_sha256": "25ea8350821eea8217bd6eba015a037fc04779088fbbcd666301369b8b5dec16",
+      "status": "not_implemented_optional",
+      "evidence": [
+        "go:./tests/conformance::TestDeferredExtensionsRemainUnclaimed",
+        "report:docs/conformance.md#deferred-optional-capabilities"
+      ]
+    },
+    {
+      "id": "S17.2-06-after-create-hook-runs-only-on-new",
+      "section": "17.2",
+      "profile": "core",
+      "source_text": "`after_create` hook runs only on new workspace creation",
+      "source_text_sha256": "de94a87d8d0f678abb3fd2f71f1f00d005d840efe99a620a207d4e8b7a06c5cb",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestEnsureCreatesOwnedWorkspaceOnceAndRunsAfterCreateOnce"
+      ]
+    },
+    {
+      "id": "S17.2-07-before-run-hook-runs-before-each-attempt",
+      "section": "17.2",
+      "profile": "core",
+      "source_text": "`before_run` hook runs before each attempt and failure/timeouts abort the current attempt",
+      "source_text_sha256": "5bcd90657daa201a5aaa98b369e8dda3cf920660c5c985e88caeee33ecb3be52",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestBeforeRunFailureIsFatalAndAfterRunFailureIsWarning",
+        "go:./internal/orchestrator::TestLifecycleWorkerFailureBoundaries"
+      ]
+    },
+    {
+      "id": "S17.2-08-after-run-hook-runs-after-each-attempt",
+      "section": "17.2",
+      "profile": "core",
+      "source_text": "`after_run` hook runs after each attempt and failure/timeouts are logged and ignored",
+      "source_text_sha256": "7def02f87e3f4068e0d8ed05af133c5234c012eb4dee3bba72a474b444e05e9a",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestBeforeRunFailureIsFatalAndAfterRunFailureIsWarning",
+        "go:./internal/orchestrator::TestLifecycleWorkerFailureBoundaries"
+      ]
+    },
+    {
+      "id": "S17.2-09-before-remove-hook-runs-on-cleanup-and",
+      "section": "17.2",
+      "profile": "core",
+      "source_text": "`before_remove` hook runs on cleanup and failures/timeouts are ignored",
+      "source_text_sha256": "37b7448aea4ab83990d10eb4577f8a0c20ad097b41e6f182ed84ce2fb23185e5",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestRemoveRevalidatesAfterHookAndPreservesSymlinkTarget"
+      ]
+    },
+    {
+      "id": "S17.2-10-workspace-path-sanitization-stable-original-identifier-hash",
+      "section": "17.2",
+      "profile": "core",
+      "source_text": "Workspace path sanitization, stable original-identifier-hash collision resistance, and root containment invariants are enforced before agent launch",
+      "source_text_sha256": "906952d9b8555c75942786e68a0f452d96fed1f2892c2fadbaf780c97c9a2510",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestHookRunnerRejectsRootOutsideAndChangedWorkspaceBeforeLaunch",
+        "go:./internal/workspace::TestChangedIdentifiersUseDistinctStableHashSuffixes",
+        "go:./internal/codex::TestLaunchRechecksCanonicalWorkspaceContainment"
+      ]
+    },
+    {
+      "id": "S17.2-11-identifiers-unchanged-by-sanitization-keep-their-deterministic",
+      "section": "17.2",
+      "profile": "core",
+      "source_text": "Identifiers unchanged by sanitization keep their deterministic workspace key; conformance tests include distinct identifiers that sanitize to the same text and verify distinct keys",
+      "source_text_sha256": "b87535e397ea3932318e74599ae03afc52c75bfb39e01aad88f0e3dd12d28c8b",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestChangedIdentifiersUseDistinctStableHashSuffixes"
+      ]
+    },
+    {
+      "id": "S17.2-12-agent-launch-uses-the-per-issue-workspace",
+      "section": "17.2",
+      "profile": "core",
+      "source_text": "Agent launch uses the per-issue workspace path as cwd and rejects out-of-root paths",
+      "source_text_sha256": "9ae15bc255230bca2503a477cb48da074451bc2cbeb4972dff741182be46a0a9",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestTurnUsesTextInputWorkspaceSandboxAndSessionIdentity",
+        "go:./internal/codex::TestLaunchRechecksCanonicalWorkspaceContainment"
+      ]
+    },
+    {
+      "id": "S17.3-01-candidate-issue-fetch-applies-configured-active-states",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "Candidate issue fetch applies configured active states and adapter-owned scope selection",
+      "source_text_sha256": "86aa27af8af10e2ab2b84186b634c1300d77aea8de931f5315e2b7b825a9f816",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestFetchIssuesByStatesFiltersCaseInsensitivelyAndSafelyLogsMalformedPeers",
+        "go:./internal/tracker/linear::TestFetchIssuesByStatesFollowsCursorAndLocksEveryScopeVariable"
+      ]
+    },
+    {
+      "id": "S17.3-02-empty-fetch-issues-by-states-returns-empty",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "Empty `fetch_issues_by_states([])` returns empty without a provider call",
+      "source_text_sha256": "1e30f4eec0e854b41e1b45ae49cd15ea2b2deda30373a18a07f71a439812368e",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestAdapterImplementsProviderNeutralReadAndScopedToolSurface",
+        "go:./internal/tracker/linear::TestAdapterImplementsLiveTrackerAndToolContract",
+        "go:./internal/tracker/linear::TestFetchIssuesByStatesBlankOnlyInputMakesNoRequest"
+      ]
+    },
+    {
+      "id": "S17.3-03-empty-fetch-issues-by-ids-returns-empty",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "Empty `fetch_issues_by_ids([])` returns empty without a provider call",
+      "source_text_sha256": "9bec4a72ec61947737ebe2b45fae23ff5c1b12cde9f50d28038976f608667da1",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestAdapterImplementsProviderNeutralReadAndScopedToolSurface",
+        "go:./internal/tracker/linear::TestAdapterImplementsLiveTrackerAndToolContract"
+      ]
+    },
+    {
+      "id": "S17.3-04-pagination-preserves-order-across-multiple-pages",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "Pagination preserves order across multiple pages",
+      "source_text_sha256": "da1df205b484c0c0ef6dec50a21f2a159a59ec071eff188884ecc0f1ae591fdb",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestFetchIssuesByStatesPaginatesAcrossMultipleLinkLinesAndReconstructsScopedPath",
+        "go:./internal/tracker/linear::TestStatePaginationPreservesProviderPageOrder"
+      ]
+    },
+    {
+      "id": "S17.3-05-labels-are-normalized-to-lowercase",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "Labels are normalized to lowercase",
+      "source_text_sha256": "22802fce848318bf5e2b6de2cf57c197eac7fc376335d8fa524d8a2eef9e3caf",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker::TestNormalizeLabelsTrimsLowercasesDeduplicatesAndDropsBlank"
+      ]
+    },
+    {
+      "id": "S17.3-06-unusable-optional-provider-metadata-normalizes-to-null",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "Unusable optional provider metadata normalizes to null/empty without hiding valid required fields",
+      "source_text_sha256": "64fd18590dff9993aacfebe0d9e8e0e5f9b06145a1eb2507cc7a2e30e5a53907",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker::TestNormalizeIssueCopiesMetadataUsesFallbacksAndUTC",
+        "go:./internal/tracker/github::TestNormalizeIssueRecordOptionalValuesFallBackWithoutPoisoningRequiredFields",
+        "go:./internal/tracker/linear::TestNormalizeIssuePreservesAllProviderFieldsAndExactNativeRef"
+      ]
+    },
+    {
+      "id": "S17.3-07-state-list-reads-log-omitted-malformed-required",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "State-list reads log omitted malformed required records; ID refresh fails malformed requested records instead of treating them as invisible",
+      "source_text_sha256": "5963c889737d24474c92b9a842a5722dede23a877b6ad4ff8792b3837deeae15",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestFetchIssuesByStatesFiltersCaseInsensitivelyAndSafelyLogsMalformedPeers",
+        "go:./internal/tracker/github::TestFetchIssuesByIDsOmitsPullRequestsButFailsMalformedVisibleIssues",
+        "go:./internal/tracker/linear::TestFetchIssuesByStatesOmitsMalformedRecordsWithStaticSafeWarning",
+        "go:./internal/tracker/linear::TestFetchIssuesByIDsFailsAtomicallyOnLateMalformedBatch"
+      ]
+    },
+    {
+      "id": "S17.3-08-refresh-by-opaque-dispatch-id-returns-full",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "Refresh by opaque dispatch ID returns full normalized issue snapshots",
+      "source_text_sha256": "e246d24fcc5830d21b31cce80ea70fc3f609d77a5e9956108002922a40716527",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestFetchIssuesByIDsDeduplicatesInFirstSeenOrderAndOmits404",
+        "go:./internal/tracker/linear::TestFetchIssuesByIDsBatchesFiftyDeduplicatesAndPreservesFirstSeenInputs"
+      ]
+    },
+    {
+      "id": "S17.3-09-a-distinct-provider-ticket-id-or-project",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "A distinct provider ticket ID or project-item ID is preserved in `native_ref` when needed",
+      "source_text_sha256": "1a385e02deb37ef4db9422fe6a52f14f52a78f68a1debd1813ecd0693b797406",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestNormalizeIssueRecordUsesRepositoryQualifiedIdentityAndLosslessNativeRef",
+        "go:./internal/tracker/linear::TestNormalizeIssuePreservesAllProviderFieldsAndExactNativeRef"
+      ]
+    },
+    {
+      "id": "S17.3-10-provider-specific-routing-blocker-assignment-rules-become",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "Provider-specific routing/blocker/assignment rules become explicit `dispatchable`",
+      "source_text_sha256": "d12b527cc1a3c07c5b0620056ce2636726e94fe44386216ac3c78905cf0498c5",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestNormalizeIssueRecordAssigneeFilterMatchesAnyUsableLoginCaseInsensitively",
+        "go:./internal/tracker/linear::TestTodoDispatchabilityFailsClosedOnIncompleteBlockerData"
+      ]
+    },
+    {
+      "id": "S17.3-11-the-adapter-publishes-the-required-compact-profile",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "The adapter publishes the required compact profile for config, scope, normalization, tools, and portable error mapping",
+      "source_text_sha256": "d50a03212480adc9c4bc4a7659a2e8b9e70a40778b52d976d0b468c48258009d",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestAdapterImplementsProviderNeutralReadAndScopedToolSurface",
+        "go:./internal/tracker/linear::TestAdapterImplementsLiveTrackerAndToolContract",
+        "report:docs/github.md#configuration",
+        "report:docs/linear.md#configuration"
+      ]
+    },
+    {
+      "id": "S17.3-12-error-mapping-covers-config-request-non-success",
+      "section": "17.3",
+      "profile": "core",
+      "source_text": "Error mapping covers config, request, non-success response, malformed payload, pagination, and rate limiting, including documented category/message mappings for language-native errors",
+      "source_text_sha256": "f2c537bcd3433c1ec6896cbf8f84903b77e5217f4a9d61887dbc1ae7d332af90",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestClientMapsHTTPFailuresToPortableSafeCategoriesAndRetryMetadata",
+        "go:./internal/tracker/linear::TestHTTPStatusesMapToPortableSafeErrors",
+        "report:docs/github.md#failure-behavior",
+        "report:docs/linear.md#failure-behavior"
+      ]
+    },
+    {
+      "id": "S17.4-01-dispatch-sort-order-is-priority-then-oldest",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Dispatch sort order is priority then oldest creation time",
+      "source_text_sha256": "03e8a675555567839df6faf977f74ac19d73b1f5e5b5933b26dcdb0f693c5a2e",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestSortForDispatchExactBuckets"
+      ]
+    },
+    {
+      "id": "S17.4-02-dispatchable-false-issues-are-not-eligible",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "`dispatchable=false` issues are not eligible",
+      "source_text_sha256": "e3010d61b45ddc91e610e149ae2208a190fa21440f342b399c258dbf113aa44f",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestEligibleAppliesProviderNeutralRulesOnly"
+      ]
+    },
+    {
+      "id": "S17.4-03-required-label-filtering-is-case-insensitive-and",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Required-label filtering is case-insensitive and applies after adapter normalization",
+      "source_text_sha256": "1483a3f12ec519f48342154de7ffd27fd06a9a8af14f954ae4e70d8b7031b1e5",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestEligibleAppliesProviderNeutralRulesOnly"
+      ]
+    },
+    {
+      "id": "S17.4-04-active-state-issue-refresh-updates-running-entry",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Active-state issue refresh updates running entry state",
+      "source_text_sha256": "43b4baca0ce315f72b1f1dda028d9f7fd160268060489b841c19d7eba318569c",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestActiveRefreshUpdatesRunningIssueState"
+      ]
+    },
+    {
+      "id": "S17.4-05-non-active-state-stops-running-agent-without",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Non-active state stops running agent without workspace cleanup",
+      "source_text_sha256": "f0731ba7c6c319801bac0d8dcc50e715c4303d2ccbcc34ed8cfd0d54cc6e1ef0",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestReconcileTransitions"
+      ]
+    },
+    {
+      "id": "S17.4-06-terminal-state-stops-running-agent-and-cleans",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Terminal state stops running agent and cleans workspace",
+      "source_text_sha256": "6a8d3db8e45098c1801fa983f16eaf2c1c8ab5f3696abe6cb7dcea733c5dd019",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestReconcileWaitsForExitBeforeCleanupAndPreservesRecordedRoot"
+      ]
+    },
+    {
+      "id": "S17.4-07-reconciliation-with-no-running-issues-is-a",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Reconciliation with no running issues is a no-op",
+      "source_text_sha256": "cf1c39edcbe0cfb27e7c3c774d69a6196188e3ea16a82d06010702add7980942",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestReconcileWithoutRunningIssuesSkipsIDRead"
+      ]
+    },
+    {
+      "id": "S17.4-08-normal-worker-exit-schedules-a-short-continuation",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Normal worker exit schedules a short continuation retry (attempt 1)",
+      "source_text_sha256": "3ebd8b03b1852c2f8091078a921f9bc0db8280add01366867a67c2af80175f18",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestNormalExitSchedulesContinuationAttemptOne"
+      ]
+    },
+    {
+      "id": "S17.4-09-abnormal-worker-exit-increments-retries-with-10s",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Abnormal worker exit increments retries with 10s-based exponential backoff",
+      "source_text_sha256": "b8a28dac77c984a2e99dcc3f9ca18fa804f000ba5db2987de375432e3e5243d4",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestFailureRetryIncrementsAttemptAndUsesCurrentCap"
+      ]
+    },
+    {
+      "id": "S17.4-10-retry-backoff-cap-uses-configured-agent-max",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Retry backoff cap uses configured `agent.max_retry_backoff_ms`",
+      "source_text_sha256": "3a3e390cbeed4616336264f24a623ba3189f9c49be14e74b857a2b39f816e8b6",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestFailureRetryIncrementsAttemptAndUsesCurrentCap"
+      ]
+    },
+    {
+      "id": "S17.4-11-retry-queue-entries-include-attempt-due-time",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Retry queue entries include attempt, due time, identifier, and error",
+      "source_text_sha256": "2f5f13d10f76d880bce78d893679747ef326a7dc1dd5429ce0d8f05a5125adeb",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestRetryRowsIncludeAttemptDueIdentifierAndError"
+      ]
+    },
+    {
+      "id": "S17.4-12-stall-detection-kills-stalled-sessions-and-schedules",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Stall detection kills stalled sessions and schedules retry",
+      "source_text_sha256": "d96c330193349d733d40466fe0c5b7699987037742e8133157d9ffd5ea12a3a8",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestStallUsesLastEventAndSchedulesFailureOnlyAfterExit"
+      ]
+    },
+    {
+      "id": "S17.4-13-slot-exhaustion-requeues-retries-with-explicit-error",
+      "section": "17.4",
+      "profile": "core",
+      "source_text": "Slot exhaustion requeues retries with explicit error reason",
+      "source_text_sha256": "b7892f436a1e3a016001cd30955d3906e782624680c436839fdb945758483a87",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestRetrySlotExhaustionReschedulesWithExplicitReason"
+      ]
+    },
+    {
+      "id": "S17.4-14-if-a-snapshot-api-is-implemented-it",
+      "section": "17.4",
+      "profile": "extension",
+      "source_text": "If a snapshot API is implemented, it returns running rows, retry rows, token totals, and rate limits",
+      "source_text_sha256": "617ea7d8e865be18322b52ee2eb8e2a82c26b347345e57d38be7638958a4fd0e",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/web::TestStateAPIUsesExactAllowlistedNonNullShapeAndCoherentEventSuffix",
+        "go:./internal/orchestrator::TestWorkerEventUpdatesSnapshotAndPublishesSafeInvalidation"
+      ]
+    },
+    {
+      "id": "S17.4-15-if-a-snapshot-api-is-implemented-timeout",
+      "section": "17.4",
+      "profile": "extension",
+      "source_text": "If a snapshot API is implemented, timeout/unavailable cases are surfaced",
+      "source_text_sha256": "d4626b2e10e997eb3e68a9768ecfcc70b9fe4fd56aa91962579c96ce757fa08a",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/web::TestRuntimeControlAPIReturnsServiceUnavailableWhenEffectiveSnapshotTimesOut",
+        "go:./internal/web::TestRuntimeControlAPIMapsUnavailableWithoutCallingSnapshot"
+      ]
+    },
+    {
+      "id": "S17.5-01-launch-command-uses-workspace-cwd-and-invokes",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Launch command uses workspace cwd and invokes `bash -lc <codex.command>`",
+      "source_text_sha256": "86461b7ab20ea35545c85d1ba0ba7d5e6b17f42e64cb8e923b6f11499c69b509",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestBashReceivesCommandAsOneArgument",
+        "go:./internal/codex::TestTurnUsesTextInputWorkspaceSandboxAndSessionIdentity"
+      ]
+    },
+    {
+      "id": "S17.5-02-session-startup-follows-the-targeted-codex-app",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Session startup follows the targeted Codex app-server protocol.",
+      "source_text_sha256": "a360881a8bb56f291ad54967d9efdf8f44ebbfd64e32a1bcac4e009e977c6022",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestSessionStartupUsesPinnedProtocolOrderAndWorkspace"
+      ]
+    },
+    {
+      "id": "S17.5-03-client-identity-capability-payloads-are-valid-when",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Client identity/capability payloads are valid when the targeted Codex app-server protocol requires them.",
+      "source_text_sha256": "66b0d4ad8b0e3f2ce7f0dceaaaa796a68cf965988a6cc248fdddec4e8c43ff43",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestProtocolTypesSerializePinnedStartupAndTurnShapes"
+      ]
+    },
+    {
+      "id": "S17.5-04-policy-related-startup-payloads-use-the-implementation",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Policy-related startup payloads use the implementation's documented approval/sandbox settings",
+      "source_text_sha256": "c0f2c274a7137d7a71b06271a103955eedd77766c8501c42b31c0bdb7c8553b0",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestRunnerUsesSafeApprovalAndSandboxDefaults"
+      ]
+    },
+    {
+      "id": "S17.5-05-thread-and-turn-identities-exposed-by-the",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Thread and turn identities exposed by the targeted protocol are extracted and used to emit `session_started`",
+      "source_text_sha256": "9b88aa788133bffabba6350797dce8dc1950811d19a757eb70d58931ec35ea0d",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestSessionEventsUseUTCProcessAndCapturedToolSnapshot"
+      ]
+    },
+    {
+      "id": "S17.5-06-request-response-read-timeout-is-enforced",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Request/response read timeout is enforced",
+      "source_text_sha256": "7c64d34dd6188b3183f0944ad9314d7eec20c131600c857685bd40e87454be37",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestSessionSynchronousCallUsesBoundedRequestTimeout"
+      ]
+    },
+    {
+      "id": "S17.5-07-turn-timeout-is-enforced",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Turn timeout is enforced",
+      "source_text_sha256": "55d5bd3a32e9c0b84e884bae6992af3382be2c017ef5dc7a627d1d42bc093753",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestWorkerCategorizesStartupTurnTimeoutStallAndCancellation"
+      ]
+    },
+    {
+      "id": "S17.5-08-transport-framing-required-by-the-targeted-protocol",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Transport framing required by the targeted protocol is handled correctly",
+      "source_text_sha256": "e095d99300c3ec3bc7a9f9faa4e10c58648f2b60705c1ef045c436da2471bc47",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestWireClassifiesResponseRequestAndNotification",
+        "go:./internal/codex::TestReaderAcceptsSplitCRLFAndExactLimit"
+      ]
+    },
+    {
+      "id": "S17.5-09-for-stdio-based-transports-diagnostic-stderr-handling",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "For stdio-based transports, diagnostic stderr handling is kept separate from the protocol stream",
+      "source_text_sha256": "8ec956c0a872e5625134137acd6e8df6afe8e3ca1e478d16ec33aa39000f1425",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestStderrCaptureRedactsAndKeepsOnlyBoundedTail"
+      ]
+    },
+    {
+      "id": "S17.5-10-command-file-change-approvals-are-handled-according",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Command/file-change approvals are handled according to the implementation's documented policy",
+      "source_text_sha256": "3949210c199fef50fca088bd1416a3ebfd06a30aa92439dd82737a8885f2d5da",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestOperatorCommandAndFileApprovalsMapEveryPinnedDecision"
+      ]
+    },
+    {
+      "id": "S17.5-11-unsupported-dynamic-tool-calls-are-rejected-without",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Unsupported dynamic tool calls are rejected without stalling the session",
+      "source_text_sha256": "771e5012eb19791e7461581ddda70bd8a7dc9e48b65abcf56ed61a27cf61de95",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestRunnerRejectsMalformedOrUnadvertisedDynamicToolWithoutCallingExecutor"
+      ]
+    },
+    {
+      "id": "S17.5-12-user-input-requests-are-handled-according-to",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "User input requests are handled according to the implementation's documented policy and do not stall indefinitely",
+      "source_text_sha256": "032d87fd7c98e745c5d2ab392f4071c50e5adba069311c274d95559fbb12ff18",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestOperatorUserInputMapsOptionsFreeTextAndSecretAnswers",
+        "go:./internal/codex::TestOperatorRequestExpiresAfterAtMostElevenWindows"
+      ]
+    },
+    {
+      "id": "S17.5-13-usage-and-rate-limit-telemetry-exposed-by",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Usage and rate-limit telemetry exposed by the targeted protocol is extracted",
+      "source_text_sha256": "381fb0ab2d77cabb4f8434b838fb0beb45fc88e11b81691973ce8fbf095bcd81",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestTelemetryReplacesAbsoluteUsageAndRateLimitsIdempotently"
+      ]
+    },
+    {
+      "id": "S17.5-14-approval-user-input-required-usage-and-rate",
+      "section": "17.5",
+      "profile": "core",
+      "source_text": "Approval, user-input-required, usage, and rate-limit signals are interpreted according to the targeted protocol",
+      "source_text_sha256": "3190b7edebf2281436c2dcd8755d208b000d0365823d63c466b511d800cd3e10",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestOperatorCommandAndFileApprovalsMapEveryPinnedDecision",
+        "go:./internal/codex::TestOperatorUserInputMapsOptionsFreeTextAndSecretAnswers",
+        "go:./internal/codex::TestTelemetryReplacesAbsoluteUsageAndRateLimitsIdempotently"
+      ]
+    },
+    {
+      "id": "S17.5-15-if-client-side-tools-are-implemented-session",
+      "section": "17.5",
+      "profile": "extension",
+      "source_text": "If client-side tools are implemented, session startup advertises the supported tool specs using the targeted app-server protocol",
+      "source_text_sha256": "e5f76d7298ce937d8fea7c078d60ba58faf00a6c7633b410eaf1b84da4042c78",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestRunnerExecutesAdvertisedDynamicToolAndReturnsOneInputTextItem"
+      ]
+    },
+    {
+      "id": "S17.5-16-if-provider-native-agent-tools-are-implemented",
+      "section": "17.5",
+      "profile": "extension",
+      "source_text": "If provider-native agent tools are implemented:",
+      "source_text_sha256": "efd4d2489a30bb16e597a5ce6e07f8b9e183bcac998c20e9701b83227aeb0d9d",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestWorkerCapturesTrackerToolExecutorForTheRunner"
+      ]
+    },
+    {
+      "id": "S17.5-17-only-the-selected-adapter-s-tools-are",
+      "section": "17.5",
+      "profile": "extension",
+      "source_text": "only the selected adapter's tools are advertised to the session",
+      "source_text_sha256": "6589c795bb9df0ecfc2829ab2ddb945a8dcd943095295095444dda8009af386d",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestWorkerCapturesTrackerToolExecutorForTheRunner",
+        "go:./internal/tracker/github::TestGitHubToolAdvertisesExactOperationAllowlistForGitHubSessionsOnly",
+        "go:./internal/tracker/linear::TestLinearToolAdvertisesExactCapturedContract"
+      ]
+    },
+    {
+      "id": "S17.5-18-valid-inputs-execute-host-side-with-configured",
+      "section": "17.5",
+      "profile": "extension",
+      "source_text": "valid inputs execute host-side with configured adapter auth",
+      "source_text_sha256": "18d3e81dc2d122ab01302f13f84f03b225f04d754ea1aaff140e0ccf7fa96252",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestGitHubToolUsesExactMethodsPathsBodiesAndCapturedAuthorization",
+        "go:./internal/tracker/linear::TestLinearToolMakesExactlyOneRequestAndExposesRateLimitMetadata"
+      ]
+    },
+    {
+      "id": "S17.5-19-the-current-normalized-issue-and-native-ref",
+      "section": "17.5",
+      "profile": "extension",
+      "source_text": "the current normalized issue and `native_ref` are available as internal tool context",
+      "source_text_sha256": "f1ff485aba16368700d3e3ecfbf2a85ab7113fd725c3a58d84a40c06c95fb25f",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestWorkerCapturesTrackerSessionAndWorkflowBeforeRunnerStarts",
+        "go:./internal/tracker/github::TestGitHubToolCannotEscapeCapturedIssueOrRepository"
+      ]
+    },
+    {
+      "id": "S17.5-20-tracker-secrets-are-not-inherited-by-the",
+      "section": "17.5",
+      "profile": "extension",
+      "source_text": "tracker secrets are not inherited by the coding-agent child process",
+      "source_text_sha256": "6c545cc9efe12889b538e72941d944e672c4eceb97243defc973061feea9a052",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestChildEnvironmentRemovesEveryTrackerSecretName"
+      ]
+    },
+    {
+      "id": "S17.5-21-invalid-arguments-missing-auth-and-transport-failures",
+      "section": "17.5",
+      "profile": "extension",
+      "source_text": "invalid arguments, missing auth, and transport failures return structured failure payloads",
+      "source_text_sha256": "55433ba82c5c184551b2ec308171c4d41db0baf9e8d12e3408fa2cee0de1bb76",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestGitHubToolMapsHTTPFailuresAndPropagatesSafeMetadata",
+        "go:./internal/tracker/linear::TestLinearToolFailureCarriesPortableRateLimitMetadata"
+      ]
+    },
+    {
+      "id": "S17.5-22-unsupported-tool-names-still-fail-without-stalling",
+      "section": "17.5",
+      "profile": "extension",
+      "source_text": "unsupported tool names still fail without stalling the session",
+      "source_text_sha256": "eaab5fbc5e479b56cc1491358499396493470c5f452517acb11de8d81b4edf3e",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestRunnerRejectsMalformedOrUnadvertisedDynamicToolWithoutCallingExecutor"
+      ]
+    },
+    {
+      "id": "S17.6-01-validation-failures-are-operator-visible",
+      "section": "17.6",
+      "profile": "core",
+      "source_text": "Validation failures are operator-visible",
+      "source_text_sha256": "1cd57e66bf8063751822563f259eb36b0fe228e6fdb74b6056191a72aa539472",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/app::TestTrackerScopeFailureReachesStatusEventAndLogWithFixedMessage"
+      ]
+    },
+    {
+      "id": "S17.6-02-structured-logging-includes-issue-session-context-fields",
+      "section": "17.6",
+      "profile": "core",
+      "source_text": "Structured logging includes issue/session context fields",
+      "source_text_sha256": "b737910d42db2f8f299b2e1ccbaff7b3b02f5d564b0456ce13c34199416062aa",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestSessionEventsUseUTCProcessAndCapturedToolSnapshot",
+        "go:./internal/orchestrator::TestWorkerEventUpdatesSnapshotAndPublishesSafeInvalidation"
+      ]
+    },
+    {
+      "id": "S17.6-03-logging-sink-failures-do-not-crash-orchestration",
+      "section": "17.6",
+      "profile": "core",
+      "source_text": "Logging sink failures do not crash orchestration",
+      "source_text_sha256": "46c24b99dcb026dc2e40ed454a9fba47007cf58686c8dfe47837d3ea2b2f8d1b",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/observability::TestLogStoreDegradesOnceAndKeepsRingAcrossFailureAndClose"
+      ]
+    },
+    {
+      "id": "S17.6-04-token-rate-limit-aggregation-remains-correct-across",
+      "section": "17.6",
+      "profile": "core",
+      "source_text": "Token/rate-limit aggregation remains correct across repeated agent updates",
+      "source_text_sha256": "26b4c792a35509e399f8bd5affa3aef10118548f8e56ba15ebbda29679cfc66c",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestTelemetryReplacesAbsoluteUsageAndRateLimitsIdempotently",
+        "go:./internal/orchestrator::TestWorkerExitAccumulatesLatestAbsoluteTokensAndRuntimeOnce"
+      ]
+    },
+    {
+      "id": "S17.6-05-if-a-human-readable-status-surface-is",
+      "section": "17.6",
+      "profile": "extension",
+      "source_text": "If a human-readable status surface is implemented, it is driven from orchestrator state and does not affect correctness",
+      "source_text_sha256": "c77b4a9748ed4ae41405e06410fbe827c0527902143920b01847f4a0fc689b9f",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/web::TestStateAPIUsesExactAllowlistedNonNullShapeAndCoherentEventSuffix"
+      ]
+    },
+    {
+      "id": "S17.6-06-if-humanized-event-summaries-are-implemented-they",
+      "section": "17.6",
+      "profile": "extension",
+      "source_text": "If humanized event summaries are implemented, they cover key wrapper/agent event classes without changing orchestrator behavior",
+      "source_text_sha256": "0a00738289700f91473a8e2f22ac9dbbeaa8d208cb5dc8663b0a5d4c2ad59df4",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/web::TestActivityUsesBoundedTailResetTextAndSafeAllowlistedSummaries"
+      ]
+    },
+    {
+      "id": "S17.7-01-cli-accepts-a-positional-workflow-path-argument",
+      "section": "17.7",
+      "profile": "core",
+      "source_text": "CLI accepts a positional workflow path argument (`path-to-WORKFLOW.md`)",
+      "source_text_sha256": "88ce0b3c41bd63c5d9e5a8cc4f9a84a13c10a1bde9e31aaeb13aa01b64312d79",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/cli::TestParseConfigureAndOverrides"
+      ]
+    },
+    {
+      "id": "S17.7-02-cli-uses-workflow-md-when-no-workflow",
+      "section": "17.7",
+      "profile": "core",
+      "source_text": "CLI uses `./WORKFLOW.md` when no workflow path argument is provided",
+      "source_text_sha256": "2e01a1bd2e6fd50d990dec43056ea1970cd19142e432c8f54b4624bc9877ad43",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/cli::TestParseDefaultsToRunAndCurrentWorkflow"
+      ]
+    },
+    {
+      "id": "S17.7-03-cli-errors-on-nonexistent-explicit-workflow-path",
+      "section": "17.7",
+      "profile": "core",
+      "source_text": "CLI errors on nonexistent explicit workflow path or missing default `./WORKFLOW.md`",
+      "source_text_sha256": "f411030cd73ce34c7b35e4826ee1f0efc462631b33c99b0a0c4634b2d0228a3b",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/cli::TestRunModeInvalidPreflightOccursBeforeLockVaultListenerOrOutput"
+      ]
+    },
+    {
+      "id": "S17.7-04-cli-surfaces-startup-failure-cleanly",
+      "section": "17.7",
+      "profile": "core",
+      "source_text": "CLI surfaces startup failure cleanly",
+      "source_text_sha256": "45316e5977dc1d49586b199f82e380201461ff4220d9d78790177c077d491c4c",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/cli::TestRunReturnsStartupFailure"
+      ]
+    },
+    {
+      "id": "S17.7-05-cli-exits-with-success-when-application-starts",
+      "section": "17.7",
+      "profile": "core",
+      "source_text": "CLI exits with success when application starts and shuts down normally",
+      "source_text_sha256": "1b51e6d9cb0f68fa1c5dfe25074f34f99b4889eb35719c391edde6691a651be8",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/cli::TestRunReturnsSuccessAfterContextDrivenShutdown"
+      ]
+    },
+    {
+      "id": "S17.7-06-cli-exits-nonzero-when-startup-fails-or",
+      "section": "17.7",
+      "profile": "core",
+      "source_text": "CLI exits nonzero when startup fails or the host process exits abnormally",
+      "source_text_sha256": "af6da3165471b1ac6ef8be4ee23c4113ba86b4c462cd52e2c7f489ffe7523e23",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/cli::TestRunReturnsRuntimeFailureWhenStartupEndsBeforeShutdown",
+        "go:./internal/cli::TestRunReturnsStartupFailure"
+      ]
+    },
+    {
+      "id": "S17.8-01-a-real-tracker-smoke-test-can-be",
+      "section": "17.8",
+      "profile": "real_integration",
+      "source_text": "A real tracker smoke test can be run with valid credentials supplied through the selected adapter's documented secret mechanism.",
+      "source_text_sha256": "b9720922d9df5d7bba502664d692dc67a023e50a2e19f30e93c9abb432b435e5",
+      "status": "skipped_real_profile",
+      "evidence": [
+        "command:go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/github ./internal/tracker/linear",
+        "report:docs/conformance.md#real-integration-profile"
+      ]
+    },
+    {
+      "id": "S17.8-02-real-integration-tests-should-use-isolated-test",
+      "section": "17.8",
+      "profile": "real_integration",
+      "source_text": "Real integration tests SHOULD use isolated test identifiers/workspaces and clean up tracker artifacts when practical.",
+      "source_text_sha256": "481b0890f4a9b9f1693e73a8a7c0f2311df468e46e1db72b5e61b27091075e2b",
+      "status": "skipped_real_profile",
+      "evidence": [
+        "report:docs/conformance.md#real-integration-profile"
+      ]
+    },
+    {
+      "id": "S17.8-03-a-skipped-real-integration-test-should-be",
+      "section": "17.8",
+      "profile": "real_integration",
+      "source_text": "A skipped real-integration test SHOULD be reported as skipped, not silently treated as passed.",
+      "source_text_sha256": "1687a67cfd98bce648f1df0538ac7c02f29bbf784154e050a4ec3edf6b6088f1",
+      "status": "skipped_real_profile",
+      "evidence": [
+        "go:./tests/conformance::TestPhase4RealSmokeIsExplicitlyOptInAndUsesNoSyntheticPassFlag",
+        "report:docs/conformance.md#real-integration-profile"
+      ]
+    },
+    {
+      "id": "S17.8-04-if-a-real-integration-profile-is-explicitly",
+      "section": "17.8",
+      "profile": "real_integration",
+      "source_text": "If a real-integration profile is explicitly enabled in CI or release validation, failures SHOULD fail that job.",
+      "source_text_sha256": "62fbc1af9c445f546a479c7eaf1f08049ffb91c825df179595d9f03130f70646",
+      "status": "skipped_real_profile",
+      "evidence": [
+        "command:go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/github ./internal/tracker/linear",
+        "report:docs/conformance.md#real-integration-profile"
+      ]
+    },
+    {
+      "id": "S18.1-01-workflow-path-selection-supports-explicit-runtime-path",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Workflow path selection supports explicit runtime path and cwd default",
+      "source_text_sha256": "0fc992a0da9896f09e2e77500cfaef957f10782649aee885d689aa4ae7402895",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/cli::TestParseConfigureAndOverrides",
+        "go:./internal/cli::TestParseDefaultsToRunAndCurrentWorkflow"
+      ]
+    },
+    {
+      "id": "S18.1-02-workflow-md-loader-with-yaml-front-matter",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "`WORKFLOW.md` loader with YAML front matter + prompt body split",
+      "source_text_sha256": "a3228b5327d2bb000fa6a76d77dbbb0bd22d059a52d11831eb31cc2efc3ed5c6",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestParseFrontMatterAndPrompt"
+      ]
+    },
+    {
+      "id": "S18.1-03-typed-config-layer-with-defaults-and-resolution",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Typed config layer with defaults and `$` resolution",
+      "source_text_sha256": "5e88958dc4581fe9d7f0a45c6a19b0f2cfd4e58da6ec89960b25015fa16269f8",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestResolveAppliesCoreDefaultsAndTargetedExpansion"
+      ]
+    },
+    {
+      "id": "S18.1-04-dynamic-workflow-md-watch-reload-re-apply",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Dynamic `WORKFLOW.md` watch/reload/re-apply for config and prompt",
+      "source_text_sha256": "13ecd8fc1315530db16d6e16a1a3660fc31ee8d32c2e20ff0beb4ed85694cf52",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestWatcherDetectsSameInodeWriteAndAtomicReplacement",
+        "go:./internal/workflow::TestInvalidReloadRetainsCurrentAndRecoversOnLaterValidReload"
+      ]
+    },
+    {
+      "id": "S18.1-05-polling-orchestrator-with-single-authority-mutable-state",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Polling orchestrator with single-authority mutable state",
+      "source_text_sha256": "9ae2ba117bf8e1e8ccd34532d618a728e767973d0776db2503fd5d0020208b08",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/app::TestOrchestratorRuntimeSerializesReadyStartAndStop"
+      ]
+    },
+    {
+      "id": "S18.1-06-issue-tracker-adapter-with-state-list-id",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Issue tracker adapter with state-list + ID-refresh reads",
+      "source_text_sha256": "83de199a124c614fedcde7d957cd76a27c6394e2a74384e75a4e4a3bfc471a7a",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/tracker/github::TestAdapterImplementsProviderNeutralReadAndScopedToolSurface",
+        "go:./internal/tracker/linear::TestAdapterImplementsLiveTrackerAndToolContract"
+      ]
+    },
+    {
+      "id": "S18.1-07-workspace-manager-with-sanitized-collision-resistant-per",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Workspace manager with sanitized, collision-resistant per-issue workspaces",
+      "source_text_sha256": "7d722e7039d4b5c89f3c2477f463a32dd199fb7716dc718860ce1e4ce3b318e7",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestChangedIdentifiersUseDistinctStableHashSuffixes",
+        "go:./internal/workspace::TestEnsureCreatesOwnedWorkspaceOnceAndRunsAfterCreateOnce"
+      ]
+    },
+    {
+      "id": "S18.1-08-workspace-lifecycle-hooks-after-create-before-run",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Workspace lifecycle hooks (`after_create`, `before_run`, `after_run`, `before_remove`)",
+      "source_text_sha256": "9357d8009f9e39193017b5aced653ac22bea8cecaeebef30fb0eb2874bc8bf68",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workspace::TestEnsureCreatesOwnedWorkspaceOnceAndRunsAfterCreateOnce",
+        "go:./internal/workspace::TestBeforeRunFailureIsFatalAndAfterRunFailureIsWarning",
+        "go:./internal/workspace::TestRemoveRevalidatesAfterHookAndPreservesSymlinkTarget"
+      ]
+    },
+    {
+      "id": "S18.1-09-hook-timeout-config-hooks-timeout-ms-default",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Hook timeout config (`hooks.timeout_ms`, default `60000`)",
+      "source_text_sha256": "9fc56d3e481ac4ac80aaa4c8f1a335b220094dd290ff8784f95d9d649c2d3b25",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestResolveAppliesCoreDefaultsAndTargetedExpansion",
+        "go:./internal/workspace::TestHookRunnerRejectsUnknownHookAndNonpositiveTimeout"
+      ]
+    },
+    {
+      "id": "S18.1-10-coding-agent-app-server-subprocess-client-with",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Coding-agent app-server subprocess client with the targeted transport/framing protocol",
+      "source_text_sha256": "958c9d7ac9a797fd5a6f6926dce969c7504550bc5539d0fb88f244b06ba9720a",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestSessionStartupUsesPinnedProtocolOrderAndWorkspace",
+        "go:./internal/codex::TestWireClassifiesResponseRequestAndNotification"
+      ]
+    },
+    {
+      "id": "S18.1-11-codex-launch-command-config-codex-command-default",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Codex launch command config (`codex.command`, default `codex app-server`)",
+      "source_text_sha256": "98937755ac263828d3f70d7e76462bfc24d288a4914ffb13b8eb48bb4f9b4494",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestResolvePreservesCodexPolicyValues",
+        "go:./internal/codex::TestBashReceivesCommandAsOneArgument"
+      ]
+    },
+    {
+      "id": "S18.1-12-strict-prompt-rendering-with-issue-and-attempt",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Strict prompt rendering with `issue` and `attempt` variables",
+      "source_text_sha256": "3cea32765f620ea3a47d1e954a47be77f2f69e9a4b789fe30ddb48aaf9704332",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/workflow::TestRenderBindsIssueAndAttempt",
+        "go:./internal/workflow::TestRenderRejectsUnknownVariableAndFilter"
+      ]
+    },
+    {
+      "id": "S18.1-13-exponential-retry-queue-with-continuation-retries-after",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Exponential retry queue with continuation retries after normal exit",
+      "source_text_sha256": "919256171f7cacd179ea9598593c6269cdcdfc6df922ee2b629086fda1071230",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestNormalExitSchedulesContinuationAttemptOne",
+        "go:./internal/orchestrator::TestFailureRetryIncrementsAttemptAndUsesCurrentCap"
+      ]
+    },
+    {
+      "id": "S18.1-14-configurable-retry-backoff-cap-agent-max-retry",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Configurable retry backoff cap (`agent.max_retry_backoff_ms`, default 5m)",
+      "source_text_sha256": "f8a1e1e7e3404da833f460e3c0e944f822b520798978f652978703395f1dd56d",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestFailureRetryIncrementsAttemptAndUsesCurrentCap"
+      ]
+    },
+    {
+      "id": "S18.1-15-reconciliation-that-stops-runs-on-terminal-non",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Reconciliation that stops runs on terminal/non-active tracker states",
+      "source_text_sha256": "219273201db46a082d95de3ff7298619dccfff9ad4fa112243adc270f12703b2",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestReconcileTransitions"
+      ]
+    },
+    {
+      "id": "S18.1-16-workspace-cleanup-for-terminal-issues-startup-sweep",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Workspace cleanup for terminal issues (startup sweep + active transition)",
+      "source_text_sha256": "57a06cbb2381dd712a4d88714581d29ae497a7d981d0d93dc976e4640e7fca57",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/orchestrator::TestStartupCleanupProcessesEveryTerminalIssueBeforeActivePoll",
+        "go:./internal/orchestrator::TestReconcileWaitsForExitBeforeCleanupAndPreservesRecordedRoot"
+      ]
+    },
+    {
+      "id": "S18.1-17-structured-logs-with-issue-id-issue-identifier",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Structured logs with `issue_id`, `issue_identifier`, and `session_id`",
+      "source_text_sha256": "9994463b2ed74879bd7d643a3c78d4256ec5e703a16beb9e8d3bfa4e01511929",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestSessionEventsUseUTCProcessAndCapturedToolSnapshot"
+      ]
+    },
+    {
+      "id": "S18.1-18-operator-visible-observability-structured-logs-optional-snapshot",
+      "section": "18.1",
+      "profile": "core",
+      "source_text": "Operator-visible observability (structured logs; OPTIONAL snapshot/status surface)",
+      "source_text_sha256": "b7379bc953724bcbb47160ec14e62b7ae90ef67fff5fb4a87c8dc4fe1adaf991",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/app::TestTrackerScopeFailureReachesStatusEventAndLogWithFixedMessage",
+        "go:./internal/web::TestStateAPIUsesExactAllowlistedNonNullShapeAndCoherentEventSuffix"
+      ]
+    },
+    {
+      "id": "S18.2-01-http-server-extension-honors-cli-port-over",
+      "section": "18.2",
+      "profile": "extension",
+      "source_text": "HTTP server extension honors CLI `--port` over `server.port`, uses a safe default bind host, and exposes the baseline endpoints/error semantics in Section 13.7 if shipped.",
+      "source_text_sha256": "49c07ec5293fe754367e9705f753bbd349cf7f0b362488723aa9c3d4569f7daf",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/cli::TestPortSelectionHonorsExplicitZeroFileFallbackAndCLIOverride",
+        "go:./internal/web::TestLoopbackRejectsWildcardAndWrongPortHosts",
+        "go:./internal/web::TestStateAPIUsesExactAllowlistedNonNullShapeAndCoherentEventSuffix"
+      ]
+    },
+    {
+      "id": "S18.2-02-provider-native-agent-tools-when-shipped-execute",
+      "section": "18.2",
+      "profile": "extension",
+      "source_text": "Provider-native agent tools, when shipped, execute through the app-server session using host-side configured adapter auth without passing tracker secrets to the child.",
+      "source_text_sha256": "0135ed1eedb92d935e89b8c6551bdf8c36ac11db3096e96eaa94902913ee8ab7",
+      "status": "pass",
+      "evidence": [
+        "go:./internal/codex::TestRunnerExecutesAdvertisedDynamicToolAndReturnsOneInputTextItem",
+        "go:./internal/codex::TestWorkerCapturesTrackerToolExecutorForTheRunner",
+        "go:./internal/codex::TestChildEnvironmentRemovesEveryTrackerSecretName",
+        "go:./internal/tracker/github::TestGitHubToolUsesExactMethodsPathsBodiesAndCapturedAuthorization",
+        "go:./internal/tracker/linear::TestLinearToolMakesExactlyOneRequestAndExposesRateLimitMetadata"
+      ]
+    },
+    {
+      "id": "S18.2-03-todo-persist-retry-queue-and-session-metadata",
+      "section": "18.2",
+      "profile": "extension",
+      "source_text": "TODO: Persist retry queue and session metadata across process restarts.",
+      "source_text_sha256": "bd03759c04b9967c5179d8c98a7d674bba4fe7117457c104a25bd1d65d3d8b17",
+      "status": "not_implemented_optional",
+      "evidence": [
+        "go:./tests/conformance::TestDeferredExtensionsRemainUnclaimed",
+        "report:docs/conformance.md#deferred-optional-capabilities"
+      ]
+    },
+    {
+      "id": "S18.2-04-todo-make-observability-settings-configurable-in-workflow",
+      "section": "18.2",
+      "profile": "extension",
+      "source_text": "TODO: Make observability settings configurable in workflow front matter without prescribing UI implementation details.",
+      "source_text_sha256": "0cf485d2147217dfabd9c42c3ad66ac7c3227209cc86d0154b9c6207a5f51492",
+      "status": "not_implemented_optional",
+      "evidence": [
+        "go:./tests/conformance::TestDeferredExtensionsRemainUnclaimed",
+        "report:docs/conformance.md#deferred-optional-capabilities"
+      ]
+    },
+    {
+      "id": "S18.2-05-todo-extract-common-semantic-helper-tools-only",
+      "section": "18.2",
+      "profile": "extension",
+      "source_text": "TODO: Extract common semantic helper tools only after multiple adapters demonstrate real duplication; do not preemptively replace provider-native tools with generic CRUD.",
+      "source_text_sha256": "a38a91d8e29d2d654c9d755ba09117bad6e3a7d7c3cd0e68339c98ffe0c20960",
+      "status": "not_implemented_optional",
+      "evidence": [
+        "go:./tests/conformance::TestDeferredExtensionsRemainUnclaimed",
+        "report:docs/conformance.md#deferred-optional-capabilities"
+      ]
+    },
+    {
+      "id": "S18.3-01-run-the-real-integration-profile-from-section",
+      "section": "18.3",
+      "profile": "real_integration",
+      "source_text": "Run the `Real Integration Profile` from Section 17.8 with valid credentials and network access.",
+      "source_text_sha256": "bd119c87eb05694d8cde780c10e73743e3293e23035b5901adfccf7e493830b5",
+      "status": "skipped_real_profile",
+      "evidence": [
+        "command:go test -v -tags=integration_live -count=1 -timeout=2m ./internal/tracker/github ./internal/tracker/linear",
+        "report:docs/conformance.md#real-integration-profile"
+      ]
+    },
+    {
+      "id": "S18.3-02-verify-hook-execution-and-workflow-path-resolution",
+      "section": "18.3",
+      "profile": "real_integration",
+      "source_text": "Verify hook execution and workflow path resolution on the target host OS/shell environment.",
+      "source_text_sha256": "a63695faa52190e8919004ba893915d5417a371c468949e21c73c999321b10ec",
+      "status": "skipped_real_profile",
+      "evidence": [
+        "go:./internal/workspace::TestBeforeRunFailureIsFatalAndAfterRunFailureIsWarning",
+        "go:./internal/cli::TestParseConfigureAndOverrides",
+        "report:docs/conformance.md#real-integration-profile"
+      ]
+    },
+    {
+      "id": "S18.3-03-if-the-optional-http-server-is-shipped",
+      "section": "18.3",
+      "profile": "real_integration",
+      "source_text": "If the OPTIONAL HTTP server is shipped, verify the configured port behavior and loopback/default bind expectations on the target environment.",
+      "source_text_sha256": "a327d8c67446cc7d51fd51c99f3b1971ebe25944ed2bc607d8e86f7d66b2971d",
+      "status": "skipped_real_profile",
+      "evidence": [
+        "go:./internal/cli::TestPortSelectionHonorsExplicitZeroFileFallbackAndCLIOverride",
+        "go:./internal/web::TestLoopbackRejectsWildcardAndWrongPortHosts",
+        "report:docs/conformance.md#real-integration-profile"
+      ]
+    }
+  ]
+}

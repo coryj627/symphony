@@ -26,6 +26,24 @@ func TestNormalExitSchedulesContinuationAttemptOne(t *testing.T) {
 	}
 }
 
+func TestRetryRowsIncludeAttemptDueIdentifierAndError(t *testing.T) {
+	due := time.Date(2026, 8, 12, 12, 0, 10, 0, time.UTC)
+	state := State{RetryAttempts: map[string]RetryEntry{
+		"opaque-id": {
+			IssueID: "opaque-id", Identifier: "SYM-42", Attempt: 3,
+			DueAt: due, Error: "safe retry reason",
+		},
+	}}
+	rows := retryRows(state)
+	if len(rows) != 1 {
+		t.Fatalf("retry rows = %#v", rows)
+	}
+	row := rows[0]
+	if row.IssueID != "opaque-id" || row.IssueIdentifier != "SYM-42" || row.Attempt != 3 || !row.DueAt.Equal(due) || row.Error != "safe retry reason" {
+		t.Fatalf("retry row = %#v", row)
+	}
+}
+
 func TestWorkerExitAccumulatesLatestAbsoluteTokensAndRuntimeOnce(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	clock := newFakeClock(now)

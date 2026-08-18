@@ -117,6 +117,9 @@ jobs:
       - name: Test verification wrappers
         run: npm run test:wrappers
 
+      - name: Verify upstream conformance traceability
+        run: npm run conformance:upstream
+
       - name: Validate rendered HTML
         run: npm run html:validate
 
