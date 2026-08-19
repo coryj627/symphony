@@ -340,3 +340,20 @@ test('rejects non-fixture paths in the allowlist', () => {
     assert.match(result.messages, /non-fixture path/);
   });
 });
+
+test('rejects duplicate fixture allowlist entries', () => {
+  const entry = {
+    sourcePath: 'go/internal/client_test.go',
+    line: 1,
+    policy: 'live-token-prefix',
+    fingerprint: '0'.repeat(64),
+  };
+  withFixture({'go/internal/client_test.go': 'safe\n'}, (repoRoot) => {
+    const result = scan(repoRoot, ['go/internal/client_test.go'], {
+      fixtureAllowlist: [entry, {...entry}],
+    });
+
+    assert.equal(result.code, 2, result.messages);
+    assert.match(result.messages, /duplicate entry/);
+  });
+});

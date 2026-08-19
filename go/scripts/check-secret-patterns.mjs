@@ -132,8 +132,8 @@ function trackedInventory(repoRoot, git) {
 
   const records = result.stdout.length === 0
     ? []
-    : result.stdout.subarray(0, result.stdout.at(-1) === 0 ? -1 : undefined).toString('binary').split('\0')
-      .map((record) => Buffer.from(record, 'binary'));
+    : result.stdout.subarray(0, result.stdout.at(-1) === 0 ? -1 : undefined).toString('latin1').split('\0')
+      .map((record) => Buffer.from(record, 'latin1'));
   const inventory = [];
   const seen = new Set();
   for (const record of records) {
@@ -148,17 +148,28 @@ function trackedInventory(repoRoot, git) {
   return inventory;
 }
 
-function sourceLine(source, index) {
-  let line = 1;
-  for (let cursor = 0; cursor < index; cursor += 1) {
+function sourceLineStarts(source) {
+  const starts = [0];
+  for (let cursor = 0; cursor < source.length; cursor += 1) {
     if (source[cursor] === '\r') {
-      line += 1;
       if (source[cursor + 1] === '\n') cursor += 1;
+      starts.push(cursor + 1);
     } else if (source[cursor] === '\n' || source[cursor] === '\u2028' || source[cursor] === '\u2029') {
-      line += 1;
+      starts.push(cursor + 1);
     }
   }
-  return line;
+  return starts;
+}
+
+function sourceLine(starts, index) {
+  let lower = 0;
+  let upper = starts.length;
+  while (lower < upper) {
+    const middle = lower + Math.floor((upper - lower) / 2);
+    if (starts[middle] <= index) lower = middle + 1;
+    else upper = middle;
+  }
+  return lower;
 }
 
 function sourceSpanValue(source, index, length) {
@@ -190,11 +201,12 @@ function allowlistMap(entries) {
 }
 
 function scanSource(source, sourcePath, allowed, observed, addFinding) {
+  const lineStarts = sourceLineStarts(source);
   for (const {name: policy, expressions} of policies) {
     for (const expression of expressions) {
       expression.lastIndex = 0;
       for (const match of source.matchAll(expression)) {
-        const line = sourceLine(source, match.index);
+        const line = sourceLine(lineStarts, match.index);
         const fingerprint = secretFingerprint(sourceSpanValue(source, match.index, match[0].length));
         const key = `${sourcePath}:${line}:${policy}:${fingerprint}`;
         if (allowed.has(key)) observed.add(key);

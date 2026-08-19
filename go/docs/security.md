@@ -97,6 +97,13 @@ Findings and setup errors never include matched source, fixture digests, Git
 standard error, or file bytes. The platform-aware verifier and both supported
 native CI runners execute the gate.
 
+When an intentional test fixture changes, run the gate and inspect the reported
+path and line locally. Confirm that the value is synthetic and required, then
+recompute the source-span digest without printing the source or digest to logs
+and update only that exact allowlist entry. Do not exclude a fixture directory
+or weaken a rule to clear a finding. Remove obsolete entries; the gate rejects
+them as stale.
+
 ## Disposable-canary artifact tests
 
 Security-boundary tests create a cryptographically random, test-only canary and
