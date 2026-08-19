@@ -63,3 +63,23 @@ The deterministic fake app-server is a test-only executable selected by test
 workflow data. Production run mode always selects the contained native Codex
 launcher. The optional real-Codex CI profile is explicit, main-branch-only, and
 must use an isolated workflow path.
+
+## Disposable-canary artifact tests
+
+Security-boundary tests create a cryptographically random, test-only canary and
+register it with the process redactor before exercising secret-bearing paths.
+The shared artifact scanner checks the raw canary and common base64, base64url,
+hexadecimal, URL, and JSON encodings in explicitly named memory artifacts,
+child environments, regular files, and directory trees. Scans are bounded and
+fail closed when an input is absent, unreadable, oversized, a special file, or
+a symbolic link; findings identify only the artifact and encoding class and do
+not print the canary or matching bytes.
+
+The focused integration scenario covers serialized HTTP headers and bodies,
+SSE data, snapshots, the activity journal, structured in-memory and on-disk
+logs, sanitized Codex stderr, child-process environment output, the data
+directory, and captured test artifacts. It also retains a safe issue identifier
+as a control so redaction does not erase ordinary observable content. These
+tests are regression evidence for the covered boundaries, not a claim that an
+arbitrary local artifact is credential-free or that the full security review is
+complete.
