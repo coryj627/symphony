@@ -214,6 +214,44 @@ test('ignores comments inside JavaScript template expressions', () => {
   });
 });
 
+test('tracks comments through nested JavaScript template expressions', () => {
+  withFixture((goRoot) => {
+    const result = scan(goRoot);
+
+    assert.equal(result.code, 0, result.messages);
+  }, {
+    js: "const value = `${{key: `${/* License: https://licenses.example.invalid/nested */ '}'}`}.key}`;\nimport './helper.js';\n",
+  });
+});
+
+for (const [name, lineTerminator] of [
+  ['carriage return', '\r'],
+  ['line separator', '\u2028'],
+  ['paragraph separator', '\u2029'],
+]) {
+  test(`ends JavaScript line comments at a ${name}`, () => {
+    withFixture((goRoot) => {
+      const result = scan(goRoot);
+
+      assert.equal(result.code, 1, result.messages);
+      assert.match(result.messages, /remote-resource/);
+      assert.match(result.messages, /static\/app\.js:2 \[remote-resource\]/);
+    }, {
+      js: `// License: https://licenses.example.invalid/comment${lineTerminator}fetch('https://cdn.example.invalid/app.js');\n`,
+    });
+  });
+}
+
+test('handles an unclosed JavaScript block comment at end of file', () => {
+  withFixture((goRoot) => {
+    const result = scan(goRoot);
+
+    assert.equal(result.code, 0, result.messages);
+  }, {
+    js: "import './helper.js';\n/* License: https://licenses.example.invalid/unclosed",
+  });
+});
+
 test('does not let a JavaScript regex literal hide a later remote URL', () => {
   withFixture((goRoot) => {
     const result = scan(goRoot);

@@ -76,7 +76,10 @@ executable, style, or media resources.
 
 The gate is deterministic and does not make network requests. Findings contain
 only the source path, line number, and policy class; rejected source values are
-not copied into logs. Both supported native CI runners execute the gate.
+not copied into logs. JavaScript comment masking follows nested template
+expressions and all ECMAScript line terminators; unterminated block comments are
+treated as comments through end of file. Both supported native CI runners
+execute the gate.
 
 ## Disposable-canary artifact tests
 

@@ -35,10 +35,19 @@ const telemetryMarkers = [
   /\bDD_RUM\b/,
 ];
 
+function isLineTerminator(character) {
+  return character === '\r' || character === '\n' || character === '\u2028' || character === '\u2029';
+}
+
 function lineNumber(source, index) {
   let line = 1;
   for (let cursor = 0; cursor < index; cursor += 1) {
-    if (source.charCodeAt(cursor) === 10) line += 1;
+    if (source[cursor] === '\r') {
+      line += 1;
+      if (source[cursor + 1] === '\n') cursor += 1;
+    } else if (source[cursor] === '\n' || source[cursor] === '\u2028' || source[cursor] === '\u2029') {
+      line += 1;
+    }
   }
   return line;
 }
@@ -215,15 +224,21 @@ function maskComments(source, {lineComments}) {
       continue;
     }
 
-    const commentEnd = blockComment ? '*/' : '\n';
-    while (index < source.length && !source.startsWith(commentEnd, index)) {
-      if (source[index] !== '\r' && source[index] !== '\n') masked[index] = ' ';
-      index += 1;
-    }
-    if (blockComment && index < source.length) {
-      masked[index] = ' ';
-      masked[index + 1] = ' ';
-      index += 2;
+    if (blockComment) {
+      while (index < source.length && !source.startsWith('*/', index)) {
+        if (!isLineTerminator(source[index])) masked[index] = ' ';
+        index += 1;
+      }
+      if (index < source.length) {
+        masked[index] = ' ';
+        masked[index + 1] = ' ';
+        index += 2;
+      }
+    } else {
+      while (index < source.length && !isLineTerminator(source[index])) {
+        masked[index] = ' ';
+        index += 1;
+      }
     }
   }
   return masked.join('');
