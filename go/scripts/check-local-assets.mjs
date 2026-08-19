@@ -148,12 +148,86 @@ function splitSourceSet(value) {
   return value.split(',').map((candidate) => candidate.trim().split(/\s+/, 1)[0]).filter(Boolean);
 }
 
+function maskComments(source, {lineComments}) {
+  const masked = source.split('');
+  let quote = '';
+  let escaped = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote !== '') {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === quote) quote = '';
+      continue;
+    }
+    if (character === '"' || character === "'" || character === '`') {
+      quote = character;
+      continue;
+    }
+    const blockComment = character === '/' && source[index + 1] === '*';
+    const lineComment = lineComments && character === '/' && source[index + 1] === '/';
+    if (!blockComment && !lineComment) continue;
+
+    const commentEnd = blockComment ? '*/' : '\n';
+    while (index < source.length && !source.startsWith(commentEnd, index)) {
+      if (source[index] !== '\r' && source[index] !== '\n') masked[index] = ' ';
+      index += 1;
+    }
+    if (blockComment && index < source.length) {
+      masked[index] = ' ';
+      masked[index + 1] = ' ';
+      index += 1;
+    } else {
+      index -= 1;
+    }
+  }
+  return masked.join('');
+}
+
+function decodeCSSResource(value) {
+  let decoded = '';
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== '\\') {
+      decoded += value[index];
+      continue;
+    }
+    index += 1;
+    if (index >= value.length) return null;
+    if (value[index] === '\r' && value[index + 1] === '\n') {
+      index += 1;
+      continue;
+    }
+    if (value[index] === '\r' || value[index] === '\n' || value[index] === '\f') continue;
+
+    const hexadecimal = /^[0-9a-f]{1,6}/i.exec(value.slice(index));
+    if (hexadecimal !== null) {
+      const codePoint = Number.parseInt(hexadecimal[0], 16);
+      if (codePoint === 0 || codePoint > 0x10ffff) return null;
+      decoded += String.fromCodePoint(codePoint);
+      index += hexadecimal[0].length - 1;
+      if (/[\t\r\n\f ]/.test(value[index + 1] ?? '')) index += 1;
+    } else {
+      decoded += value[index];
+    }
+  }
+  return decoded;
+}
+
 function remoteLiteralIndex(source) {
   const scheme = /\b(?:https?|ftp|wss?):\/\//i.exec(source);
   const protocolRelative = /(?:^|["'`(=\s])\/\/[A-Za-z0-9.-]+(?:[/:]|$)/m.exec(source);
   if (scheme === null) return protocolRelative?.index ?? -1;
   if (protocolRelative === null) return scheme.index;
   return Math.min(scheme.index, protocolRelative.index);
+}
+
+function validateCSSResource(value, context) {
+  const decoded = decodeCSSResource(value);
+  if (decoded === null) {
+    context.addFinding(context.sourcePath, context.index, 'unsafe-resource-path');
+    return;
+  }
+  validateResource(decoded, context);
 }
 
 function validateResource(value, {sourcePath, mode, allowDataImage, embedded, addFinding, index}) {
@@ -302,10 +376,11 @@ function scanHTML(source, sourcePath, embedded, addFinding) {
 function scanCSS(source, sourcePath, embedded, addFinding) {
   const sourceMap = /sourceMappingURL\s*=/i.exec(source);
   if (sourceMap !== null) addFinding(sourcePath, sourceMap.index, 'source-map');
+  const scannableSource = maskComments(source, {lineComments: false});
 
   const importPattern = /@import\s+(?:url\(\s*)?(?:"([^"]*)"|'([^']*)'|([^\s;)]+))/gi;
-  for (const match of source.matchAll(importPattern)) {
-    validateResource(match[1] ?? match[2] ?? match[3] ?? '', {
+  for (const match of scannableSource.matchAll(importPattern)) {
+    validateCSSResource(match[1] ?? match[2] ?? match[3] ?? '', {
       sourcePath,
       mode: 'asset',
       allowDataImage: false,
@@ -315,8 +390,8 @@ function scanCSS(source, sourcePath, embedded, addFinding) {
     });
   }
   const urlPattern = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/gi;
-  for (const match of source.matchAll(urlPattern)) {
-    validateResource((match[1] ?? match[2] ?? match[3] ?? '').trim(), {
+  for (const match of scannableSource.matchAll(urlPattern)) {
+    validateCSSResource((match[1] ?? match[2] ?? match[3] ?? '').trim(), {
       sourcePath,
       mode: 'asset',
       allowDataImage: true,
@@ -325,21 +400,22 @@ function scanCSS(source, sourcePath, embedded, addFinding) {
       index: match.index,
     });
   }
-  const remote = remoteLiteralIndex(source);
+  const remote = remoteLiteralIndex(scannableSource);
   if (remote !== -1) addFinding(sourcePath, remote, 'remote-resource');
-  scanTelemetry(source, sourcePath, addFinding);
+  scanTelemetry(scannableSource, sourcePath, addFinding);
 }
 
 function scanJavaScript(source, sourcePath, embedded, addFinding) {
   const sourceMap = /sourceMappingURL\s*=/i.exec(source);
   if (sourceMap !== null) addFinding(sourcePath, sourceMap.index, 'source-map');
+  const scannableSource = maskComments(source, {lineComments: true});
 
   const importPatterns = [
     /\b(?:import|export)\s+(?:[^'";]*?\s+from\s*)?["']([^"']+)["']/g,
     /\bimport\s*\(\s*["']([^"']+)["']/g,
   ];
   for (const pattern of importPatterns) {
-    for (const match of source.matchAll(pattern)) {
+    for (const match of scannableSource.matchAll(pattern)) {
       validateResource(match[1], {
         sourcePath,
         mode: 'asset',
@@ -350,9 +426,9 @@ function scanJavaScript(source, sourcePath, embedded, addFinding) {
       });
     }
   }
-  const remote = remoteLiteralIndex(source);
+  const remote = remoteLiteralIndex(scannableSource);
   if (remote !== -1) addFinding(sourcePath, remote, 'remote-resource');
-  scanTelemetry(source, sourcePath, addFinding);
+  scanTelemetry(scannableSource, sourcePath, addFinding);
 }
 
 export function run({

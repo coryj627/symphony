@@ -193,6 +193,34 @@ test('accepts files beneath a directory matched by an embed pattern', () => {
   });
 });
 
+test('ignores remote URLs in JavaScript and CSS comments', () => {
+  withFixture((goRoot) => {
+    const result = scan(goRoot);
+
+    assert.equal(result.code, 0, result.messages);
+  }, {
+    css: '/* License: https://licenses.example.invalid/css */\nbody { color: inherit; }\n',
+    js: "// License: https://licenses.example.invalid/javascript\nimport './helper.js';\n",
+  });
+});
+
+test('normalizes CSS escapes before validating local resources', () => {
+  withFixture((goRoot) => {
+    const result = scan(goRoot);
+
+    assert.equal(result.code, 0, result.messages);
+  }, {css: '.logo { background-image: url("./logo\\2e svg"); }\n'});
+});
+
+test('rejects a remote CSS resource whose scheme and slashes use CSS escapes', () => {
+  withFixture((goRoot) => {
+    const result = scan(goRoot);
+
+    assert.equal(result.code, 1, result.messages);
+    assert.match(result.messages, /remote-resource/);
+  }, {css: '.logo { background-image: url("https\\3a \\2f \\2f cdn.example.invalid/logo.svg"); }\n'});
+});
+
 test('rejects traversal in a local resource reference', () => {
   withFixture((goRoot) => {
     const result = scan(goRoot);
