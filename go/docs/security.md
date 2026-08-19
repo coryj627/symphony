@@ -64,6 +64,23 @@ workflow data. Production run mode always selects the contained native Codex
 launcher. The optional real-Codex CI profile is explicit, main-branch-only, and
 must use an isolated workflow path.
 
+## Packaged browser assets
+
+`npm run security:assets` checks every HTML template, CSS file, and JavaScript
+file selected by `web/embed.go`. It rejects remote or protocol-relative resource
+references, external source maps, known analytics and telemetry markers, inline
+HTML event handlers, dynamic script and style resources, unsafe resource paths,
+and local resources that are not covered by the embed manifest. Ordinary links
+to external tracker pages remain allowed because they are navigation, not
+executable, style, or media resources.
+
+The gate is deterministic and does not make network requests. Findings contain
+only the source path, line number, and policy class; rejected source values are
+not copied into logs. JavaScript comment masking follows nested template
+expressions and all ECMAScript line terminators; unterminated block comments are
+treated as comments through end of file. Both supported native CI runners
+execute the gate.
+
 ## Disposable-canary artifact tests
 
 Security-boundary tests create a cryptographically random, test-only canary and
