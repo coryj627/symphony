@@ -5,6 +5,7 @@ package security
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -21,7 +22,7 @@ func TestCanaryArtifactScannerDoesNotFollowSymbolicLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	nested := filepath.Join(root, "nested")
-	if err := os.Mkdir(nested, 0o700); err != nil {
+	if err := os.MkdirAll(nested, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(nested, "linked.txt")
@@ -30,5 +31,7 @@ func TestCanaryArtifactScannerDoesNotFollowSymbolicLinks(t *testing.T) {
 	}
 	if _, err := scanner.Scan(PathArtifact("linked artifacts", root)); err == nil {
 		t.Fatal("Scan() followed or ignored a symbolic link")
+	} else if !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("Scan() did not explicitly reject the nested symbolic link: %v", err)
 	}
 }

@@ -209,7 +209,6 @@ func (scanner *ArtifactScanner) scanPath(label, root string, state *scanState) (
 			return errors.New("entry path could not be normalized")
 		}
 		location := scanner.safeLocation(filepath.ToSlash(relative))
-		findings = append(findings, scanner.find(label, location+" path", []byte(relative))...)
 		entryInfo, infoErr := os.Lstat(path)
 		if infoErr != nil {
 			return fmt.Errorf("entry at %s could not be inspected", location)
@@ -217,6 +216,7 @@ func (scanner *ArtifactScanner) scanPath(label, root string, state *scanState) (
 		if entryInfo.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("symbolic link at %s", location)
 		}
+		findings = append(findings, scanner.find(label, location+" path", []byte(relative))...)
 		if entryInfo.IsDir() {
 			return nil
 		}
