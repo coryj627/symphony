@@ -187,6 +187,7 @@ test('main CI runs build, default Go, race, disabled profiles, and every accessi
   }
   assert.match(build, /run: npm run test:wrappers/);
   assert.match(namedStep(build, 'Verify local browser assets'), /run: npm run security:assets/);
+  assert.match(namedStep(build, 'Verify tracked source secrets'), /run: npm run security:secrets/);
   assert.match(build, /run: npm run conformance:upstream/);
   assert.match(build, /run: npm run html:validate/);
   assert.match(build, /run: npm run test:a11y/);

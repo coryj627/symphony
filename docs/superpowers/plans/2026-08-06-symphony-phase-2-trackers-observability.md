@@ -294,9 +294,10 @@ git commit -m "feat(go): read scoped Linear project issues"
 func TestLoggerRedactsSecretsInMessagesAttributesErrorsAndURLs(t *testing.T) {
     sink := &bytes.Buffer{}
     logger, redactor := testLogger(sink)
-    redactor.RegisterSecret([]byte("canary-token-123"))
-    logger.Error("failed canary-token-123", "authorization", "Bearer canary-token-123", "url", "http://127.0.0.1/?access_token=canary-token-123")
-    if strings.Contains(sink.String(), "canary-token-123") { t.Fatalf("secret leaked: %s", sink.String()) }
+    canary := "test-only-canary"
+    redactor.RegisterSecret([]byte(canary))
+    logger.Error("failed "+canary, "authorization", "Bearer "+canary, "url", "http://127.0.0.1/?access_token="+canary)
+    if strings.Contains(sink.String(), canary) { t.Fatalf("secret leaked: %s", sink.String()) }
     for _, want := range []string{"[REDACTED]", "failed", "authorization"} {
         if !strings.Contains(sink.String(), want) { t.Fatalf("missing %q", want) }
     }

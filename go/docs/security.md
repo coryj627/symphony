@@ -81,6 +81,22 @@ expressions and all ECMAScript line terminators; unterminated block comments are
 treated as comments through end of file. Both supported native CI runners
 execute the gate.
 
+## Tracked-source secret patterns
+
+`npm run security:secrets` asks Git for the complete tracked-file inventory and
+scans every Git-classified text file. It rejects private-key blocks, common live
+token formats, literal Basic or Bearer authorization values, and unapproved
+credential assignments. Git-classified binary files are counted but not read as
+text. Missing, malformed, oversized, non-UTF-8, linked, or non-regular tracked
+text entries fail closed.
+
+Intentional credential-shaped test data is approved only by repository path,
+line, rule class, and the SHA-256 digest of every complete source line touched
+by the match. A changed, moved, or removed fixture invalidates that approval.
+Findings and setup errors never include matched source, fixture digests, Git
+standard error, or file bytes. The platform-aware verifier and both supported
+native CI runners execute the gate.
+
 ## Disposable-canary artifact tests
 
 Security-boundary tests create a cryptographically random, test-only canary and
