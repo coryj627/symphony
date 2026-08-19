@@ -200,7 +200,7 @@ func (scanner *ArtifactScanner) scanPath(label, root string, state *scanState) (
 	}
 
 	findings := make([]Finding, 0)
-	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, _ os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return errors.New("entry could not be inspected")
 		}
@@ -209,16 +209,16 @@ func (scanner *ArtifactScanner) scanPath(label, root string, state *scanState) (
 			return errors.New("entry path could not be normalized")
 		}
 		location := scanner.safeLocation(filepath.ToSlash(relative))
-		findings = append(findings, scanner.find(label, location+" path", []byte(relative))...)
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symbolic link at %s", location)
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		entryInfo, infoErr := entry.Info()
+		entryInfo, infoErr := os.Lstat(path)
 		if infoErr != nil {
 			return fmt.Errorf("entry at %s could not be inspected", location)
+		}
+		if entryInfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symbolic link at %s", location)
+		}
+		findings = append(findings, scanner.find(label, location+" path", []byte(relative))...)
+		if entryInfo.IsDir() {
+			return nil
 		}
 		if !entryInfo.Mode().IsRegular() {
 			return fmt.Errorf("unsupported file at %s", location)
