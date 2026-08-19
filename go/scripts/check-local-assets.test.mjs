@@ -204,6 +204,27 @@ test('ignores remote URLs in JavaScript and CSS comments', () => {
   });
 });
 
+test('ignores comments inside JavaScript template expressions', () => {
+  withFixture((goRoot) => {
+    const result = scan(goRoot);
+
+    assert.equal(result.code, 0, result.messages);
+  }, {
+    js: "const value = `${/* License: https://licenses.example.invalid/template */ 'local'}`;\nimport './helper.js';\n",
+  });
+});
+
+test('does not let a JavaScript regex literal hide a later remote URL', () => {
+  withFixture((goRoot) => {
+    const result = scan(goRoot);
+
+    assert.equal(result.code, 1, result.messages);
+    assert.match(result.messages, /remote-resource/);
+  }, {
+    js: "const protocol = /https?:\\/\\//; fetch('https://cdn.example.invalid/app.js');\n",
+  });
+});
+
 test('normalizes CSS escapes before validating local resources', () => {
   withFixture((goRoot) => {
     const result = scan(goRoot);

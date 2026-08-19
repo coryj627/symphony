@@ -150,23 +150,70 @@ function splitSourceSet(value) {
 
 function maskComments(source, {lineComments}) {
   const masked = source.split('');
-  let quote = '';
-  let escaped = false;
-  for (let index = 0; index < source.length; index += 1) {
+  const contexts = [{type: 'code', templateExpression: false, braceDepth: 0}];
+  let index = 0;
+  const escapedAt = (position) => {
+    let backslashes = 0;
+    for (let cursor = position - 1; cursor >= 0 && source[cursor] === '\\'; cursor -= 1) {
+      backslashes += 1;
+    }
+    return backslashes % 2 === 1;
+  };
+
+  while (index < source.length) {
+    const context = contexts[contexts.length - 1];
     const character = source[index];
-    if (quote !== '') {
-      if (escaped) escaped = false;
-      else if (character === '\\') escaped = true;
-      else if (character === quote) quote = '';
+
+    if (context.type === 'string') {
+      if (context.escaped) context.escaped = false;
+      else if (character === '\\') context.escaped = true;
+      else if (character === context.quote) contexts.pop();
+      index += 1;
       continue;
     }
-    if (character === '"' || character === "'" || character === '`') {
-      quote = character;
+
+    if (context.type === 'template') {
+      if (context.escaped) context.escaped = false;
+      else if (character === '\\') context.escaped = true;
+      else if (character === '`') contexts.pop();
+      else if (character === '$' && source[index + 1] === '{') {
+        contexts.push({type: 'code', templateExpression: true, braceDepth: 1});
+        index += 2;
+        continue;
+      }
+      index += 1;
       continue;
     }
-    const blockComment = character === '/' && source[index + 1] === '*';
-    const lineComment = lineComments && character === '/' && source[index + 1] === '/';
-    if (!blockComment && !lineComment) continue;
+
+    if (context.templateExpression && character === '{') {
+      context.braceDepth += 1;
+      index += 1;
+      continue;
+    }
+    if (context.templateExpression && character === '}') {
+      context.braceDepth -= 1;
+      if (context.braceDepth === 0) contexts.pop();
+      index += 1;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      contexts.push({type: 'string', quote: character, escaped: false});
+      index += 1;
+      continue;
+    }
+    if (character === '`') {
+      contexts.push({type: 'template', escaped: false});
+      index += 1;
+      continue;
+    }
+
+    const slashCanStartComment = character === '/' && !escapedAt(index);
+    const blockComment = slashCanStartComment && source[index + 1] === '*';
+    const lineComment = lineComments && slashCanStartComment && source[index + 1] === '/';
+    if (!blockComment && !lineComment) {
+      index += 1;
+      continue;
+    }
 
     const commentEnd = blockComment ? '*/' : '\n';
     while (index < source.length && !source.startsWith(commentEnd, index)) {
@@ -176,9 +223,7 @@ function maskComments(source, {lineComments}) {
     if (blockComment && index < source.length) {
       masked[index] = ' ';
       masked[index + 1] = ' ';
-      index += 1;
-    } else {
-      index -= 1;
+      index += 2;
     }
   }
   return masked.join('');
