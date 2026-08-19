@@ -101,15 +101,29 @@ for (const fixture of [
 
 test('reports lines across supported source terminators without exposing the match', () => {
   const value = credentialFixture();
-  for (const terminator of ['\r\n', '\r', '\n', '\u2028', '\u2029']) {
+  for (const [name, terminator] of [
+    ['CRLF', '\r\n'],
+    ['lone CR', '\r'],
+    ['LF', '\n'],
+    ['U+2028', '\u2028'],
+    ['U+2029', '\u2029'],
+  ]) {
     withFixture({'go/source.txt': `safe${terminator}${value}\n`}, (repoRoot) => {
       const result = scan(repoRoot, ['go/source.txt']);
 
-      assert.equal(result.code, 1, result.messages);
-      assert.match(result.messages, /go\/source\.txt:2 \[credential-literal\]/);
-      assert.equal(result.messages.includes(value), false);
+      assert.equal(result.code, 1, `${name}: ${result.messages}`);
+      assert.match(result.messages, /go\/source\.txt:2 \[credential-literal\]/, name);
+      assert.equal(result.messages.includes(value), false, name);
     });
   }
+
+  withFixture({'go/source.txt': `safe\r\nsafe\u2028${value}\n`}, (repoRoot) => {
+    const result = scan(repoRoot, ['go/source.txt']);
+
+    assert.equal(result.code, 1, result.messages);
+    assert.match(result.messages, /go\/source\.txt:3 \[credential-literal\]/);
+    assert.equal(result.messages.includes(value), false);
+  });
 });
 
 for (const [name, value] of [
