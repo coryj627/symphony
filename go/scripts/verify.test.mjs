@@ -44,7 +44,7 @@ test('runs every deterministic gate in order on macOS including build, disabled 
   assert.notEqual(path.dirname(buildArgs[2]), '/fixture/repository');
   assert.equal(existsSync(path.dirname(buildArgs[2])), false, 'temporary build directory was not cleaned');
   assert.deepEqual(calls.map(([kind, , args]) => [kind, args]), [
-    ['exec', ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/check-upstream-trace.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/git-attributes.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']],
+    ['exec', ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/check-local-assets.test.mjs', 'scripts/check-upstream-trace.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/git-attributes.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']],
     ['exec', buildArgs],
     ['exec', ['test', './...']],
     ['exec', ['test', '-race', './...']],
@@ -52,6 +52,7 @@ test('runs every deterministic gate in order on macOS including build, disabled 
     ['capture', ['test', '-v', '-tags=integration_live', '-count=1', '-timeout=2m', './internal/tracker/github']],
     ['capture', ['test', '-v', '-tags=integration_live', '-count=1', '-timeout=2m', './internal/tracker/linear']],
     ['exec', ['ci']],
+    ['exec', ['run', 'security:assets']],
     ['exec', ['run', 'conformance:upstream']],
     ['exec', ['run', 'html:validate']],
     ['exec', ['run', 'test:a11y']],
