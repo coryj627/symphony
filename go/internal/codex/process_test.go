@@ -297,7 +297,8 @@ func TestCodexProcessHelper(t *testing.T) {
 		return
 	}
 	if role == "leaf" {
-		select {}
+		waitForCodexProcessHelperTermination()
+		return
 	}
 	if role == "environment" {
 		var report strings.Builder
@@ -327,7 +328,13 @@ func TestCodexProcessHelper(t *testing.T) {
 	if err := os.WriteFile(pidFile, []byte(value), 0o600); err != nil {
 		os.Exit(4)
 	}
-	select {}
+	waitForCodexProcessHelperTermination()
+}
+
+// A case-free select lets the Go runtime's deadlock detector terminate the
+// helper. A bounded timer keeps it alive for the test without orphaning it.
+func waitForCodexProcessHelperTermination() {
+	time.Sleep(time.Minute)
 }
 
 type recordingWriteCloser struct{ closes atomic.Int32 }
