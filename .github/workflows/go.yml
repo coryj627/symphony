@@ -120,6 +120,9 @@ jobs:
       - name: Verify local browser assets
         run: npm run security:assets
 
+      - name: Verify tracked source secrets
+        run: npm run security:secrets
+
       - name: Verify upstream conformance traceability
         run: npm run conformance:upstream
 

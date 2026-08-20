@@ -99,7 +99,7 @@ export function run({
 
   const npm = platform === 'win32' ? 'npm.cmd' : 'npm';
   const commands = [
-    {command: process.execPath, args: ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/check-local-assets.test.mjs', 'scripts/check-upstream-trace.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/git-attributes.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']},
+    {command: process.execPath, args: ['--test', 'scripts/a11y-precommit.test.mjs', 'scripts/a11y-scan-all.test.mjs', 'scripts/check-local-assets.test.mjs', 'scripts/check-secret-patterns.test.mjs', 'scripts/check-upstream-trace.test.mjs', 'scripts/ci-structure.test.mjs', 'scripts/git-attributes.test.mjs', 'scripts/go-tool.test.mjs', 'scripts/verify.test.mjs']},
     {command: selectedGo.command, args: [...selectedGo.prefix, 'build', '-o', buildOutput, './cmd/symphony']},
     {command: selectedGo.command, args: [...selectedGo.prefix, 'test', './...']},
     ...(platform === 'darwin'
@@ -120,6 +120,7 @@ export function run({
     },
     {command: npm, args: ['ci']},
     {command: npm, args: ['run', 'security:assets']},
+    {command: npm, args: ['run', 'security:secrets']},
     {command: npm, args: ['run', 'conformance:upstream']},
     {command: npm, args: ['run', 'html:validate']},
     {command: npm, args: ['run', 'test:a11y']},
