@@ -7,13 +7,26 @@ import {fileURLToPath} from 'node:url';
 const thisFile = fileURLToPath(import.meta.url);
 const defaultRepoRoot = path.resolve(path.dirname(thisFile), '..');
 
-function scannerExec(command, args, options) {
-  const result = spawnSync(command, args, {...options, stdio: 'inherit'});
+export function scannerExec(command, args, {
+  error,
+  platform = process.platform,
+  spawn = spawnSync,
+  ...options
+}) {
+  const executable = platform === 'win32' ? options.env?.ComSpec || 'cmd.exe' : command;
+  const executableArgs = platform === 'win32'
+    ? ['/d', '/s', '/c', command, ...args]
+    : args;
+  const result = spawn(executable, executableArgs, {...options, stdio: 'inherit'});
   if (result.error) {
-    options.error(`accessibility scan could not start: ${result.error.message}`);
+    error(`accessibility scan could not start: ${result.error.message}`);
     return 2;
   }
   return result.status ?? 2;
+}
+
+function scannerCommand(platform) {
+  return platform === 'win32' ? 'a11y-check-web.cmd' : 'a11y-check-web';
 }
 
 function missing(error) {
@@ -90,6 +103,7 @@ export function run({
   repoRoot = defaultRepoRoot,
   exec = scannerExec,
   fs = realFS,
+  platform = process.platform,
   error = console.error,
 } = {}) {
   const goRoot = path.resolve(repoRoot);
@@ -105,11 +119,12 @@ export function run({
   let code;
   try {
     code = exec(
-      'a11y-check-web',
+      scannerCommand(platform),
       ['scan', '--repo-root', goRoot, '--no-update-baseline', '--format', 'text'],
       {
         cwd: goRoot,
         env: {...process.env, A11Y_ALLOWED_ROOTS: goRoot},
+        platform,
         error,
       },
     );

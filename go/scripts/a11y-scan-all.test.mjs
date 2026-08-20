@@ -14,7 +14,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import {run} from './a11y-scan-all.mjs';
+import {run, scannerExec} from './a11y-scan-all.mjs';
 
 function withRepo(fn, {baseline = true} = {}) {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'symphony-a11y-scan-'));
@@ -37,6 +37,7 @@ test('uses the canonical Go root, exact authorization root, and review-only scan
     const calls = [];
     const code = run({
       repoRoot: path.join(repoRoot, '.'),
+      platform: 'darwin',
       exec: (command, args, options) => {
         calls.push([command, args, options]);
         return 0;
@@ -45,6 +46,7 @@ test('uses the canonical Go root, exact authorization root, and review-only scan
 
     assert.equal(code, 0);
     assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], 'a11y-check-web');
     assert.deepEqual(calls[0][1], [
       'scan',
       '--repo-root',
@@ -55,6 +57,89 @@ test('uses the canonical Go root, exact authorization root, and review-only scan
     ]);
     assert.equal(calls[0][2].cwd, repoRoot);
     assert.equal(calls[0][2].env.A11Y_ALLOWED_ROOTS, repoRoot);
+  });
+});
+
+test('selects the Windows npm command shim without changing scan arguments', () => {
+  withRepo(({repoRoot}) => {
+    const calls = [];
+    const code = run({
+      repoRoot,
+      platform: 'win32',
+      exec: (command, args, options) => {
+        calls.push([command, args, options]);
+        return 0;
+      },
+    });
+
+    assert.equal(code, 0);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], 'a11y-check-web.cmd');
+    assert.deepEqual(calls[0][1], [
+      'scan',
+      '--repo-root',
+      repoRoot,
+      '--no-update-baseline',
+      '--format',
+      'text',
+    ]);
+    assert.equal(calls[0][2].cwd, repoRoot);
+    assert.equal(calls[0][2].env.A11Y_ALLOWED_ROOTS, repoRoot);
+  });
+});
+
+test('launches the Windows npm command shim through cmd.exe without shell mode', () => {
+  const calls = [];
+  const comSpec = 'C:\\Windows\\System32\\cmd.exe';
+  const code = scannerExec('a11y-check-web.cmd', ['scan', '--format', 'text'], {
+    cwd: 'C:\\repo\\go',
+    env: {ComSpec: comSpec},
+    platform: 'win32',
+    spawn: (command, args, options) => {
+      calls.push([command, args, options]);
+      return {status: 0};
+    },
+    error: () => {},
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(calls, [[
+    comSpec,
+    ['/d', '/s', '/c', 'a11y-check-web.cmd', 'scan', '--format', 'text'],
+    {
+      cwd: 'C:\\repo\\go',
+      env: {ComSpec: comSpec},
+      stdio: 'inherit',
+    },
+  ]]);
+  assert.equal('shell' in calls[0][2], false);
+});
+
+test('executes a Windows npm command shim end to end', {skip: process.platform !== 'win32'}, () => {
+  withRepo(({repoRoot}) => {
+    const shimPath = path.join(repoRoot, 'a11y-check-web.cmd');
+    writeFileSync(shimPath, [
+      '@echo off',
+      'if not "%~1"=="scan" exit /b 91',
+      'if not "%~2"=="--format" exit /b 92',
+      'if not "%~3"=="text" exit /b 93',
+      'exit /b 7',
+      '',
+    ].join('\r\n'));
+    const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') || 'Path';
+    const errors = [];
+    const code = scannerExec('a11y-check-web.cmd', ['scan', '--format', 'text'], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        [pathKey]: `${repoRoot}${path.delimiter}${process.env[pathKey] || ''}`,
+      },
+      platform: 'win32',
+      error: (message) => errors.push(message),
+    });
+
+    assert.equal(code, 7, errors.join('\n'));
+    assert.deepEqual(errors, []);
   });
 });
 
