@@ -46,18 +46,31 @@ func TestProcessStopTerminatesWindowsDescendantsAndNotUnrelatedProcess(t *testin
 	pids := waitForWindowsPIDFile(t, pidFile)
 	unrelated := exec.Command(os.Args[0], "-test.run=^TestCodexProcessHelper$")
 	unrelated.Env = replaceEnvironmentValue(os.Environ(), "SYMPHONY_CODEX_PROCESS_HELPER", "leaf")
+	var unrelatedStderr strings.Builder
+	unrelated.Stderr = &unrelatedStderr
 	if err := unrelated.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = unrelated.Process.Kill(); _, _ = unrelated.Process.Wait() })
+	var unrelatedWaitErr error
+	unrelatedDone := make(chan struct{})
+	go func() {
+		unrelatedWaitErr = unrelated.Wait()
+		close(unrelatedDone)
+	}()
+	t.Cleanup(func() {
+		_ = unrelated.Process.Kill()
+		<-unrelatedDone
+	})
 	if err := process.Stop(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	for _, pid := range pids {
 		waitForWindowsProcessExit(t, pid)
 	}
-	if !windowsProcessAlive(unrelated.Process.Pid) {
-		t.Fatal("unrelated process was terminated")
+	select {
+	case <-unrelatedDone:
+		t.Fatalf("unrelated process exited: %v; stderr=%q", unrelatedWaitErr, unrelatedStderr.String())
+	default:
 	}
 }
 
