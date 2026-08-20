@@ -125,7 +125,6 @@ func (session *Session) StartTurn(ctx context.Context, text string) (TurnResult,
 	active.readyOnce.Do(func() { close(active.ready) })
 	earlyCompletion := cloneRaw(active.earlyCompletion)
 	earlyError := active.earlyError
-	active.earlyCompletion = nil
 	active.earlyError = nil
 	session.mu.Unlock()
 	session.emit(SessionEvent{
@@ -134,6 +133,7 @@ func (session *Session) StartTurn(ctx context.Context, text string) (TurnResult,
 	})
 	if len(earlyCompletion) > 0 {
 		session.handleTurnCompleted(earlyCompletion)
+		session.finishEarlyCompletion(active)
 	}
 	if earlyError != nil {
 		session.failActive(earlyError)
@@ -346,9 +346,28 @@ func (session *Session) failActive(err error) {
 		session.mu.Unlock()
 		return
 	}
+	if active != nil && len(active.earlyCompletion) > 0 {
+		if active.earlyError == nil {
+			active.earlyError = err
+		}
+		session.mu.Unlock()
+		return
+	}
 	session.mu.Unlock()
 	if active != nil {
 		active.once.Do(func() { active.done <- turnOutcome{err: err} })
+	}
+}
+
+// finishEarlyCompletion releases a transport error deferred during the provisional handoff.
+func (session *Session) finishEarlyCompletion(active *activeTurn) {
+	session.mu.Lock()
+	active.earlyCompletion = nil
+	deferredError := active.earlyError
+	active.earlyError = nil
+	session.mu.Unlock()
+	if deferredError != nil {
+		session.failActive(deferredError)
 	}
 }
 
