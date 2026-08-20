@@ -150,10 +150,12 @@ func TestChildEnvironmentIsSanitizedInSpawnedProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = process.Stop(context.Background()) })
-	waitContext, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	// Cold Windows runners can spend several seconds starting Git Bash and the
+	// freshly built test binary while the other Go packages run in parallel.
+	waitContext, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	if err := process.Wait(waitContext); err != nil {
-		t.Fatal(err)
+		t.Fatalf("wait for sanitized child environment: %v; diagnostic=%q", err, process.Diagnostic())
 	}
 	raw, err := os.ReadFile(report)
 	if err != nil {
