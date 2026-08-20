@@ -332,11 +332,9 @@ func TestCodexProcessHelper(t *testing.T) {
 }
 
 // A case-free select lets the Go runtime's deadlock detector terminate the
-// helper. Keeping a timer pending blocks until the process test stops it.
+// helper. A bounded timer keeps it alive for the test without orphaning it.
 func waitForCodexProcessHelperTermination() {
-	for {
-		time.Sleep(time.Hour)
-	}
+	time.Sleep(time.Minute)
 }
 
 type recordingWriteCloser struct{ closes atomic.Int32 }
