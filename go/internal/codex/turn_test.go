@@ -385,6 +385,68 @@ func TestTurnFinalCompletionBeforeEOFWinsOverTransportExit(t *testing.T) {
 	}
 }
 
+func TestTurnEarlyCompletionHandoffWinsOverTransportExit(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		completionTurnID string
+		wantErrorCode    string
+	}{
+		{name: "matching completion", completionTurnID: "turn-1"},
+		{name: "mismatched completion", completionTurnID: "turn-other", wantErrorCode: ProtocolErrorTransportClosed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			turnStarted := make(chan struct{})
+			releaseTurnStarted := make(chan struct{})
+			released := false
+			t.Cleanup(func() {
+				if !released {
+					close(releaseTurnStarted)
+				}
+			})
+			session, transport := startTestSession(t, func(event SessionEvent) {
+				if event.Type == SessionEventTurnStarted {
+					close(turnStarted)
+					<-releaseTurnStarted
+				}
+			})
+			result := startTurn(t.Context(), session, "work")
+			turnStart := transport.readRequest(t)
+			completion, err := json.Marshal(turnCompletedMessage("thread-1", test.completionTurnID, "completed")["params"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			session.handleTurnCompleted(completion)
+			respondTurnStarted(t, transport, turnStart, "turn-1")
+			select {
+			case <-turnStarted:
+			case <-time.After(time.Second):
+				t.Fatal("turn/start did not reach the provisional outcome handoff")
+			}
+			if err := transport.serverOutput.Close(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-session.pumpDone:
+			case <-time.After(time.Second):
+				t.Fatal("transport exit did not reach the session pump")
+			}
+			close(releaseTurnStarted)
+			released = true
+			got := <-result
+			if test.wantErrorCode != "" {
+				var protocolError *ProtocolError
+				if !errors.As(got.err, &protocolError) || protocolError.Code != test.wantErrorCode {
+					t.Fatalf("result=%+v err=%v", got.result, got.err)
+				}
+				return
+			}
+			if got.err != nil || got.result.Status != TurnCompleted {
+				t.Fatalf("result=%+v err=%v", got.result, got.err)
+			}
+		})
+	}
+}
+
 type turnCallResult struct {
 	result TurnResult
 	err    error
