@@ -14,13 +14,13 @@ for the evidence boundary.
 
 - Go 1.26.5
 - Node.js 24.18.0
-- Codex CLI 0.144.1 for run mode
+- Codex CLI 0.144.1 or newer for run mode
 - Bash (`/bin/bash` on macOS; a native Git for Windows Bash on Windows)
 - A local Chrome-compatible browser for ordinary use
 
 The pinned Go and Node.js versions are declared in [`mise.toml`](mise.toml);
-the reviewed Codex version is enforced by the embedded protocol manifest and
-the runtime compatibility preflight.
+the embedded Codex protocol snapshot defines the minimum supported CLI version.
+Newer CLIs are accepted, with protocol validation during preflight and each run.
 
 ## CLI contract
 
@@ -132,8 +132,8 @@ Outbound network access remains necessary for the selected tracker:
 - GitHub mode makes HTTPS requests to the configured GitHub API endpoint.
 - Linear mode makes HTTPS requests to the configured Linear GraphQL endpoint.
 
-Run mode launches the configured local Codex app-server after an exact-version
-compatibility preflight. Codex may require outbound OpenAI service access under
+Run mode launches the configured local Codex app-server after a minimum-version
+and initialization preflight. Codex may require outbound OpenAI service access under
 the operator's local Codex configuration. Symphony does not expose the local UI
 or app-server transport as a remote network service.
 

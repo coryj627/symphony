@@ -31,7 +31,7 @@ func TestRealCodexAppServerSmoke(t *testing.T) {
 	}
 	if command == "codex app-server" {
 		if _, err := exec.LookPath("codex"); err != nil {
-			t.Fatalf("reviewed Codex CLI is unavailable: %v", err)
+			t.Fatalf("Codex CLI is unavailable: %v", err)
 		}
 	}
 	root := t.TempDir()

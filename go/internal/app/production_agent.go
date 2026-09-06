@@ -119,8 +119,10 @@ func codexPreflightError(err error) error {
 		switch protocolErr.Code {
 		case string(codex.CompatibilityCodeSchemaIntegrity):
 			return &AgentPrerequisiteError{Code: "codex_schema_invalid", Message: "The bundled Codex app-server schema failed its integrity check."}
-		case string(codex.CompatibilityCodeVersionMismatch), string(codex.CompatibilityCodeUnknownUserAgent):
-			return &AgentPrerequisiteError{Code: "codex_version_incompatible", Message: "The installed Codex CLI does not match the reviewed app-server version."}
+		case string(codex.CompatibilityCodeVersionMismatch):
+			return &AgentPrerequisiteError{Code: "codex_version_incompatible", Message: "Symphony requires Codex CLI " + buildinfo.CodexVersion + " or newer."}
+		case string(codex.CompatibilityCodeUnknownUserAgent):
+			return &AgentPrerequisiteError{Code: "codex_version_incompatible", Message: "The Codex CLI did not report a recognized semantic version. Update or reinstall Codex."}
 		}
 	}
 	return &AgentPrerequisiteError{Code: "codex_preflight_failed", Message: "The Codex app-server could not complete its compatibility preflight. Review the local redacted diagnostics."}

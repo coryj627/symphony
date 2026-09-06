@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -72,10 +73,52 @@ func TestSessionRejectsIncompatibleInitializeBeforeInitializedNotification(t *te
 	go func() { result <- session.Initialize(t.Context()) }()
 	initialize := transport.readRequest(t)
 	respondResult(t, transport, initialize, map[string]any{
-		"userAgent": "codex_cli_rs/0.145.0", "codexHome": options.Workspace, "platformFamily": "unix", "platformOs": "macos",
+		"userAgent": "codex_cli_rs/0.144.0", "codexHome": options.Workspace, "platformFamily": "unix", "platformOs": "macos",
 	})
 	if err := <-result; err == nil {
 		t.Fatal("incompatible app-server was accepted")
+	}
+}
+
+func TestSessionNewerServerToleratesAdditiveMessagesAndCompletesTurn(t *testing.T) {
+	router, transport := newPipeTransport(t, RouterOptions{})
+	options := testSessionOptions(t)
+	session := NewSession(router, options)
+	started := make(chan error, 1)
+	go func() {
+		_, err := session.Start(t.Context())
+		started <- err
+	}()
+	initialize := transport.readRequest(t)
+	respondResult(t, transport, initialize, map[string]any{
+		"userAgent": "Codex Desktop/0.153.4 (test host)", "codexHome": options.Workspace,
+		"platformFamily": "unix", "platformOs": "macos", "futureCapability": true,
+	})
+	if initialized := transport.readRequest(t); methodOf(t, initialized) != "initialized" {
+		t.Fatalf("expected initialized, got %s", initialized["method"])
+	}
+	threadStart := transport.readRequest(t)
+	if methodOf(t, threadStart) != "thread/start" {
+		t.Fatalf("expected thread/start, got %s", threadStart["method"])
+	}
+	respondThreadStarted(t, transport, threadStart, options.Workspace, "thread-1")
+	if err := <-started; err != nil {
+		t.Fatal(err)
+	}
+
+	turn := startTurn(t.Context(), session, "Do the work")
+	turnStart := transport.readRequest(t)
+	if methodOf(t, turnStart) != "turn/start" {
+		t.Fatalf("expected turn/start, got %s", turnStart["method"])
+	}
+	respondTurnStarted(t, transport, turnStart, "turn-1")
+	transport.sendJSON(t, map[string]any{"method": "future/notification", "params": map[string]any{"newField": true}})
+	completed := turnCompletedMessage("thread-1", "turn-1", "completed")
+	completed["params"].(map[string]any)["futureField"] = true
+	transport.sendJSON(t, completed)
+	got := <-turn
+	if got.err != nil || got.result.Status != TurnCompleted || got.result.SessionID != "thread-1-turn-1" {
+		t.Fatalf("result=%+v err=%v", got.result, got.err)
 	}
 }
 
@@ -85,19 +128,15 @@ func TestSessionRejectsIncompleteInitializeResponse(t *testing.T) {
 	result := make(chan error, 1)
 	go func() { result <- session.Initialize(t.Context()) }()
 	initialize := transport.readRequest(t)
-	respondResult(t, transport, initialize, map[string]any{"userAgent": "codex_cli_rs/0.144.1"})
+	respondResult(t, transport, initialize, map[string]any{"userAgent": "codex_cli_rs/0.153.4"})
 	select {
 	case err := <-result:
-		if err == nil {
-			t.Fatal("incomplete initialize response was accepted")
+		var protocolErr *ProtocolError
+		if !errors.As(err, &protocolErr) || protocolErr.Code != ProtocolErrorMalformedMessage {
+			t.Fatalf("incomplete newer-server response must fail protocol validation, got %v", err)
 		}
-	case <-time.After(20 * time.Millisecond):
-		if initialized := transport.readRequest(t); methodOf(t, initialized) != "initialized" {
-			t.Fatalf("%s", initialized["method"])
-		}
-		if err := <-result; err == nil {
-			t.Fatal("incomplete initialize response was accepted")
-		}
+	case <-time.After(time.Second):
+		t.Fatal("incomplete initialize response was not rejected")
 	}
 }
 

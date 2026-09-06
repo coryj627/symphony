@@ -41,7 +41,7 @@ for (const state of [
   {
     name: 'incompatible app-server',
     path: scenarioPath('/', 'codex-incompatible'),
-    text: 'The installed Codex CLI does not match the reviewed app-server version.',
+    text: 'Symphony requires Codex CLI 0.144.1 or newer.',
   },
   {
     name: 'provider tool failure',
@@ -69,7 +69,7 @@ const codexPresentationStates = [
   },
   {
     path: scenarioPath('/', 'codex-incompatible'),
-    text: 'The installed Codex CLI does not match the reviewed app-server version.',
+    text: 'Symphony requires Codex CLI 0.144.1 or newer.',
   },
   {
     path: scenarioPath('/issues/CODEX-TOOL-1', 'codex-tool-failure'),
