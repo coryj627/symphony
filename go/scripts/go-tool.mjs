@@ -3,7 +3,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const thisFile = fileURLToPath(import.meta.url);
-const requiredGoVersion = '1.26.5';
+const requiredGoVersion = '1.26.6';
 const requiredNodeVersion = 'v24.18.0';
 
 function defaultProbe(command, args) {
@@ -48,11 +48,11 @@ export function runGo(args, {
   }
   const selected = selection ?? selectGoCommand();
   if (selected === null) {
-    error('Go 1.26.5 is unavailable through both PATH and the repository mise toolchain.');
+    error('Go 1.26.6 is unavailable through both PATH and the repository mise toolchain.');
     return 2;
   }
   if (selected.version !== requiredGoVersion) {
-    error(`Go 1.26.5 is required; selected ${selected.version ?? 'an unknown version'}.`);
+    error(`Go 1.26.6 is required; selected ${selected.version ?? 'an unknown version'}.`);
     return 2;
   }
   const result = spawn(selected.command, [...selected.prefix, ...args], {

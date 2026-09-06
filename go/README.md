@@ -12,7 +12,7 @@ for the evidence boundary.
 
 ## Prerequisites
 
-- Go 1.26.5
+- Go 1.26.6
 - Node.js 24.18.0
 - Codex CLI 0.144.1 or newer for run mode
 - Bash (`/bin/bash` on macOS; a native Git for Windows Bash on Windows)

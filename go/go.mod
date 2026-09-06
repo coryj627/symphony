@@ -2,7 +2,7 @@ module github.com/coryj627/symphony/go
 
 go 1.26.0
 
-toolchain go1.26.5
+toolchain go1.26.6
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1

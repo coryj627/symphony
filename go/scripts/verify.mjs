@@ -9,7 +9,7 @@ import {selectGoCommand} from './go-tool.mjs';
 const thisFile = fileURLToPath(import.meta.url);
 const defaultRepoRoot = path.resolve(path.dirname(thisFile), '..');
 const requiredNodeVersion = 'v24.18.0';
-const requiredGoVersion = '1.26.5';
+const requiredGoVersion = '1.26.6';
 
 function commandExec(command, args, options) {
   const result = spawnSync(command, args, {...options, stdio: 'inherit'});
@@ -80,11 +80,11 @@ export function run({
 
   const selectedGo = goTool ?? selectGoCommand();
   if (selectedGo === null) {
-    error('Go 1.26.5 is unavailable through both PATH and the repository mise toolchain.');
+    error('Go 1.26.6 is unavailable through both PATH and the repository mise toolchain.');
     return 2;
   }
   if (selectedGo.version !== requiredGoVersion) {
-    error(`Go 1.26.5 is required; selected ${selectedGo.version ?? 'an unknown version'}.`);
+    error(`Go 1.26.6 is required; selected ${selectedGo.version ?? 'an unknown version'}.`);
     return 2;
   }
 
