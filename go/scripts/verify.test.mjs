@@ -20,7 +20,7 @@ function successfulCapture(command, args, options) {
   };
 }
 
-test('runs every deterministic gate in order on macOS including build, disabled profiles, and race', () => {
+test('runs every gate in order on macOS including vulnerabilities, disabled profiles, and race', () => {
   const calls = [];
   const code = run({
     platform: 'darwin',
@@ -49,6 +49,7 @@ test('runs every deterministic gate in order on macOS including build, disabled 
     ['exec', ['test', './...']],
     ['exec', ['test', '-race', './...']],
     ['exec', ['vet', './...']],
+    ['exec', ['tool', 'govulncheck', '-show=version', '-db=https://vuln.go.dev', './...']],
     ['capture', ['test', '-v', '-tags=integration_live', '-count=1', '-timeout=2m', './internal/tracker/github']],
     ['capture', ['test', '-v', '-tags=integration_live', '-count=1', '-timeout=2m', './internal/tracker/linear']],
     ['exec', ['ci']],
@@ -61,7 +62,7 @@ test('runs every deterministic gate in order on macOS including build, disabled 
   ]);
 });
 
-test('runs deterministic gates on Windows without claiming race support', () => {
+test('runs verification gates on Windows without claiming race support', () => {
   const calls = [];
   const code = run({
     platform: 'win32',
@@ -81,7 +82,34 @@ test('runs deterministic gates on Windows without claiming race support', () => 
   assert.equal(calls.some(([, , args]) => args.includes('-race')), false);
   assert.equal(calls.some(([, , args]) => args[0] === 'build' && args[1] === '-o' && args.at(-1) === './cmd/symphony'), true);
   assert.equal(calls.filter(([kind]) => kind === 'capture').length, 2);
+  assert.ok(calls.some(([, command, args]) => command === 'go' && args.join(' ') === 'tool govulncheck -show=version -db=https://vuln.go.dev ./...'));
 });
+
+for (const platform of ['darwin', 'win32']) {
+  for (const status of [1, 2, 3]) {
+    test(`${platform} stops verification when govulncheck exits ${status}`, () => {
+      const calls = [];
+      let captured = false;
+      const code = run({
+        platform,
+        nodeVersion: 'v24.18.0',
+        goTool: {command: 'go', prefix: [], version: '1.26.6'},
+        exec: (command, args) => {
+          calls.push(args);
+          return args.includes('govulncheck') ? status : 0;
+        },
+        capture: (command, args, options) => {
+          captured = true;
+          return successfulCapture(command, args, options);
+        },
+      });
+
+      assert.equal(code, status, 'scanner findings and infrastructure failures must remain failures');
+      assert.equal(captured, false, 'later gates must not run after a failed scan');
+      assert.deepEqual(calls.at(-1), ['tool', 'govulncheck', '-show=version', '-db=https://vuln.go.dev', './...']);
+    });
+  }
+}
 
 test('disabled profile gates remove every live variable from their child environment', () => {
   const inherited = {
@@ -152,7 +180,7 @@ test('fails closed when a disabled provider exits zero without its exact SKIP se
   });
 
   assert.equal(code, 2);
-  assert.equal(ordinaryCalls, 5);
+  assert.equal(ordinaryCalls, 6);
   assert.match(errors.join('\n'), /GitHub.*SKIPPED: GitHub live profile not enabled/i);
 });
 
@@ -176,7 +204,7 @@ test('propagates a disabled provider test failure before later gates', () => {
 
   assert.equal(code, 7);
   assert.equal(captures, 1);
-  assert.equal(ordinaryCalls, 5);
+  assert.equal(ordinaryCalls, 6);
 });
 
 test('fails closed on unsupported operating systems', () => {
@@ -232,6 +260,7 @@ test('runs Go gates through the pinned mise fallback when ambient Go is absent',
   assert.equal(calls[1][1].at(-1), './cmd/symphony');
   assert.deepEqual(calls[2], ['mise', ['exec', '--', 'go', 'test', './...']]);
   assert.deepEqual(calls[3], ['mise', ['exec', '--', 'go', 'vet', './...']]);
+  assert.deepEqual(calls[4], ['mise', ['exec', '--', 'go', 'tool', 'govulncheck', '-show=version', '-db=https://vuln.go.dev', './...']]);
 });
 
 for (const nodeVersion of ['v24.17.0', 'v24.18.1', '24.18.0', 'malformed']) {

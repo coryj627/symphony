@@ -106,6 +106,7 @@ export function run({
       ? [{command: selectedGo.command, args: [...selectedGo.prefix, 'test', '-race', './...']}]
       : []),
     {command: selectedGo.command, args: [...selectedGo.prefix, 'vet', './...']},
+    {command: selectedGo.command, args: [...selectedGo.prefix, 'tool', 'govulncheck', '-show=version', '-db=https://vuln.go.dev', './...']},
     {
       command: selectedGo.command,
       args: [...selectedGo.prefix, 'test', '-v', '-tags=integration_live', '-count=1', '-timeout=2m', './internal/tracker/github'],

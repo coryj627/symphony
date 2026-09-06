@@ -27,7 +27,7 @@
 
 **Files:**
 - Create: `go/tests/conformance/upstream-requirements.json`
-- Create: `go/tests/conformance/upstream_schema.go`
+- Create: `go/tests/conformance/upstream_schema_test.go`
 - Create: `go/tests/conformance/upstream_manifest_test.go`
 - Create: `go/tests/conformance/spec_pin_test.go`
 - Create: `go/tests/conformance/evidence_names_test.go`

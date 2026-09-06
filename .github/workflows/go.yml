@@ -50,6 +50,9 @@ jobs:
       - name: Vet Go
         run: go vet ./...
 
+      - name: Check Go vulnerabilities
+        run: go tool govulncheck -show=version -db=https://vuln.go.dev ./...
+
       - name: Test Go with the race detector
         if: runner.os == 'macOS'
         run: go test -race ./...

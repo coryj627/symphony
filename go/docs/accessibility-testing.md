@@ -43,9 +43,12 @@ Then run the complete platform-aware verification entry point from `go/`:
 npm run verify
 ```
 
-It runs wrapper tests, the Go build, Go tests and vet, macOS race tests,
-disabled live-provider profile checks, a clean npm install, HTML validation,
-Chromium and WebKit accessibility tests, and the deterministic source scan.
+It runs wrapper tests, the Go build, Go tests and vet, macOS race tests, Go
+vulnerability scanning, disabled live-provider profile checks, a clean npm
+install, HTML validation, Chromium and WebKit accessibility tests, and the
+deterministic source scan.
+The [vulnerability gate](security.md#go-vulnerability-scanning) needs the official
+Go vulnerability database and fails verification if the scan cannot complete.
 Windows executes the concurrency tests in `go test ./...`; the Go race detector
 is required only on macOS. The launcher rejects any Node version other than
 `24.18.0` and any Go version other than `1.26.6`; an executable with the wrong

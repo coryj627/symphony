@@ -104,6 +104,39 @@ and update only that exact allowlist entry. Do not exclude a fixture directory
 or weaken a rule to clear a finding. Remove obsolete entries; the gate rejects
 them as stale.
 
+## Go vulnerability scanning
+
+The Go module records `golang.org/x/vuln/cmd/govulncheck` as a tool dependency
+at version `v1.6.0`. From `go/`, run the scan with the pinned Go toolchain:
+
+```bash
+go tool govulncheck -show=version -db=https://vuln.go.dev ./...
+```
+
+`npm run security:vulns` runs the same command through the repository's Go
+toolchain selector. The full `npm run verify` gate and both macOS and Windows
+CI runners also execute it. The command prints the Go version, scanner version,
+and database metadata alongside its result. No global scanner installation is
+required.
+
+The scan checks the default production build for the current platform against
+the official Go vulnerability database. It uses the default symbol-level
+analysis and text output, which fails on vulnerabilities in reachable code.
+Dependencies with known vulnerabilities outside the analyzed call graph may be
+reported without failing the scan. Test files and optional build tags are not
+included. The two native CI runs cover their respective platform build paths;
+a local scan supplies evidence only for its selected build configuration.
+
+Any nonzero scanner exit stops verification. Database, network, tool download,
+or package-loading failures mean the scan did not complete and must be handled
+as infrastructure errors, never as a clean result. Restore the prerequisite and
+rerun; do not suppress failures or switch the gate to JSON, SARIF, or OpenVEX
+output, which can exit successfully despite findings. Results depend on the
+database at scan time and static analysis has limitations, so a passing scan is
+not proof that the application has no vulnerabilities. See the
+[govulncheck documentation](https://github.com/golang/vuln/blob/v1.6.0/cmd/govulncheck/doc.go)
+for its exit behavior and analysis limits.
+
 ## Disposable-canary artifact tests
 
 Security-boundary tests create a cryptographically random, test-only canary and
