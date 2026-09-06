@@ -132,7 +132,8 @@ func TestRuntimeCodexPreflightErrorsExposeStablePrerequisiteMessages(t *testing.
 		message string
 	}{
 		{name: "bash", err: codex.ErrBashUnavailable, code: "bash_unavailable", message: "Bash"},
-		{name: "version", err: &codex.ProtocolError{Code: string(codex.CompatibilityCodeVersionMismatch)}, code: "codex_version_incompatible", message: "reviewed"},
+		{name: "version", err: &codex.ProtocolError{Code: string(codex.CompatibilityCodeVersionMismatch)}, code: "codex_version_incompatible", message: "0.144.1 or newer"},
+		{name: "unknown version", err: &codex.ProtocolError{Code: string(codex.CompatibilityCodeUnknownUserAgent)}, code: "codex_version_incompatible", message: "recognized semantic version"},
 		{name: "schema", err: &codex.ProtocolError{Code: string(codex.CompatibilityCodeSchemaIntegrity)}, code: "codex_schema_invalid", message: "schema"},
 		{name: "startup", err: errors.New("process canary"), code: "codex_preflight_failed", message: "diagnostics"},
 	}

@@ -697,7 +697,7 @@ func newE2EPageFixture(scenario string) (*e2ePageRuntime, *e2eLogQueries) {
 		detail.Running = &run
 		runtime.details[stopping.Identifier] = detail
 	case "codex-incompatible":
-		runtime.snapshot.Scheduler = domain.SchedulerStatus{Available: false, State: "unavailable", Message: "The installed Codex CLI does not match the reviewed app-server version."}
+		runtime.snapshot.Scheduler = domain.SchedulerStatus{Available: false, State: "unavailable", Message: "Symphony requires Codex CLI 0.144.1 or newer."}
 	case "codex-tool-failure":
 		failed := populated
 		failed.ID, failed.Identifier, failed.Title = "codex-tool-one", "CODEX-TOOL-1", "Codex provider tool failure"

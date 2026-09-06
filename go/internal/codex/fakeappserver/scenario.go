@@ -197,7 +197,7 @@ func (server *fixtureServer) handle(message fixtureEnvelope, rawOutput io.Writer
 		}
 		version := "0.144.1"
 		if server.scenario == "incompatible" {
-			version = "0.145.0"
+			version = "0.144.0"
 		}
 		codexHome, err := os.Getwd()
 		if err != nil {

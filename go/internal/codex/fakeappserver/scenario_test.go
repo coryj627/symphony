@@ -37,7 +37,7 @@ func TestScenarioFailuresAreDeterministic(t *testing.T) {
 		input string
 		want  string
 	}{
-		{name: "incompatible", input: `{"id":1,"method":"initialize","params":{}}` + "\n", want: "0.145.0"},
+		{name: "incompatible", input: `{"id":1,"method":"initialize","params":{}}` + "\n", want: "0.144.0"},
 		{name: "malformed", input: `{"id":1,"method":"initialize","params":{}}` + "\n", want: `{not-json`},
 		{name: "turn-failed", input: strings.Join([]string{
 			`{"id":1,"method":"initialize","params":{}}`,

@@ -16,7 +16,8 @@ import (
 
 const codexSchemaManifestPath = CodexVersion + "/manifest.json"
 
-// CodexSchemaCompatibility records a reviewed CLI version and schema digest.
+// CodexSchemaCompatibility records the provenance of a reviewed schema snapshot.
+// It is not an allowlist of CLI versions permitted at runtime.
 type CodexSchemaCompatibility struct {
 	Version      string `json:"version"`
 	SchemaSHA256 string `json:"schema_sha256"`
@@ -24,7 +25,7 @@ type CodexSchemaCompatibility struct {
 
 // CodexSchemaManifest describes the checked-in Codex app-server schema.
 type CodexSchemaManifest struct {
-	TargetVersion     string                     `json:"target_version"`
+	TargetVersion     string                     `json:"target_version"` // Schema baseline and minimum supported CLI version.
 	SchemaSHA256      string                     `json:"schema_sha256"`
 	GenerationCommand string                     `json:"generation_command"`
 	Files             []string                   `json:"files"`

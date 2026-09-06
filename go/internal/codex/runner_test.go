@@ -211,7 +211,7 @@ func TestRunnerRejectsIncompatibleHandshakeAndStopsProcessBeforeThread(t *testin
 	}()
 	initialize := transport.readRequest(t)
 	respondResult(t, transport, initialize, map[string]any{
-		"userAgent": "codex_cli_rs/0.145.0", "codexHome": canonicalTestDirectory(t), "platformFamily": "unix", "platformOs": "macos",
+		"userAgent": "codex_cli_rs/0.144.0", "codexHome": canonicalTestDirectory(t), "platformFamily": "unix", "platformOs": "macos",
 	})
 	if err := <-result; err == nil || !process.wasStopped() {
 		t.Fatalf("err=%v stopped=%v", err, process.wasStopped())
