@@ -122,6 +122,10 @@ func pathTransactionRegistrySize() int {
 }
 
 func NewStore(ctx context.Context, path string, lookup LookupEnv, providerValidate ProviderValidator) (*FileStore, error) {
+	return newStoreWithAtomicOperations(ctx, path, lookup, providerValidate, defaultAtomicOperations())
+}
+
+func newStoreWithAtomicOperations(ctx context.Context, path string, lookup LookupEnv, providerValidate ProviderValidator, operations atomicOperations) (*FileStore, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workflow path: %w", err)
@@ -150,7 +154,7 @@ func NewStore(ctx context.Context, path string, lookup LookupEnv, providerValida
 		pathMu:           retainPathTransaction(absolute),
 		lookup:           lookup,
 		providerValidate: providerValidate,
-		atomic:           defaultAtomicOperations(),
+		atomic:           operations,
 		changes:          make(chan Change, 1),
 		closed:           make(chan struct{}),
 		stopping:         make(chan struct{}),
