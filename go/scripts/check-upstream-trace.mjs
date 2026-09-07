@@ -233,7 +233,7 @@ function capture(command, args, {cwd, env = process.env} = {}) {
 }
 
 function enumerateGoTests(packages, {goRoot, runner = capture, selection = selectGoCommand()} = {}) {
-  if (selection === null) throw new Error('Go 1.26.5 is unavailable through PATH or the repository mise toolchain.');
+  if (selection === null) throw new Error('Go 1.26.6 is unavailable through PATH or the repository mise toolchain.');
   const tests = new Map();
   for (const packageName of packages) {
     const result = runner(selection.command, [...selection.prefix, 'test', packageName, '-list', '^Test'], {cwd: goRoot});

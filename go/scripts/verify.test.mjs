@@ -25,7 +25,7 @@ test('runs every deterministic gate in order on macOS including build, disabled 
   const code = run({
     platform: 'darwin',
     nodeVersion: 'v24.18.0',
-    goTool: {command: 'go', prefix: [], version: '1.26.5'},
+    goTool: {command: 'go', prefix: [], version: '1.26.6'},
     exec: (command, args) => {
       calls.push(['exec', command, args]);
       return 0;
@@ -66,7 +66,7 @@ test('runs deterministic gates on Windows without claiming race support', () => 
   const code = run({
     platform: 'win32',
     nodeVersion: 'v24.18.0',
-    goTool: {command: 'go', prefix: [], version: '1.26.5'},
+    goTool: {command: 'go', prefix: [], version: '1.26.6'},
     exec: (command, args) => {
       calls.push(['exec', command, args]);
       return 0;
@@ -104,7 +104,7 @@ test('disabled profile gates remove every live variable from their child environ
   const code = run({
     platform: 'darwin',
     nodeVersion: 'v24.18.0',
-    goTool: {command: 'go', prefix: [], version: '1.26.5'},
+    goTool: {command: 'go', prefix: [], version: '1.26.6'},
     environment: inherited,
     exec: () => 0,
     capture: (command, args, options) => {
@@ -142,7 +142,7 @@ test('fails closed when a disabled provider exits zero without its exact SKIP se
   const code = run({
     platform: 'darwin',
     nodeVersion: 'v24.18.0',
-    goTool: {command: 'go', prefix: [], version: '1.26.5'},
+    goTool: {command: 'go', prefix: [], version: '1.26.6'},
     exec: () => {
       ordinaryCalls += 1;
       return 0;
@@ -162,7 +162,7 @@ test('propagates a disabled provider test failure before later gates', () => {
   const code = run({
     platform: 'darwin',
     nodeVersion: 'v24.18.0',
-    goTool: {command: 'go', prefix: [], version: '1.26.5'},
+    goTool: {command: 'go', prefix: [], version: '1.26.6'},
     exec: () => {
       ordinaryCalls += 1;
       return 0;
@@ -202,7 +202,7 @@ test('stops at and propagates the first failing gate', () => {
   const code = run({
     platform: 'darwin',
     nodeVersion: 'v24.18.0',
-    goTool: {command: 'go', prefix: [], version: '1.26.5'},
+    goTool: {command: 'go', prefix: [], version: '1.26.6'},
     exec: () => {
       callCount += 1;
       return callCount === 3 ? 1 : 0;
@@ -218,7 +218,7 @@ test('runs Go gates through the pinned mise fallback when ambient Go is absent',
   const code = run({
     platform: 'win32',
     nodeVersion: 'v24.18.0',
-    goTool: {command: 'mise', prefix: ['exec', '--', 'go'], version: '1.26.5'},
+    goTool: {command: 'mise', prefix: ['exec', '--', 'go'], version: '1.26.6'},
     exec: (command, args) => {
       calls.push([command, args]);
       return 0;
@@ -241,7 +241,7 @@ for (const nodeVersion of ['v24.17.0', 'v24.18.1', '24.18.0', 'malformed']) {
     const code = run({
       platform: 'darwin',
       nodeVersion,
-      goTool: {command: 'go', prefix: [], version: '1.26.5'},
+      goTool: {command: 'go', prefix: [], version: '1.26.6'},
       exec: () => {
         invoked = true;
         return 0;
@@ -255,13 +255,14 @@ for (const nodeVersion of ['v24.17.0', 'v24.18.1', '24.18.0', 'malformed']) {
   });
 }
 
-for (const goVersion of ['1.25.9', '1.26.6', 'malformed']) {
+for (const goVersion of ['1.25.9', '1.26.5', '1.26.7', 'malformed']) {
   test(`rejects selected Go runtime ${JSON.stringify(goVersion)}`, () => {
     let invoked = false;
     const code = run({
       platform: 'darwin',
       nodeVersion: 'v24.18.0',
       goTool: {command: 'go', prefix: [], version: goVersion},
+      capture: successfulCapture,
       exec: () => {
         invoked = true;
         return 0;

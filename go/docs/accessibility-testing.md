@@ -48,7 +48,7 @@ disabled live-provider profile checks, a clean npm install, HTML validation,
 Chromium and WebKit accessibility tests, and the deterministic source scan.
 Windows executes the concurrency tests in `go test ./...`; the Go race detector
 is required only on macOS. The launcher rejects any Node version other than
-`24.18.0` and any Go version other than `1.26.5`; an executable with the wrong
+`24.18.0` and any Go version other than `1.26.6`; an executable with the wrong
 or malformed version is not treated as available.
 
 The runtime-focused commands are:
