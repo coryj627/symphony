@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -194,13 +195,19 @@ func assertSavePreReplacementFailure(t *testing.T, mode saveFaultMode, point str
 	store, path := newSaveFaultStore(t, initial, fault.operations())
 	baseDigest := ""
 	var previous Snapshot
+	var previousMode os.FileMode
 	if existing {
-		var err error
-		previous, err = store.Load(context.Background())
+		loaded, err := store.Load(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
-		baseDigest = previous.Digest
+		var ok bool
+		previous, ok = store.Current()
+		if !ok {
+			t.Fatal("loaded workflow did not install current snapshot")
+		}
+		baseDigest = loaded.Digest
+		previousMode = saveFileMode(t, path)
 	}
 	got, err := store.Save(context.Background(), mode.command(baseDigest))
 	if err == nil {
@@ -220,6 +227,9 @@ func assertSavePreReplacementFailure(t *testing.T, mode saveFaultMode, point str
 		t.Fatalf("failed save returned candidate snapshot %q", got.Digest)
 	}
 	assertSaveDestination(t, path, initial, existing)
+	if existing {
+		assertSaveFileMode(t, path, previousMode)
+	}
 	assertSaveCurrent(t, store, previous, existing)
 	assertNoSaveChange(t, store.Changes(), mode.candidate)
 	assertNoSaveTemporaryFiles(t, path)
@@ -285,17 +295,22 @@ func TestSaveCleanupRemovalFailurePreservesPrimaryErrorAndOldDestination(t *test
 		t.Run(mode.name, func(t *testing.T) {
 			fault := &saveFaultOperations{point: "cleanup-remove", enabled: true}
 			store, path := newSaveFaultStore(t, validWorkflowSource, fault.operations())
-			previous, err := store.Load(context.Background())
+			loaded, err := store.Load(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
+			previous, ok := store.Current()
+			if !ok {
+				t.Fatal("loaded workflow did not install current snapshot")
+			}
+			previousMode := saveFileMode(t, path)
 			t.Cleanup(func() {
 				for _, temporaryPath := range fault.temporaryPaths {
 					_ = os.Remove(temporaryPath)
 				}
 			})
 
-			got, saveErr := store.Save(context.Background(), mode.command(previous.Digest))
+			got, saveErr := store.Save(context.Background(), mode.command(loaded.Digest))
 			if !errors.Is(saveErr, errInjectedSaveFailure) || !errors.Is(saveErr, errInjectedCleanupFailure) {
 				t.Fatalf("expected primary and cleanup failures, got %v", saveErr)
 			}
@@ -309,6 +324,7 @@ func TestSaveCleanupRemovalFailurePreservesPrimaryErrorAndOldDestination(t *test
 				t.Fatalf("cleanup attempts = %d, want 1", fault.cleanupHits)
 			}
 			assertSaveDestination(t, path, validWorkflowSource, true)
+			assertSaveFileMode(t, path, previousMode)
 			assertSaveCurrent(t, store, previous, true)
 			assertNoSaveChange(t, store.Changes(), mode.candidate)
 			matches := saveTemporaryFiles(t, path)
@@ -317,7 +333,7 @@ func TestSaveCleanupRemovalFailurePreservesPrimaryErrorAndOldDestination(t *test
 			}
 
 			fault.enabled = false
-			recovered, recoveryErr := store.Save(context.Background(), mode.command(previous.Digest))
+			recovered, recoveryErr := store.Save(context.Background(), mode.command(loaded.Digest))
 			if recoveryErr != nil {
 				t.Fatalf("save did not recover after removing cleanup fault: %v", recoveryErr)
 			}
@@ -371,8 +387,24 @@ func assertSaveCurrent(t *testing.T, store *FileStore, expected Snapshot, exists
 	if ok != exists {
 		t.Fatalf("current snapshot presence = %v, want %v", ok, exists)
 	}
-	if exists && (current.Digest != expected.Digest || current.Source != expected.Source) {
-		t.Fatalf("failed save replaced current snapshot: digest=%q", current.Digest)
+	if exists && !reflect.DeepEqual(current, expected) {
+		t.Fatalf("failed save changed current snapshot:\n got: %#v\nwant: %#v", current, expected)
+	}
+}
+
+func saveFileMode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode()
+}
+
+func assertSaveFileMode(t *testing.T, path string, expected os.FileMode) {
+	t.Helper()
+	if got := saveFileMode(t, path); got != expected {
+		t.Fatalf("failed save changed destination mode: got %v, want %v", got, expected)
 	}
 }
 
