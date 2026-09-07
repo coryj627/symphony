@@ -154,10 +154,14 @@ npm run verify
 gofmt -w cmd internal
 ```
 
-`npm run verify` is the deterministic gate for the supported macOS and Windows
+`npm run verify` is the verification gate for the supported macOS and Windows
 implementations. It includes the Go build, tests and vet; disabled live-provider
-profile checks; rendered HTML and browser accessibility checks; wrapper tests;
-and the review-only source scan. macOS also runs the Go race detector. See
+profile checks; Go vulnerability scanning; rendered HTML and browser
+accessibility checks; wrapper tests; and the review-only source scan. The
+vulnerability gate requires access to the official Go vulnerability database;
+its results reflect the database at scan time. Run it alone with
+`npm run security:vulns`; see [Security boundaries](docs/security.md#go-vulnerability-scanning)
+for scope and failure handling. macOS also runs the Go race detector. See
 [`docs/accessibility-testing.md`](docs/accessibility-testing.md) for scanner
 installation, pre-commit hook activation, evidence boundaries, and manual test
 requirements.

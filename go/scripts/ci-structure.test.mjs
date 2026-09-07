@@ -195,6 +195,18 @@ test('main CI runs build, default Go, race, disabled profiles, and every accessi
   assert.match(source, /run: node scripts\/a11y-scan-all\.mjs/);
 });
 
+test('native CI blocks on the pinned Go vulnerability scan against the official database', () => {
+  const build = jobBlock(mainWorkflow, 'build-test');
+  const scan = namedStep(build, 'Check Go vulnerabilities');
+  assert.match(scan, /^        run: go tool govulncheck -show=version -db=https:\/\/vuln\.go\.dev \.\/\.\.\.\s*$/m);
+  assert.doesNotMatch(scan, /continue-on-error:|if:|\|\|/);
+  const goMod = readFileSync(path.join(goRoot, 'go.mod'), 'utf8');
+  assert.match(goMod, /^tool golang\.org\/x\/vuln\/cmd\/govulncheck\r?$/m);
+  assert.match(goMod, /^\s*golang\.org\/x\/vuln v1\.6\.0(?: \/\/ indirect)?\r?$/m);
+  const manifest = JSON.parse(readFileSync(path.join(goRoot, 'package.json'), 'utf8'));
+  assert.equal(manifest.scripts['security:vulns'], 'node scripts/go-tool.mjs tool govulncheck -show=version -db=https://vuln.go.dev ./...');
+});
+
 test('manual integration workflow is dispatch-only with exact boolean inputs and read-only permissions', () => {
   assert.notEqual(integrationsWorkflow, '', 'manual integration workflow is missing');
   const header = workflowHeader(integrationsWorkflow);
