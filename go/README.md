@@ -72,6 +72,9 @@ the same workflow without the `configure` word:
   --port 0 --data-dir .\state\github --open
 ```
 
+See [Workflow save recovery](docs/workflow-saving.md) for filesystem failures,
+save conflicts, and durability warnings.
+
 If `--open` does not select the browser you want, omit it and open the printed
 protected URL in a local browser. The URL contains a one-time bootstrap
 capability. Do not share, retain, publish, or paste it into logs or chat.
